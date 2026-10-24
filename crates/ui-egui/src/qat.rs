@@ -133,7 +133,8 @@ pub fn show(app: &mut SlideApp, ui: &mut Ui) {
             "file.save" | "show.fromStart" | "review.spelling" | "app.find" => app.session.active().is_some(),
             id => crate::ribbon::enabled(app, id),
         };
-        let r = crate::widgets::icon_toggle(ui, q.icon(), &tip(q), en, on);
+        // `tip` is already in the interface language.
+        let r = crate::widgets::icon_toggle_shown(ui, q.icon(), &tip(q), en, on);
         if r.clicked() {
             run(app, q);
         }

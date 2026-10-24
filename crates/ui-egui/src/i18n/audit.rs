@@ -1,7 +1,8 @@
 //! Finds interface text drawn without going through translation: the main window is laid out in
 //! the pseudo-language (`pseudo.rs`) on every ribbon tab, and visible words outside `⟦…⟧` marks are
-//! listed. The list is printed, not enforced, while most literals still wait for `tl!`; what is
-//! translated centrally (the tab strip, the status bar's counter) is enforced. Run it with
+//! listed, also at a narrow width, where ribbon groups fold into buttons named by the group. The
+//! list is printed, not enforced, while most literals still wait for `tl!`; what is translated
+//! centrally (the tab strip, the status bar's counter) is enforced. Run it with
 //! `cargo test -p deckcraft-ui-egui untranslated_interface_text -- --nocapture` to see the list
 //! and, with `CRAFT_I18N_DIR` set, the strings each language has no translation for.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -27,10 +28,14 @@ fn texts(shape: &egui::Shape, out: &mut Vec<String>) {
     }
 }
 
-/// Run `n` frames and return every text drawn in the last.
+/// [`frames_at`] wide enough that every ribbon group is drawn as designed.
 fn frames(ctx: &egui::Context, app: &mut SlideApp, n: usize) -> Vec<String> {
-    // Wide enough that the ribbon's groups aren't cut off at the window's edge.
-    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(2560.0, 900.0));
+    frames_at(ctx, app, n, 2560.0)
+}
+
+/// Run `n` frames of a window `width` points wide and return every text drawn in the last.
+fn frames_at(ctx: &egui::Context, app: &mut SlideApp, n: usize, width: f32) -> Vec<String> {
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 900.0));
     let mut drawn = Vec::new();
     for _ in 0..n {
         TIME.set(TIME.get() + 0.1);
@@ -72,13 +77,16 @@ fn untranslated_interface_text() {
     let mut found: BTreeMap<String, BTreeSet<&str>> = BTreeMap::new();
     for tab in crate::ribbon::TABS {
         app.run("view.tab", json!({ "tab": tab })).unwrap();
-        let drawn = frames(&ctx, &mut app, 2);
+        let mut drawn = frames(&ctx, &mut app, 2);
         for name in crate::ribbon::TABS.iter().chain(&["File"]) {
             let marked = format!("⟦{name}⟧");
             assert!(drawn.contains(&marked), "the {name} tab is drawn through translation ({tab} tab open)");
             assert!(!drawn.iter().any(|t| t == name), "the {name} tab is drawn untranslated ({tab} tab open)");
         }
         assert!(drawn.iter().any(|t| t.starts_with("⟦Slide ") && t.contains(" of ")), "the slide counter is translated: {tab}");
+        // A narrow window folds ribbon groups into drop-down buttons named by the group
+        // (`ribbon_fit`): their names go through translation too. Plan, then draw the plan.
+        drawn.extend(frames_at(&ctx, &mut app, 6, 900.0));
         for text in drawn.iter().filter(|t| english_words(t)) {
             let plain = pseudo::unmarked(text);
             let plain = plain.trim();
@@ -101,7 +109,8 @@ fn untranslated_interface_text() {
 /// problems, and per language the interface strings with no translation (translators fill them in
 /// craft-i18n's `deckcraft.tsv`). A missing translation shows in English, so the report never
 /// fails; without embedded catalogs it is skipped. The strings are the ones the audit saw looked
-/// up, the ribbon tabs and every command's label.
+/// up, the ribbon tabs, every command's label and the names the ribbon's galleries show from the
+/// engine's tables ([`crate::ribbon::vocabulary`]).
 fn report_catalog_gaps(mut keys: BTreeSet<String>) {
     if super::CRAFT_I18N.is_empty() {
         eprintln!("missing-translation report skipped: built without craft-i18n catalogs (set CRAFT_I18N_DIR to a craft-i18n checkout)");
@@ -115,6 +124,8 @@ fn report_catalog_gaps(mut keys: BTreeSet<String>) {
     let session = deckcraft_engine::Session::with_new();
     keys.extend(session.commands().into_iter().map(|c| c.label.to_string()));
     keys.extend(crate::UI_COMMANDS.iter().map(|c| c.1.to_string()));
+    // The names the ribbon's galleries and menus show from the engine's tables.
+    keys.extend(crate::ribbon::vocabulary());
     // A pattern of placeholders and figures only has nothing to translate.
     let words = |s: &str| english_words(&s.split('{').map(|p| p.split_once('}').map_or(p, |(_, rest)| rest)).collect::<String>());
     for lang in super::Lang::all().filter(|l| *l != super::Lang::EN) {

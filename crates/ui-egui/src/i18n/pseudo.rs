@@ -24,14 +24,17 @@ pub fn set(on: bool) {
 }
 
 /// `text` without its marked segments. Lines are marked one by one, since multi-line labels are
-/// often drawn a line at a time.
+/// often drawn a line at a time; a big ribbon button also breaks a long one-line label in two
+/// (`⟦Black` / `Pen⟧`), so a closing mark with no opening one ends a marked segment that began on
+/// the line before.
 pub fn unmarked(text: &str) -> String {
     let mut out = String::new();
     let mut depth = 0usize;
     for c in text.chars() {
         match c {
             '⟦' => depth += 1,
-            '⟧' => depth = depth.saturating_sub(1),
+            '⟧' if depth == 0 => out.clear(),
+            '⟧' => depth -= 1,
             _ if depth == 0 => out.push(c),
             _ => {}
         }
