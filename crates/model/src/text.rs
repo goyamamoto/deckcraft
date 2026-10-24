@@ -386,6 +386,11 @@ pub struct RunProps {
     /// Action on mouse over (Insert ▸ Action ▸ Mouse Over on selected text, `a:hlinkMouseOver`).
     pub hover: Option<Hyperlink>,
     pub lang: Option<String>,
+    /// `altLang`: the language the run was typed with alongside `lang` (PowerPoint writes
+    /// `lang="ja-JP" altLang="en-US"` for text typed with a Japanese input method).
+    pub alt_lang: Option<String>,
+    /// `kumimoji`: the run was set with East Asian composition rules; kept for round trip.
+    pub kumimoji: Option<bool>,
     pub shadow: Option<crate::style::Shadow>,
     /// `a:innerShdw` on the run. Outer shadow stays in `shadow`.
     pub inner_shadow: Option<crate::style::Shadow>,
@@ -423,6 +428,8 @@ impl RunProps {
             link,
             hover,
             lang,
+            alt_lang,
+            kumimoji,
             shadow,
             inner_shadow,
             glow,
@@ -572,6 +579,10 @@ pub struct LevelStyle {
 pub struct ListStyle {
     /// Levels 1–9 (index 0–8); `None` = not specified.
     pub levels: Vec<Option<LevelStyle>>,
+    /// `a:defPPr`: defaults under every level. Japanese decks keep their language here
+    /// (`<a:defPPr><a:defRPr lang="ja-JP"/></a:defPPr>` in `p:defaultTextStyle`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default: Option<LevelStyle>,
 }
 
 impl ListStyle {
@@ -588,7 +599,7 @@ impl ListStyle {
         }
     }
     pub fn is_empty(&self) -> bool {
-        self.levels.iter().all(Option::is_none)
+        self.levels.iter().all(Option::is_none) && self.default.is_none()
     }
 }
 

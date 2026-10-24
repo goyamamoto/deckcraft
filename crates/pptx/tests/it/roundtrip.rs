@@ -1925,3 +1925,40 @@ fn zoom_inserts_linked_slide_pictures() {
     assert!(s.execute("insert.zoom", &json!({"slides": [42]})).is_err());
     assert!(s.execute("insert.zoom", &json!({"kind": "slide"})).is_err());
 }
+
+#[test]
+fn japanese_deck_settings_round_trip() {
+    // What a deck made with Japanese editing carries: its default language in the default text
+    // style's a:defPPr, custom kinsoku lists, and runs typed with the Japanese input method
+    // (lang="ja-JP" altLang="en-US" kumimoji="1").
+    let mut p = Presentation::default();
+    p.default_text_style.default =
+        Some(deckcraft_model::text::LevelStyle { run: RunProps { lang: Some("ja-JP".into()), ..Default::default() }, ..Default::default() });
+    p.kinsoku = Some(deckcraft_model::Kinsoku {
+        lang: Some("ja-JP".into()),
+        start: "!%),.:;?]}¢°’”‰′″℃、。々〉》」』】〕ゝゞ・ヽヾ！％），．：；？］｝｡｣､･ｰﾞﾟ￠".into(),
+        end: "$([\\{£¥‘“〈《「『【〔＄（［｛｢￡￥".into(),
+    });
+    let mut sh = shape(&mut p, "Japanese", 10.0, 10.0, 300.0, 40.0);
+    let props = RunProps { lang: Some("ja-JP".into()), alt_lang: Some("en-US".into()), kumimoji: Some(true), ..Default::default() };
+    let mut body = TextBody::from_text("");
+    body.paragraphs[0].runs = vec![Run { text: "日本語の文章".into(), props: props.clone(), kind: RunKind::Text }];
+    sh.text = Some(body);
+    Arc::make_mut(&mut p.slides[0]).shapes = vec![sh];
+    let q = round(&p);
+    assert_eq!(q.default_text_style.default, p.default_text_style.default);
+    assert_eq!(q.kinsoku, p.kinsoku);
+    let run = &by_name(&q.slides[0], "Japanese").text.as_ref().expect("text").paragraphs[0].runs[0];
+    assert_eq!(run.props.lang.as_deref(), Some("ja-JP"));
+    assert_eq!(run.props.alt_lang.as_deref(), Some("en-US"));
+    assert_eq!(run.props.kumimoji, Some(true));
+    // A run without a language takes the deck's default one.
+    let mut plain = q.clone();
+    let slide = Arc::make_mut(&mut plain.slides[0]);
+    let body = slide.shapes[0].text.as_mut().expect("text");
+    body.paragraphs[0].runs[0].props = RunProps::default();
+    let shape = plain.slides[0].shapes[0].clone();
+    let ctx = deckcraft_model::resolve::Ctx::for_slide(&plain, &plain.slides[0]).expect("context");
+    let para = &shape.text.as_ref().expect("text").paragraphs[0];
+    assert_eq!(deckcraft_model::resolve::run(&ctx, &shape, para, &para.runs[0].props).lang.as_deref(), Some("ja-JP"));
+}

@@ -285,6 +285,8 @@ pub fn level_style(ctx: &Ctx, shape: &Shape, level: u8) -> LevelStyle {
     }
     add(&mut out, master_list_style(ctx, shape).level(level));
     add(&mut out, ctx.pres.default_text_style.level(level));
+    // The deck's `a:defPPr` (its default language, `ja-JP` in a Japanese deck) under every level.
+    add(&mut out, ctx.pres.default_text_style.default.as_ref());
     // Last resort.
     out.run.inherit(&RunProps { size: Some(18.0), font: Some("+mn-lt".into()), bold: Some(false), italic: Some(false), ..Default::default() });
     out.para.inherit(&ParaProps { margin_left: Some(0.0), indent: Some(0.0), align: Some(crate::text::Align::Left), ..Default::default() });
