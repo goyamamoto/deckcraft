@@ -151,6 +151,23 @@ struct Glyph {
     gid: u32,
     x: f64,
     y: f64,
+    /// Stands upright in a vertical font: turned a quarter turn counter-clockwise about the
+    /// centre of its em box, `advance` (text units) wide from `x`.
+    upright: Option<f64>,
+}
+
+/// The East Asian tradition text in a LOGFONT character set is written in (SHIFTJIS Japanese,
+/// HANGUL and JOHAB Korean, GB2312 Simplified and CHINESEBIG5 Traditional Chinese), else the
+/// system's: the cascade draws Han characters the named face lacks in that tradition's forms.
+fn charset_cjk(charset: u8) -> Option<deckcraft_fonts::CjkLocale> {
+    use deckcraft_fonts::CjkLocale;
+    match charset {
+        128 => Some(CjkLocale::Japanese),
+        129 | 130 => Some(CjkLocale::Korean),
+        134 => Some(CjkLocale::SimplifiedChinese),
+        136 => Some(CjkLocale::TraditionalChinese),
+        _ => deckcraft_fonts::default_cjk_locale(),
+    }
 }
 
 /// Draws a text item; `m` maps its text space to the output.
@@ -182,37 +199,58 @@ fn draw_text(ctx: &mut RenderContext, t: &Text, m: Affine) {
         return;
     }
     // Characters as drawn: symbol fonts (Wingdings…) map like bullets; each character takes the
-    // face that has it.
+    // face that has it, Han characters in the forms of the character set's tradition.
     let chars: Vec<char> = t.text.chars().map(|c| deckcraft_text::symbol_char(&face, family, c).unwrap_or(c)).collect();
+    let cjk = charset_cjk(font.charset);
     let faces: Vec<Arc<FontFace>> = chars
         .iter()
         .map(|c| {
-            if c.is_whitespace() || c.is_control() || face.covers(*c) { face.clone() } else { db.cascade(&[*c], std::slice::from_ref(&face), style) }
+            if c.is_whitespace() || c.is_control() || face.covers(*c) {
+                face.clone()
+            } else {
+                db.cascade_for(&[*c], std::slice::from_ref(&face), style, cjk)
+            }
         })
         .collect();
-    // Shape runs of one face; record each glyph's pen position and its character.
+    // A vertical (`@`) font turns full-width and CJK characters upright: each takes a one-em cell
+    // along the baseline and the font's vertical forms (、。「」ー), as GDI draws them.
+    let upright: Vec<bool> = chars.iter().map(|c| font.vertical && deckcraft_text::is_upright(*c)).collect();
+    let vert: Vec<deckcraft_fonts::Feature> = deckcraft_fonts::feature("vert").into_iter().collect();
+    // Shape runs of one face (and one orientation); record each glyph's pen position and its
+    // character.
     let mut shaped: Vec<(Glyph, usize)> = Vec::with_capacity(chars.len());
     let mut char_pen: Vec<f64> = vec![0.0; chars.len() + 1];
     let mut pen = 0.0;
     let mut i = 0;
     while i < chars.len() {
-        let Some(f) = faces.get(i).cloned() else { break };
+        let (Some(f), Some(&up)) = (faces.get(i).cloned(), upright.get(i)) else { break };
         let mut j = i + 1;
-        while faces.get(j).is_some_and(|g| g.id() == f.id()) {
+        while faces.get(j).is_some_and(|g| g.id() == f.id()) && upright.get(j) == Some(&up) {
             j += 1;
         }
         let run: String = chars.get(i..j).unwrap_or(&[]).iter().collect();
         // Byte offset in the run → character index in the string.
         let byte_char: Vec<usize> = run.char_indices().map(|(b, _)| b).collect();
-        let ku = f.upem.max(1.0);
-        for g in deckcraft_fonts::shape(&f, &run, &[], |c| c) {
+        let s = em / f.upem.max(1.0);
+        let run_start = pen;
+        for g in deckcraft_fonts::shape(&f, &run, if up { &vert } else { &[] }, |c| c) {
             let ci = i + byte_char.partition_point(|b| *b < g.cluster).min(j - i - 1);
-            let s = em / ku;
-            shaped.push((Glyph { face: f.clone(), gid: g.gid, x: pen + f64::from(g.x_offset) * s, y: -f64::from(g.y_offset) * s }, ci));
-            pen += f64::from(g.x_advance) * s;
+            let (dx, dy, adv) = (f64::from(g.x_offset) * s, -f64::from(g.y_offset) * s, f64::from(g.x_advance) * s);
+            if up {
+                // Centred in its character's em cell, which it turns about.
+                let cell = run_start + (ci - i) as f64 * em;
+                shaped.push((Glyph { face: f.clone(), gid: g.gid, x: cell + (em - adv) / 2.0 + dx, y: dy, upright: Some(adv) }, ci));
+                pen = run_start + (ci + 1 - i) as f64 * em;
+            } else {
+                shaped.push((Glyph { face: f.clone(), gid: g.gid, x: pen + dx, y: dy, upright: None }, ci));
+                pen += adv;
+            }
             if let Some(p) = char_pen.get_mut(ci + 1) {
                 *p = pen;
             }
+        }
+        if up {
+            pen = run_start + (j - i) as f64 * em;
         }
         i = j;
     }
@@ -280,7 +318,16 @@ fn draw_text(ctx: &mut RenderContext, t: &Text, m: Affine) {
         }
         let s = em / g.face.upem.max(1.0);
         let skew = if italic && !g.face.italic { Affine::new([1.0, 0.0, -0.2, 1.0, 0.0, 0.0]) } else { Affine::IDENTITY };
-        let gm = at * Affine::translate((g.x, g.y)) * Affine::scale_non_uniform(x_scale, 1.0) * skew * Affine::scale(s);
+        // An upright glyph turns back a quarter turn about its em box's centre, as the slide text
+        // engine stands ideographs upright in eaVert text.
+        let turn = match g.upright {
+            Some(adv) => {
+                let c = (g.x + adv * x_scale / 2.0, -em * deckcraft_text::UPRIGHT_CENTRE);
+                Affine::translate(c) * Affine::rotate(-std::f64::consts::FRAC_PI_2) * Affine::translate((-c.0, -c.1))
+            }
+            None => Affine::IDENTITY,
+        };
+        let gm = at * turn * Affine::translate((g.x, g.y)) * Affine::scale_non_uniform(x_scale, 1.0) * skew * Affine::scale(s);
         let p: BezPath = gm * path.as_ref().clone();
         ctx.fill_path(&p);
         if bold && g.face.weight < 600.0 {
