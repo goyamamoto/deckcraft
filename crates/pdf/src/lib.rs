@@ -345,15 +345,18 @@ pub fn master_text_pieces(pres: &Presentation, m: &deckcraft_model::Master, pape
     for pt in deckcraft_render::place_master_texts(pres, m, n) {
         for run in &pt.layout.runs {
             let Some(g) = run.glyphs.first() else { continue };
+            // The paragraph as laid out (fields filled in, line breaks counted), which the run's
+            // character range indexes; a line break reads as a newline.
             let text: String = pt
-                .body
-                .paragraphs
+                .layout
+                .texts
                 .get(run.para)
-                .map(|p| p.runs.iter().map(|r| r.text.as_str()).collect::<String>())
+                .map(String::as_str)
                 .unwrap_or_default()
                 .chars()
                 .skip(run.chars.0)
                 .take(run.chars.1.saturating_sub(run.chars.0))
+                .map(|c| if c == '\u{b}' { '\n' } else { c })
                 .collect();
             if text.trim().is_empty() {
                 continue;
@@ -560,15 +563,18 @@ impl Exporter<'_> {
             if !run.size.is_finite() || run.size <= 0.0 {
                 continue;
             }
+            // The paragraph as laid out (fields filled in, line breaks counted), which the run's
+            // character range indexes; a line break reads as a newline.
             let text: String = pt
-                .body
-                .paragraphs
+                .layout
+                .texts
                 .get(run.para)
-                .map(|p| p.runs.iter().map(|r| r.text.as_str()).collect::<String>())
+                .map(String::as_str)
                 .unwrap_or_default()
                 .chars()
                 .skip(run.chars.0)
                 .take(run.chars.1.saturating_sub(run.chars.0))
+                .map(|c| if c == '\u{b}' { '\n' } else { c })
                 .collect();
             // A bullet or number has no characters of its own: drawn, but it carries no text.
             let bullet = run.cells.is_empty();

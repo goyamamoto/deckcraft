@@ -318,6 +318,9 @@ pub struct TextLayout {
     /// Per paragraph: whether a caret may stand at each character offset 0..=len (grapheme
     /// boundaries), for logical caret movement.
     pub boundaries: Vec<Vec<bool>>,
+    /// Per paragraph: its text as laid out, which `GlyphRun::chars` index: fields filled in (a
+    /// date field shows today's date, not its saved text) and each line break one U+000B.
+    pub texts: Vec<String>,
 }
 
 /// Values for fields (`slidenum`, `datetime…`, `footer`). `None` keeps the field's saved text.
@@ -2681,6 +2684,7 @@ fn layout_scaled(ctx: &Ctx, shape: &Shape, body: &TextBody, bp: &BodyProps, opts
             out.runs.push(r);
         }
     }
+    out.texts = shaped_paras.iter().map(|p| p.cells.iter().map(|c| c.ch).collect()).collect();
     out.boundaries = shaped_paras
         .iter()
         .map(|p| {
