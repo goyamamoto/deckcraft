@@ -41,6 +41,14 @@ fn wanted(c: char) -> bool {
     !(c.is_ascii() || c.is_whitespace() || c.is_control() || matches!(c, '\u{E000}'..='\u{F8FF}' | '\u{F0000}'..))
 }
 
+/// The East Asian tradition the interface draws kanji/hanzi in when its own faces lack them:
+/// the system's East Asian language, Japanese when that is unknown (so Japanese file names and
+/// notes never come out in Chinese letterforms); Chinese or Korean only for a Chinese or Korean
+/// system. Kana is always drawn with a Japanese face and Hangul with a Korean one.
+fn interface_cjk(system: Option<deckcraft_fonts::CjkLocale>) -> deckcraft_fonts::CjkLocale {
+    system.unwrap_or(deckcraft_fonts::CjkLocale::Japanese)
+}
+
 /// The faces needed to draw `text`, beyond `have`: one for each character that `covered` says the
 /// interface fonts can't draw, found with `lookup`, skipping characters already `seen`. Colour and
 /// very large faces are skipped (egui draws neither well).
@@ -72,13 +80,16 @@ impl UiFonts {
             return;
         }
         let font = egui::FontId::proportional(13.0);
+        // Chinese, Japanese and Korean characters: the platform's interface face of the
+        // tradition first (Hiragino on macOS, Yu Gothic UI or Meiryo UI on Windows for Japanese).
+        let cjk = interface_cjk(deckcraft_fonts::default_cjk_locale());
         let new = ctx.fonts_mut(|f| {
             faces_for_text(
                 text,
                 &self.faces,
                 &mut self.seen,
                 |c| f.has_glyph(&font, c),
-                |c| FontDb::global().fallback_for_filtered(c, u32::MAX, |face| accepts_face(face.data().len(), face.is_color())),
+                |c| FontDb::global().interface_fallback(c, Some(cjk), |face| accepts_face(face.data().len(), face.is_color())),
             )
         });
         if !new.is_empty() {
@@ -176,6 +187,23 @@ mod tests {
 
     fn face(family: &str) -> Arc<FontFace> {
         FontDb::global().face(family, "Regular")
+    }
+
+    #[test]
+    fn interface_kanji_are_japanese_unless_the_system_is_chinese_or_korean() {
+        use deckcraft_fonts::CjkLocale::*;
+        assert_eq!(interface_cjk(None), Japanese, "unknown system language");
+        assert_eq!(interface_cjk(Some(Japanese)), Japanese);
+        assert_eq!(interface_cjk(Some(SimplifiedChinese)), SimplifiedChinese);
+        assert_eq!(interface_cjk(Some(TraditionalChinese)), TraditionalChinese);
+        assert_eq!(interface_cjk(Some(Korean)), Korean);
+        // On a Mac with Hiragino, kanji the interface faces lack come from Hiragino, not
+        // PingFang SC (skipped elsewhere).
+        let db = FontDb::global();
+        if cfg!(target_os = "macos") && db.has_family("Hiragino Kaku Gothic ProN") {
+            let f = db.interface_fallback('直', Some(interface_cjk(None)), |face| accepts_face(face.data().len(), face.is_color())).unwrap();
+            assert!(f.family.starts_with("Hiragino") || f.family == "BIZ UDPGothic", "{}", f.family);
+        }
     }
 
     #[test]
