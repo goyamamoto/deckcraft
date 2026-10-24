@@ -97,6 +97,7 @@ icons! {
     AlignCenter => "align-center",
     AlignRight => "align-right",
     Justify => "justify",
+    Distributed => "distributed",
     TextDirection => "text-direction",
     AlignText => "align-text",
     ConvertSmartArt => "convert-smart-art",
@@ -125,6 +126,7 @@ icons! {
     Action => "action",
     Comment => "comment",
     TextBox => "text-box",
+    VerticalTextBox => "vertical-text-box",
     HeaderFooter => "header-footer",
     WordArt => "word-art",
     DateTime => "date-time",
@@ -1291,6 +1293,14 @@ fn draw(p: &Pen<'_>, icon: Icon) {
                 p.seg((a, y), (b, y), K);
             }
         }
+        I::Distributed => {
+            // Every line, the last too, spread from edge to edge with even gaps.
+            for y in [4.5, 9.5, 14.5, 19.5] {
+                for x in [3.0, 8.0, 13.0, 18.0] {
+                    p.seg((x, y), (x + 3.0, y), K);
+                }
+            }
+        }
         I::TextDirection => {
             // A capital A lying on its side.
             p.line_w(&[(17.0, 5.5), (3.0, 12.0), (17.0, 18.5)], K, 1.1);
@@ -1453,6 +1463,15 @@ fn draw(p: &Pen<'_>, icon: Icon) {
             }
             p.seg((7.5, 9.5), (16.5, 9.5), K);
             p.seg((7.5, 14.5), (13.5, 14.5), K);
+        }
+        I::VerticalTextBox => {
+            // The text box with its lines running down, the first column on the right.
+            p.rect(4.5, 3.5, 19.5, 20.5, 0.5, N, K);
+            for (x, y) in [(4.5, 3.5), (19.5, 3.5), (4.5, 20.5), (19.5, 20.5)] {
+                p.rect(x - 1.5, y - 1.5, x + 1.5, y + 1.5, 0.3, B, N);
+            }
+            p.seg((14.5, 7.5), (14.5, 16.5), K);
+            p.seg((9.5, 7.5), (9.5, 13.5), K);
         }
         I::HeaderFooter => {
             p.rect(4.0, 2.5, 20.0, 21.5, 1.2, N, K);

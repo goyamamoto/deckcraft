@@ -71,7 +71,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Header and Footer…",
             ["Insert", "Text"],
             None,
-            "{date?: bool, dateText?: fixed text, slideNumber?: bool, footer?: bool, footerText?, hideOnTitle?: bool, all?: bool (default true)}",
+            "{date?: bool, dateText?: fixed text (empty = update automatically), dateFormat?: datetime1..datetime13, dateLanguage?: en-US|en-GB|fr-FR|ja-JP|sv-SE, slideNumber?: bool, footer?: bool, footerText?, hideOnTitle?: bool, all?: bool (default true)} — an automatic date is a field of dateFormat (else the last one used) in dateLanguage (else Japanese when the editing language is, else the placeholder's); dates already there change only when dateFormat or dateLanguage is given",
             has_doc,
             header_footer
         ),
@@ -911,11 +911,57 @@ fn slide_size(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"w": size.width, "h": size.height}))
 }
 
+/// The automatic date Header & Footer puts in date placeholders.
+struct FooterDate {
+    /// `datetime1`…`datetime13`.
+    kind: String,
+    /// The date run's language; `None` leaves the placeholder's own.
+    lang: Option<String>,
+    /// The caller chose the format or the language, so dates already there follow it.
+    chosen: bool,
+}
+
+/// The footer date `p` asks for. Like Insert ▸ Date and Time, the format is a field type and the
+/// language picks how it reads (`ja-JP`: 2026年10月24日, 令和8年…). Without a language, a new date
+/// is Japanese when the editing language is, as PowerPoint's Header & Footer dialog starts in the
+/// editing language; without a format, the deck's last one (else `datetime1`).
+fn footer_date(s: &Session, p: &Value, saved: &str) -> Result<FooterDate> {
+    use super::insert::{DATE_FORMATS, canon_lang};
+    use deckcraft_text::datetime::{DateTime, field_text};
+    const CMD: &str = "design.headerFooter";
+    let chosen = p.get("dateFormat").is_some() || p.get("dateLanguage").is_some();
+    let lang = match p.get("dateLanguage") {
+        None => (s.east_asian_editing == Some(deckcraft_fonts::CjkLocale::Japanese)).then(|| "ja-JP".to_string()),
+        Some(v) => {
+            Some(v.as_str().and_then(canon_lang).ok_or_else(|| bad(CMD, "`dateLanguage` must be en-US, en-GB, fr-FR, ja-JP or sv-SE"))?.to_string())
+        }
+    };
+    let probe = DateTime::new(2026, 10, 9, 20, 5, 7);
+    let available = |kind: &str| field_text(kind, lang.as_deref(), probe).is_some();
+    let kind = match p.get("dateFormat") {
+        Some(v) => {
+            let kind = v.as_str().filter(|f| DATE_FORMATS.contains(f)).ok_or_else(|| bad(CMD, "`dateFormat` must be datetime1..datetime13"))?;
+            if !available(kind) {
+                return Err(bad(CMD, "this date format isn't available in that language"));
+            }
+            kind
+        }
+        // The deck's last format, while the language has names for it.
+        None => DATE_FORMATS.iter().copied().find(|f| *f == saved && available(f)).unwrap_or("datetime1"),
+    };
+    Ok(FooterDate { kind: kind.to_string(), lang, chosen })
+}
+
 fn header_footer(s: &mut Session, p: &Value) -> Result<Value> {
+    let saved = s.doc()?.doc.header_footer.date_format.clone();
+    let date = footer_date(s, p, &saved)?;
     s.edit(|doc, sel| {
         let hf = &mut doc.header_footer;
         if let Some(v) = bool_param(p, "date") {
             hf.date = v;
+        }
+        if p.get("dateFormat").is_some() {
+            hf.date_format = date.kind.clone();
         }
         if let Some(v) = str_param(p, "dateText") {
             hf.date_text = v.into();
@@ -979,7 +1025,7 @@ fn header_footer(s: &mut Session, p: &Value) -> Result<Value> {
                             },
                             PhType::Date if hf.date_text.is_empty() => TextBody {
                                 paragraphs: vec![deckcraft_model::Paragraph {
-                                    runs: vec![Run { text: today(), props: Default::default(), kind: RunKind::Field { field: "datetime1".into() } }],
+                                    runs: vec![date_run(&date, Default::default())],
                                     ..Default::default()
                                 }],
                                 ..Default::default()
@@ -1000,9 +1046,9 @@ fn header_footer(s: &mut Session, p: &Value) -> Result<Value> {
                             sh.text = Some(TextBody::from_text(&hf.footer_text));
                         }
                     }
-                    (Some(pos), true) if k == PhType::Date && date_given => {
+                    (Some(pos), true) if k == PhType::Date && (date_given || date.chosen) => {
                         if let Some(sh) = sl.shapes.get_mut(pos) {
-                            set_date(sh, &hf.date_text);
+                            set_date(sh, &hf.date_text, &date);
                         }
                     }
                     _ => {}
@@ -1014,19 +1060,34 @@ fn header_footer(s: &mut Session, p: &Value) -> Result<Value> {
     ok()
 }
 
+/// The automatic date's run: a field of the chosen type in the chosen language (with PowerPoint's
+/// `altLang` for an East Asian one), saved with the date it shows now.
+fn date_run(date: &FooterDate, mut props: deckcraft_model::text::RunProps) -> Run {
+    if let Some(lang) = &date.lang {
+        super::insert::set_date_lang(&mut props, lang);
+    }
+    let lang = date.lang.as_deref().or(props.lang.as_deref()).map(str::to_string);
+    Run { text: date_field_text_in(&date.kind, lang.as_deref()), props, kind: RunKind::Field { field: date.kind.clone() } }
+}
+
 /// Point a slide's date placeholder at a fixed date (its own plain text) or, for an empty
-/// `fixed`, at an automatic date field (one it already has keeps its format).
-fn set_date(sh: &mut Shape, fixed: &str) {
+/// `fixed`, at an automatic date field. A field already there keeps its format and language
+/// unless the caller chose them.
+fn set_date(sh: &mut Shape, fixed: &str, date: &FooterDate) {
     let runs = || sh.text.iter().flat_map(|t| &t.paragraphs).flat_map(|p| &p.runs);
-    let has_field = runs().any(|r| matches!(&r.kind, RunKind::Field { field } if deckcraft_text::datetime::is_date_field(field)));
+    let field = runs().find_map(|r| match &r.kind {
+        RunKind::Field { field } if deckcraft_text::datetime::is_date_field(field) => Some((field.clone(), r.props.lang.clone())),
+        _ => None,
+    });
     let props = runs().next().map(|r| r.props.clone()).unwrap_or_default();
-    let (text, kind) = match fixed {
-        "" if has_field => return,
-        "" => (today(), RunKind::Field { field: "datetime1".into() }),
-        _ if !has_field && sh.text.as_ref().is_some_and(|t| t.text() == fixed) => return,
-        _ => (fixed.to_string(), RunKind::Text),
+    let run = match (fixed, field) {
+        ("", Some(_)) if !date.chosen => return,
+        ("", Some((kind, lang))) if kind == date.kind && (date.lang.is_none() || lang == date.lang) => return,
+        ("", _) => date_run(date, props),
+        (_, None) if sh.text.as_ref().is_some_and(|t| t.text() == fixed) => return,
+        _ => Run { text: fixed.to_string(), props, kind: RunKind::Text },
     };
-    let para = deckcraft_model::Paragraph { runs: vec![Run { text, props, kind }], ..Default::default() };
+    let para = deckcraft_model::Paragraph { runs: vec![run], ..Default::default() };
     sh.text = Some(TextBody { paragraphs: vec![para], ..sh.text.clone().unwrap_or_default() });
 }
 
@@ -1038,8 +1099,13 @@ pub fn today() -> String {
 
 /// What date field `kind` shows now (empty if unknown or there is no clock).
 pub fn date_field_text(kind: &str) -> String {
+    date_field_text_in(kind, None)
+}
+
+/// What date field `kind` shows now in language `lang` (`None`: US English).
+pub fn date_field_text_in(kind: &str, lang: Option<&str>) -> String {
     use deckcraft_text::datetime::{DateTime, field_text};
-    DateTime::now_local().and_then(|now| field_text(kind, None, now)).unwrap_or_default()
+    DateTime::now_local().and_then(|now| field_text(kind, lang, now)).unwrap_or_default()
 }
 
 /// Days since 1970-01-01 → (year, month, day), exact for every `i64`.
@@ -2335,5 +2401,77 @@ mod browse_theme_tests {
         let box_ = title.xfrm.unwrap();
         assert!((box_.x - 60.0).abs() < 0.01 && (box_.y - 29.0).abs() < 0.01);
         assert!((box_.w - 840.0).abs() < 0.01 && (box_.h - 104.0).abs() < 0.01);
+    }
+
+    /// The date run of slide `i`'s date placeholder: (field type, lang, altLang, text).
+    fn footer_date(s: &Session, i: usize) -> Option<(String, Option<String>, Option<String>, String)> {
+        use deckcraft_model::PhType;
+        use deckcraft_model::text::RunKind;
+        let slide = s.doc().unwrap().doc.slides.get(i).cloned()?;
+        let ph = slide.shapes.iter().find(|x| x.ph_type() == Some(PhType::Date))?;
+        let run = ph.text.as_ref()?.paragraphs.first()?.runs.first()?.clone();
+        let kind = match run.kind {
+            RunKind::Field { field } => field,
+            _ => "text".into(),
+        };
+        Some((kind, run.props.lang, run.props.alt_lang, run.text))
+    }
+
+    #[test]
+    fn header_and_footer_dates_are_japanese_with_japanese_editing_and_take_a_format() {
+        let mut s = Session::with_new();
+        s.execute("slide.new", &json!({})).unwrap();
+        s.east_asian_editing = Some(deckcraft_fonts::CjkLocale::Japanese);
+        // Japanese editing: a new automatic date is a Japanese field (2026/10/24), with the Latin
+        // alternate language PowerPoint writes on Japanese text.
+        s.execute("design.headerFooter", &json!({"date": true})).unwrap();
+        for i in 0..2 {
+            let (kind, lang, alt, text) = footer_date(&s, i).unwrap();
+            assert_eq!((kind.as_str(), lang.as_deref(), alt.as_deref()), ("datetime1", Some("ja-JP"), Some("en-US")), "slide {i}");
+            assert_eq!(text.split('/').next().map(str::len), Some(4), "y/MM/dd: {text}");
+        }
+        // A Japanese format from the dialog: every slide's date follows, in one undo step.
+        let undo = undo_len(&s);
+        s.execute("design.headerFooter", &json!({"date": true, "dateText": "", "dateFormat": "datetime2", "dateLanguage": "ja-JP"})).unwrap();
+        assert_eq!(undo_len(&s), undo + 1);
+        for i in 0..2 {
+            let (kind, lang, _, text) = footer_date(&s, i).unwrap();
+            assert_eq!((kind.as_str(), lang.as_deref()), ("datetime2", Some("ja-JP")));
+            assert!(text.contains('年') && text.contains('日'), "2026年10月24日(土): {text}");
+        }
+        assert_eq!(s.doc().unwrap().doc.header_footer.date_format, "datetime2");
+        // The era form, on this slide only.
+        s.execute("design.headerFooter", &json!({"dateFormat": "datetime3", "all": false})).unwrap();
+        let (kind, _, _, text) = footer_date(&s, 1).unwrap();
+        assert_eq!(kind, "datetime3");
+        assert!(text.starts_with("令和"), "{text}");
+        assert_eq!(footer_date(&s, 0).unwrap().0, "datetime2");
+        // Turning the date on again without a format keeps the dates that are there.
+        s.east_asian_editing = None;
+        s.execute("design.headerFooter", &json!({"date": true, "dateText": ""})).unwrap();
+        assert_eq!(footer_date(&s, 0).unwrap().0, "datetime2");
+        // English: the language's own words, and the alternate language dropped.
+        s.execute("design.headerFooter", &json!({"dateFormat": "datetime4", "dateLanguage": "en-US"})).unwrap();
+        let (kind, lang, alt, text) = footer_date(&s, 0).unwrap();
+        assert_eq!((kind.as_str(), lang.as_deref(), alt), ("datetime4", Some("en-US"), None));
+        assert!(text.chars().next().is_some_and(char::is_alphabetic), "October 24, 2026: {text}");
+        // Fixed text still wins, and an automatic date comes back in the last format.
+        s.execute("design.headerFooter", &json!({"dateText": "Launch"})).unwrap();
+        assert_eq!(footer_date(&s, 0).unwrap().0, "text");
+        s.execute("slide.new", &json!({})).unwrap();
+        s.execute("design.headerFooter", &json!({"dateText": ""})).unwrap();
+        assert_eq!(footer_date(&s, 2).unwrap().0, "datetime4");
+        // Bad values are errors and change nothing.
+        let undo = undo_len(&s);
+        for bad in [
+            json!({"dateFormat": "datetime14"}),
+            json!({"dateFormat": 3}),
+            json!({"dateLanguage": "xx-YY"}),
+            json!({"dateLanguage": null}),
+            json!({"dateFormat": "datetime2", "dateLanguage": "sv-SE"}),
+        ] {
+            assert!(s.execute("design.headerFooter", &bad).is_err(), "{bad}");
+        }
+        assert_eq!(undo_len(&s), undo);
     }
 }
