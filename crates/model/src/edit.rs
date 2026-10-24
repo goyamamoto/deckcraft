@@ -4,6 +4,8 @@
 use crate::text::{Paragraph, Run, RunKind, RunProps, TextBody};
 use crate::words;
 
+pub mod width;
+
 /// (paragraph, char offset in the paragraph).
 pub type Pos = (usize, usize);
 
@@ -457,15 +459,28 @@ pub fn next_case(s: &str) -> &'static str {
     }
 }
 
-/// Change case: `upper`, `lower`, `sentence`, `title`, `toggle`.
+/// The Change Case modes [`change_case_parts`] knows: PowerPoint's five Latin cases, and the
+/// two widths it adds with East Asian editing (半角 / 全角, see [`width`]).
+pub const CASE_MODES: &[&str] = &["sentence", "lower", "upper", "title", "toggle", "halfWidth", "fullWidth"];
+
+/// Change case: `upper`, `lower`, `sentence`, `title`, `toggle`, `halfWidth`, `fullWidth`.
 pub fn change_case(s: &str, mode: &str) -> String {
     change_case_parts(&[s], mode).concat()
 }
 
 /// Change the case of consecutive pieces of text (the runs of a paragraph) as one string, so
-/// `title` and `sentence` carry their word/sentence state across piece boundaries. Each output
+/// `title` and `sentence` carry their word/sentence state across piece boundaries, and a
+/// half-width kana's sound mark in the next piece composes with it (`fullWidth`). Each output
 /// piece is the changed form of the matching input piece, even where a character changes length.
+/// A mode outside [`CASE_MODES`] leaves the text as it is.
 pub fn change_case_parts(parts: &[&str], mode: &str) -> Vec<String> {
+    if let Some(w) = match mode {
+        "halfWidth" => Some(width::Width::Half),
+        "fullWidth" => Some(width::Width::Full),
+        _ => None,
+    } {
+        return convert_width_parts(parts, w);
+    }
     let mut start = true;
     parts
         .iter()
@@ -473,7 +488,7 @@ pub fn change_case_parts(parts: &[&str], mode: &str) -> Vec<String> {
             "upper" => s.to_uppercase(),
             "lower" => s.to_lowercase(),
             "toggle" => s.chars().map(|c| if c.is_uppercase() { c.to_lowercase().collect::<String>() } else { c.to_uppercase().collect() }).collect(),
-            _ => {
+            "sentence" | "title" => {
                 // `title` restarts after whitespace, sentence case after sentence punctuation.
                 let title = mode == "title";
                 let mut out = String::new();
@@ -490,8 +505,18 @@ pub fn change_case_parts(parts: &[&str], mode: &str) -> Vec<String> {
                 }
                 out
             }
+            _ => s.to_string(),
         })
         .collect()
+}
+
+/// Half- or full-width conversion of consecutive pieces as one string, split back by piece: each
+/// source character's converted form goes to the piece it came from, so ｶ + ﾞ in two runs
+/// compose into ガ in the first and nothing in the second.
+fn convert_width_parts(parts: &[&str], w: width::Width) -> Vec<String> {
+    let all: String = parts.concat();
+    let mut converted = width::convert(&all, w).into_iter();
+    parts.iter().map(|p| converted.by_ref().take(p.chars().count()).collect()).collect()
 }
 
 #[cfg(test)]
@@ -553,6 +578,25 @@ mod tests {
         assert_eq!(char_move(&b, (0, 17), true), (0, 17));
         assert_eq!(change_case("hello world. again", "sentence"), "Hello world. Again");
         assert_eq!(change_case("hello world", "title"), "Hello World");
+    }
+
+    #[test]
+    fn width_modes_convert_piece_by_piece() {
+        assert_eq!(change_case("ＡＢＣ１２３　ガ", "halfWidth"), "ABC123 ｶﾞ");
+        assert_eq!(change_case("ABC123 ｶﾞ", "fullWidth"), "ＡＢＣ１２３　ガ");
+        // A half-width kana and its sound mark in two runs compose into the first run.
+        assert_eq!(change_case_parts(&["ﾃｽﾄ ｶ", "ﾞ", "ｷﾞ"], "fullWidth"), vec!["テスト\u{3000}ガ", "", "ギ"]);
+        // Splitting a voiced kana keeps both halves in its run.
+        assert_eq!(change_case_parts(&["ガ", "x"], "halfWidth"), vec!["ｶﾞ", "x"]);
+        // Latin case is not touched by a width change.
+        assert_eq!(change_case("ａＢｃ", "halfWidth"), "aBc");
+    }
+
+    #[test]
+    fn unknown_case_mode_leaves_the_text() {
+        assert_eq!(change_case_parts(&["hello world. again"], "hiragana"), vec!["hello world. again"]);
+        assert_eq!(change_case("hello", ""), "hello");
+        assert!(CASE_MODES.contains(&"halfWidth") && CASE_MODES.contains(&"sentence"));
     }
 
     #[test]

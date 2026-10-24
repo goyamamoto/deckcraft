@@ -29,6 +29,33 @@ impl FontSet {
     pub fn script(&self, script: &str) -> Option<&str> {
         self.scripts.iter().find(|f| f.script.eq_ignore_ascii_case(script) && !f.typeface.is_empty()).map(|f| f.typeface.as_str())
     }
+
+    /// Take `from`'s East Asian, complex-script and per-script fonts wherever this set names none,
+    /// so a font scheme that defines only Latin faces (DeckCraft's built-ins) keeps a deck's
+    /// Japanese (`a:ea`, `Jpan`) and other script fonts when it is applied, as PowerPoint keeps
+    /// Japanese text in a Japanese face across a theme or font change.
+    pub fn keep_scripts_of(&mut self, from: &FontSet) {
+        if self.ea.trim().is_empty() {
+            self.ea.clone_from(&from.ea);
+        }
+        if self.cs.trim().is_empty() {
+            self.cs.clone_from(&from.cs);
+        }
+        for f in &from.scripts {
+            if !f.typeface.trim().is_empty() && self.script(&f.script).is_none() {
+                self.scripts.retain(|s| !s.script.eq_ignore_ascii_case(&f.script));
+                self.scripts.push(f.clone());
+            }
+        }
+    }
+}
+
+impl FontScheme {
+    /// [`FontSet::keep_scripts_of`] for the heading and body fonts.
+    pub fn keep_scripts_of(&mut self, from: &FontScheme) {
+        self.major.keep_scripts_of(&from.major);
+        self.minor.keep_scripts_of(&from.minor);
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -346,4 +373,33 @@ pub fn builtin_format_schemes() -> Vec<FormatScheme> {
     plain.effects = vec![Effects::default(), Effects::default(), Effects::default()];
 
     vec![default_format(), soft, crisp, lift, glow_scheme, plain]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_latin_only_scheme_keeps_the_east_asian_and_script_fonts() {
+        let mut current = FontScheme::default();
+        current.major.ea = "EA Heading".into();
+        current.minor.cs = "CS Body".into();
+        current.minor.scripts.push(ScriptFont { script: "Jpan".into(), typeface: "BIZ UDPGothic".into() });
+        let mut next = builtin_font_schemes().into_iter().next().unwrap_or_default();
+        next.minor.scripts.push(ScriptFont { script: "Arab".into(), typeface: "Own Arabic".into() });
+        next.keep_scripts_of(&current);
+        assert_eq!(next.major.ea, "EA Heading");
+        assert_eq!(next.minor.cs, "CS Body");
+        assert_eq!(next.minor.script("jpan"), Some("BIZ UDPGothic"));
+        assert_eq!(next.minor.script("Arab"), Some("Own Arabic"), "the new scheme's own script fonts stay");
+
+        // A scheme that names its own East Asian and Jpan fonts keeps them.
+        let mut own = FontScheme::default();
+        own.minor.ea = "Own EA".into();
+        own.minor.scripts.push(ScriptFont { script: "Jpan".into(), typeface: "Own Jpan".into() });
+        own.keep_scripts_of(&current);
+        assert_eq!(own.minor.ea, "Own EA");
+        assert_eq!(own.minor.script("Jpan"), Some("Own Jpan"));
+        assert_eq!(own.minor.scripts.len(), 1);
+    }
 }
