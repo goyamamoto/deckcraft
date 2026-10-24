@@ -73,8 +73,8 @@ pub fn specs() -> Vec<CommandSpec> {
             "Language",
             ["Review", "Language"],
             None,
-            "{lang?, noProof?: bool} (proofing language of the selected text, and Do Not Check Spelling)",
-            has_text_or_shapes,
+            "{lang?, noProof?: bool} (proofing language of the selected text, and Do Not Check Spelling; with nothing selected, the language of new text: the deck's default, text that had it only from there keeping it) → {default?: true}",
+            has_doc,
             language
         ),
         cmd!("format.highlight", "Text Highlight Color", ["Home", "Font"], None, "{color? (absent = none)}", has_text_or_shapes, highlight),
@@ -476,6 +476,9 @@ fn language(s: &mut Session, p: &Value) -> Result<Value> {
     if lang.as_deref().is_some_and(|l| l.is_empty() || l.len() > 35 || !l.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')) {
         return Err(bad("format.language", "`lang` is a language tag such as en-US"));
     }
+    if s.doc().is_ok_and(|st| st.selection.text.is_none() && st.selection.shapes.is_empty()) {
+        return default_language(s, lang, no_proof);
+    }
     format_run(s, &move |r| {
         if let Some(l) = &lang {
             r.lang = Some(l.clone());
@@ -485,6 +488,103 @@ fn language(s: &mut Session, p: &Value) -> Result<Value> {
         }
     })
 }
+/// `format.language` with nothing selected: the language of new text, the one the status bar
+/// shows then. The deck's default text style (`a:defPPr`) takes it. Text that had the old default
+/// only from there keeps that language, now written on its runs, as typed text in PowerPoint
+/// carries its own: a Japanese deck switched to English keeps its Japanese text Japanese (its
+/// fonts, line breaking and dates), and what is typed next is English.
+fn default_language(s: &mut Session, lang: Option<String>, no_proof: Option<bool>) -> Result<Value> {
+    s.edit(|doc, _| {
+        let old = doc.default_text_style.default.as_ref().and_then(|d| d.run.lang.clone()).filter(|l| !l.trim().is_empty());
+        if let (Some(old), Some(new)) = (&old, &lang)
+            && !old.eq_ignore_ascii_case(new)
+        {
+            keep_default_lang(doc, old);
+        }
+        let def = doc.default_text_style.default.get_or_insert_with(Default::default);
+        if let Some(l) = lang {
+            def.run.lang = Some(l);
+        }
+        if let Some(n) = no_proof {
+            def.run.no_proof = n.then_some(true);
+        }
+        Ok(())
+    })?;
+    Ok(json!({"default": true}))
+}
+
+/// Write language `old` on every run that has it only from the deck's default text style (none of
+/// its own, none from its shape, placeholder or master styles): on slides, layouts and masters,
+/// tables included.
+fn keep_default_lang(doc: &mut deckcraft_model::Presentation, old: &str) {
+    use deckcraft_model::text::TextBody;
+    fn body(ctx: &resolve::Ctx, sh: &Shape, b: &mut TextBody, old: &str) -> bool {
+        let mut changed = false;
+        for para in &mut b.paragraphs {
+            let at = para.clone();
+            for r in &mut para.runs {
+                if r.props.lang.is_none() && resolve::run(ctx, sh, &at, &r.props).lang.as_deref() == Some(old) {
+                    r.props.lang = Some(old.to_string());
+                    changed = true;
+                }
+            }
+        }
+        changed
+    }
+    fn shapes(ctx: &resolve::Ctx, list: &mut [Shape], old: &str, depth: usize) -> bool {
+        let mut changed = false;
+        for sh in list.iter_mut().filter(|_| depth <= 64) {
+            let at = sh.clone();
+            if let Some(b) = sh.text.as_mut() {
+                changed |= body(ctx, &at, b, old);
+            }
+            if let deckcraft_model::ShapeKind::Table(t) = &mut sh.kind {
+                for c in t.rows.iter_mut().flat_map(|r| r.cells.iter_mut()) {
+                    changed |= body(ctx, &at, &mut c.text, old);
+                }
+            }
+            if let Some(children) = sh.children_mut() {
+                changed |= shapes(ctx, children, old, depth + 1);
+            }
+        }
+        changed
+    }
+    let before = doc.clone();
+    for (i, slide) in before.slides.iter().enumerate() {
+        let Some(ctx) = resolve::Ctx::for_slide(&before, slide) else { continue };
+        let mut list = slide.shapes.clone();
+        if shapes(&ctx, &mut list, old, 0)
+            && let Some(s) = doc.slides.get_mut(i)
+        {
+            std::sync::Arc::make_mut(s).shapes = list;
+        }
+    }
+    for (i, m) in before.masters.iter().enumerate() {
+        let mut own = m.shapes.clone();
+        let own_changed = shapes(&resolve::Ctx::for_master(&before, m), &mut own, old, 0);
+        let mut layouts: Vec<(usize, Vec<Shape>)> = vec![];
+        for (j, l) in m.layouts.iter().enumerate() {
+            let mut list = l.shapes.clone();
+            if shapes(&resolve::Ctx::for_layout(&before, m, l), &mut list, old, 0) {
+                layouts.push((j, list));
+            }
+        }
+        if (own_changed || !layouts.is_empty())
+            && let Some(dm) = doc.masters.get_mut(i)
+        {
+            let dm = std::sync::Arc::make_mut(dm);
+            if own_changed {
+                dm.shapes = own;
+            }
+            for (j, list) in layouts {
+                if let Some(l) = dm.layouts.get_mut(j) {
+                    l.shapes = list;
+                }
+            }
+        }
+    }
+}
+
 fn highlight(s: &mut Session, p: &Value) -> Result<Value> {
     let c = color_param(p, "color");
     format_run(s, &move |r| r.highlight = c.clone())

@@ -280,3 +280,34 @@ fn notes_menu_language_dialog_and_repeated_words() {
     let st = h.state().session.active().unwrap().clone();
     assert!(h.state_mut().squiggles.settle(&st).is_empty(), "nothing in text marked Do Not Check is flagged, repeats included");
 }
+
+/// The status bar's language with nothing selected: its dialog sets the language of new text (the
+/// deck's default, which the status bar shows then), not "select text or a shape".
+#[test]
+fn status_bar_language_with_nothing_selected_sets_the_default() {
+    let mut app = SlideApp::new(Session::with_new(), Services::default());
+    app.session.execute("edit.deselect", &json!({})).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1280.0, 800.0)).build_ui_state(
+        |ui, app: &mut SlideApp| {
+            app.logic(ui.ctx());
+            app.ui(ui);
+        },
+        app,
+    );
+    h.run_steps(3);
+    h.get_by_label("Language: English (United States)").click();
+    h.run_steps(3);
+    assert!(h.state().dialog.as_ref().is_some_and(|d| d.id == "language"));
+    h.get_by_label("Default language for new text:");
+    assert!(h.query_by_label("Do not check spelling or grammar").is_none(), "nothing to mark Do Not Check");
+    if let Some(d) = h.state_mut().dialog.as_mut() {
+        d.fields.insert("lang".into(), "fr-FR".into());
+    }
+    h.run_steps(1);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none());
+    assert!(!h.state().status.as_ref().is_some_and(|(m, _)| m.contains("select")), "{:?}", h.state().status);
+    assert_eq!(crate::dialogs::selected_language(h.state()).0, "fr-FR");
+    h.get_by_label("Language: Français (France)");
+}

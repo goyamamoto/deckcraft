@@ -458,3 +458,42 @@ fn word_and_paragraph_keys_turn_with_vertical_text() {
     press(&mut s, "ArrowLeft", ALT);
     assert_eq!(caret(&s), (0, 7), "Option+Left: the end of the paragraph");
 }
+
+/// Review ▸ Language with nothing selected (the status bar's language, which shows the deck's
+/// default then) sets the language of new text: the deck's default. Japanese text that had
+/// `ja-JP` only from that default keeps it, written on its runs; text typed next is English. One
+/// undo step puts both back.
+#[test]
+fn language_with_nothing_selected_sets_new_text_and_keeps_the_old() {
+    let mut s = Session::new();
+    s.east_asian_editing = Some(CjkLocale::Japanese);
+    s.execute("file.new", &json!({})).unwrap();
+    let title = s.doc().unwrap().current_slide().unwrap().shapes[0].id.0;
+    s.execute("text.set", &json!({"id": title, "text": "日本語のタイトル"})).unwrap();
+    s.execute("edit.deselect", &json!({})).unwrap();
+    let default = |s: &Session| s.doc().unwrap().doc.default_text_style.default.clone().and_then(|d| d.run.lang);
+    let title_lang = |s: &Session| s.doc().unwrap().shape(ShapeId(title)).unwrap().text.as_ref().unwrap().paragraphs[0].runs[0].props.lang.clone();
+    assert_eq!(default(&s).as_deref(), Some("ja-JP"));
+    assert_eq!(title_lang(&s), None, "the title's text has its language from the deck's default");
+    assert_eq!(crate::cmd::format::selection_language(&s).0.as_deref(), Some("ja-JP"), "what the status bar shows");
+
+    assert_eq!(s.execute("format.language", &json!({"lang": "en-US"})).unwrap()["default"], true);
+    assert_eq!(default(&s).as_deref(), Some("en-US"));
+    assert_eq!(title_lang(&s).as_deref(), Some("ja-JP"), "existing text keeps its language");
+    assert_eq!(crate::cmd::format::selection_language(&s).0.as_deref(), Some("en-US"));
+    // Text typed next has the new default.
+    s.execute("insert.textBox", &json!({"rect": [60.0, 300.0, 400.0, 60.0], "text": "Hello"})).unwrap();
+    let id = s.doc().unwrap().selection.shapes[0].0;
+    s.execute("text.edit", &json!({"id": id})).unwrap();
+    assert_eq!(s.execute("format.state", &json!({})).unwrap()["lang"], "en-US");
+
+    s.execute("edit.undo", &json!({})).unwrap();
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(default(&s).as_deref(), Some("ja-JP"));
+    assert_eq!(title_lang(&s), None);
+    // Without a deck default there is nothing to keep: the default is just set.
+    s.execute("file.new", &json!({"eastAsian": ""})).unwrap();
+    s.execute("format.language", &json!({"lang": "fr-FR", "noProof": true})).unwrap();
+    let d = s.doc().unwrap().doc.default_text_style.default.clone().unwrap();
+    assert_eq!((d.run.lang.as_deref(), d.run.no_proof), (Some("fr-FR"), Some(true)));
+}
