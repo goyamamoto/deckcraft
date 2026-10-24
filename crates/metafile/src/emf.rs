@@ -7,7 +7,7 @@ use crate::bytes::Bytes;
 use crate::canvas::{BS_HATCHED, BS_NULL, Brush, Canvas, LogFont, Obj, PS_NULL, PS_STYLE_MASK, Pen, Xform, colorref};
 use crate::dib::{self, Blend};
 use crate::geom::{self, ArcKind, P};
-use crate::text::{ETO_GLYPH_INDEX, ETO_PDY, Font, MAX_CHARS, decode_bytes, decode_utf16};
+use crate::text::{ETO_GLYPH_INDEX, ETO_PDY, Font, MAX_CHARS, decode_bytes, decode_utf16, face_name};
 use crate::{Error, Frame, MAX_PATH_OPS};
 
 /// ExtTextOut options: no rectangle in the record (EMR_SMALLTEXTOUT, EmrText), and 8-bit
@@ -342,8 +342,9 @@ fn create_font(cv: &mut Canvas, r: Bytes) -> Option<()> {
     let byte = |o: usize| r.0.get(o).copied().unwrap_or(0);
     let units: Vec<u16> = (0..32).map_while(|i| r.u16(40 + 2 * i)).take_while(|u| *u != 0).collect();
     let (family, _) = decode_utf16(&units, &[]);
+    let (family, vertical) = face_name(&family);
     let font = Font {
-        family: family.trim().to_string(),
+        family,
         height: height as f32,
         width: width as f32,
         weight: weight.clamp(0, 1000) as u16,
@@ -351,6 +352,7 @@ fn create_font(cv: &mut Canvas, r: Bytes) -> Option<()> {
         underline: byte(33) != 0,
         strike: byte(34) != 0,
         charset: byte(35),
+        vertical,
     };
     cv.add_object(Some(slot), Obj::Font(Arc::new(LogFont { font, escapement: f64::from(escapement) })));
     Some(())

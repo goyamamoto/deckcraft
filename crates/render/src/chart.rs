@@ -108,6 +108,52 @@ fn split_label(name: &str) -> String {
     }
 }
 
+/// Does a category label hold East Asian text (ideographs, kana, Hangul, full-width forms)? Such
+/// labels have no spaces to break at: they wrap between characters, as slide text does.
+fn east_asian(name: &str) -> bool {
+    name.chars().any(deckcraft_text::is_upright)
+}
+
+/// A label's width estimate in ems for deciding whether labels fit their bands: East Asian wide
+/// characters take a full em, the rest about half of one.
+fn label_ems(name: &str) -> f64 {
+    name.chars().map(|c| if deckcraft_text::is_upright(c) { 1.0 } else { 0.5 }).sum()
+}
+
+/// How a label's text box lays it out besides its size, colour and alignment.
+#[derive(Clone, Copy, Default)]
+struct LabelFlow {
+    /// Wrap at the box's width (breaking where slide text breaks: spaces, and between East Asian
+    /// characters with kinsoku), instead of one line per paragraph.
+    wrap: bool,
+    /// The text direction (`bodyPr@vert`), as the slide text engine lays it out.
+    vert: Option<deckcraft_model::text::TextDir>,
+}
+
+/// A chart label's text body: `text` at `size` in colour `col`, no insets, no bullets.
+fn label_body(text: &str, size: f64, align: Align, anchor: Anchor, col: Rgba, bold: bool, flow: LabelFlow) -> TextBody {
+    let mut body = TextBody::from_text(text);
+    body.body.inset_l = Some(0.0);
+    body.body.inset_r = Some(0.0);
+    body.body.inset_t = Some(0.0);
+    body.body.inset_b = Some(0.0);
+    body.body.anchor = Some(anchor);
+    body.body.wrap = Some(flow.wrap);
+    body.body.vert = flow.vert;
+    for p in &mut body.paragraphs {
+        p.props.align = Some(align);
+        p.props.bullet = Some(Bullet::None);
+        p.props.margin_left = Some(0.0);
+        p.props.indent = Some(0.0);
+        for run in &mut p.runs {
+            run.props.size = Some(size);
+            run.props.bold = Some(bold);
+            run.props.fill = Some(Fill::solid(ColorRef::rgb(col)));
+        }
+    }
+    body
+}
+
 pub(crate) fn label(
     ctx: &mut RenderContext,
     rctx: &Ctx,
@@ -120,26 +166,39 @@ pub(crate) fn label(
     col: Rgba,
     bold: bool,
 ) {
-    let mut body = TextBody::from_text(text);
-    body.body.inset_l = Some(0.0);
-    body.body.inset_r = Some(0.0);
-    body.body.inset_t = Some(0.0);
-    body.body.inset_b = Some(0.0);
-    body.body.anchor = Some(anchor);
-    body.body.wrap = Some(false);
-    for p in &mut body.paragraphs {
-        p.props.align = Some(align);
-        p.props.bullet = Some(Bullet::None);
-        p.props.margin_left = Some(0.0);
-        p.props.indent = Some(0.0);
-        for run in &mut p.runs {
-            run.props.size = Some(size);
-            run.props.bold = Some(bold);
-            run.props.fill = Some(Fill::solid(ColorRef::rgb(col)));
-        }
-    }
+    label_with(ctx, rctx, m, text, r, (size, col, bold), align, anchor, LabelFlow::default());
+}
+
+/// [`label`] wrapped at its box's width or in a text direction of its own; `style` is the size,
+/// colour and boldness.
+fn label_with(
+    ctx: &mut RenderContext,
+    rctx: &Ctx,
+    m: Affine,
+    text: &str,
+    r: Rect,
+    style: (f64, Rgba, bool),
+    align: Align,
+    anchor: Anchor,
+    flow: LabelFlow,
+) {
+    let (size, col, bold) = style;
+    let body = label_body(text, size, align, anchor, col, bold, flow);
     let tmp = Shape { text: Some(body.clone()), ..Default::default() };
     crate::draw_text(ctx, rctx, &tmp, &body, r, m, &deckcraft_text::NoFields, None);
+}
+
+/// How many lines `text` takes wrapped at `width` (see [`LabelFlow::wrap`]).
+fn wrapped_lines(rctx: &Ctx, text: &str, width: f64, size: f64) -> usize {
+    let body = label_body(text, size, Align::Center, Anchor::Top, Rgba::BLACK, false, LabelFlow { wrap: true, vert: None });
+    let tmp = Shape { text: Some(body.clone()), ..Default::default() };
+    let opts = deckcraft_text::Opts {
+        rect: Rect::new(0.0, 0.0, width.max(1.0), 1.0e5),
+        fields: &deckcraft_text::NoFields,
+        prompt_color: None,
+        no_shrink: true,
+    };
+    deckcraft_text::layout(rctx, &tmp, &body, &opts).lines.len().max(1)
 }
 
 fn fmt_num(v: f64) -> String {
@@ -351,6 +410,7 @@ fn draw_inner(ctx: &mut RenderContext, rctx: &Ctx, c: &Chart, m: Affine, w: f64,
     // On a horizontal bar chart the category axis is the left one.
     let (left_title, bottom_title) =
         if horiz { (c.axis_titles.0.as_deref(), c.axis_titles.1.as_deref()) } else { (c.axis_titles.1.as_deref(), c.axis_titles.0.as_deref()) };
+    let left_dir = if horiz { c.axis_title_dirs.0 } else { c.axis_title_dirs.1 };
     let band_h = base * 1.6;
     if let Some(t) = bottom_title.filter(|t| !t.is_empty()) {
         let r = Rect::new(area.x0, area.y1 - band_h, area.x1, area.y1);
@@ -358,10 +418,22 @@ fn draw_inner(ctx: &mut RenderContext, rctx: &Ctx, c: &Chart, m: Affine, w: f64,
         area.y1 -= band_h + base * 0.3;
     }
     if let Some(t) = left_title.filter(|t| !t.is_empty()) {
-        let (cx, cy) = (area.x0 + band_h / 2.0, (area.y0 + area.y1) / 2.0);
-        let turned = m * Affine::translate((cx, cy)) * Affine::rotate(-std::f64::consts::FRAC_PI_2);
-        let half = area.height() / 2.0;
-        label(ctx, rctx, turned, t, Rect::new(-half, -band_h / 2.0, half, band_h / 2.0), base, Align::Center, Anchor::Middle, text_col, true);
+        match left_dir.filter(|d| *d != deckcraft_model::text::TextDir::Horizontal) {
+            // A text direction of its own (Format Axis Title ▸ Text direction): stacked (縦書き)
+            // or East Asian vertical text stands its kanji upright down the band, as the slide
+            // text engine lays vertical text out.
+            Some(dir) => {
+                let r = Rect::new(area.x0, area.y0, area.x0 + band_h, area.y1);
+                let flow = LabelFlow { wrap: false, vert: Some(dir) };
+                label_with(ctx, rctx, m, t, r, (base, text_col, true), Align::Center, Anchor::Middle, flow);
+            }
+            None => {
+                let (cx, cy) = (area.x0 + band_h / 2.0, (area.y0 + area.y1) / 2.0);
+                let turned = m * Affine::translate((cx, cy)) * Affine::rotate(-std::f64::consts::FRAC_PI_2);
+                let half = area.height() / 2.0;
+                label(ctx, rctx, turned, t, Rect::new(-half, -band_h / 2.0, half, band_h / 2.0), base, Align::Center, Anchor::Middle, text_col, true);
+            }
+        }
         area.x0 += band_h + base * 0.3;
     }
     // As many major units as the value axis has room for labels (PowerPoint's automatic unit).
@@ -397,10 +469,30 @@ fn draw_inner(ctx: &mut RenderContext, rctx: &Ctx, c: &Chart, m: Affine, w: f64,
         clamp_soft(label_w(false, (min, max, step)), base * 1.5, area.width() * 0.3)
     };
     let gutter_r = second.filter(|_| !c.y2_hidden).map(|sc| clamp_soft(label_w(true, sc), base * 1.5, area.width() * 0.3)).unwrap_or(0.0);
+    let ncat = c.categories.len().max(c.series.iter().map(|s| s.values.len()).max().unwrap_or(0)).max(1);
+    // Forecast reserves empty category slots so the line can run past the data. Charts with no
+    // forecast keep the old band.
+    let (back, fwd) = forecast_pad(c);
+    let nspan = ncat as f64 + back + fwd;
+    // Category labels under the plot wrap when one doesn't fit its band: onto two lines at the
+    // middle space (long date ranges), or, holding East Asian text, between characters where
+    // slide text breaks (kinsoku: never before 、 or 。), as PowerPoint wraps them, a quarter em
+    // in from either side of the band so neighbouring labels stay apart; up to three lines, each
+    // line after the first taking its room from the plot so the labels clear the axis title and
+    // the legend below.
+    let cat_band = (area.width() - gutter - gutter_r) / nspan;
+    let cat_wrap_w = (cat_band - base * 0.5).max(base);
+    let too_wide = |n: &String| if east_asian(n) { label_ems(n) * base > cat_wrap_w } else { label_ems(n) * base > cat_band };
+    let cat_wraps = !horiz && value_x_scale(c, 2).is_none() && c.categories.iter().any(too_wide);
+    let cat_lines = if cat_wraps {
+        c.categories.iter().take(1000).filter(|n| east_asian(n)).map(|n| wrapped_lines(rctx, n, cat_wrap_w, base)).max().unwrap_or(2).clamp(2, 3)
+    } else {
+        1
+    };
     let plot = if horiz {
         Rect::new(area.x0 + gutter, area.y0, area.x1, area.y1 - base * 1.6)
     } else {
-        Rect::new(area.x0 + gutter, area.y0, area.x1 - gutter_r, area.y1 - base * 1.8)
+        Rect::new(area.x0 + gutter, area.y0, area.x1 - gutter_r, area.y1 - base * (1.8 + 1.2 * cat_lines.saturating_sub(1) as f64))
     };
     if let Some(f) = &c.plot_fill {
         crate::paint::fill_path(ctx, rctx, f, None, &plot.to_path(0.1), plot, m, deckcraft_geom::preset::FillMode::Norm, 1.0, rctx.pres);
@@ -500,11 +592,6 @@ fn draw_inner(ctx: &mut RenderContext, rctx: &Ctx, c: &Chart, m: Affine, w: f64,
             );
         }
     }
-    let ncat = c.categories.len().max(c.series.iter().map(|s| s.values.len()).max().unwrap_or(0)).max(1);
-    // Forecast reserves empty category slots so the line can run past the data. Charts with no
-    // forecast keep the old band.
-    let (back, fwd) = forecast_pad(c);
-    let nspan = ncat as f64 + back + fwd;
     let band = if horiz { plot.height() / nspan } else { plot.width() / nspan };
     // Where category `i`'s band starts along its axis: left to right, or bottom to top on a
     // horizontal bar chart, unless the axis is reversed. The forecast's empty slots stay on
@@ -532,8 +619,9 @@ fn draw_inner(ctx: &mut RenderContext, rctx: &Ctx, c: &Chart, m: Affine, w: f64,
             );
         }
     }
-    // Category labels: wrapped onto two lines when they don't fit their band (long date ranges).
-    let wraps = !horiz && c.categories.iter().any(|n| n.chars().count() as f64 * base * 0.5 > band);
+    // Category labels, wrapped as worked out above.
+    let wraps = cat_wraps;
+    let wrapped_h = base * (1.6 + 1.2 * (cat_lines.max(2) - 1) as f64);
     for (i, name) in c.categories.iter().enumerate().filter(|_| xscale.is_none()) {
         let mid = if horiz { plot.y0 + band * (slot(i) + 0.5) } else { plot.x0 + band * (slot(i) + 0.5) };
         if horiz {
@@ -549,6 +637,9 @@ fn draw_inner(ctx: &mut RenderContext, rctx: &Ctx, c: &Chart, m: Affine, w: f64,
                 text_col,
                 false,
             );
+        } else if wraps && east_asian(name) {
+            let r = Rect::new(mid - cat_wrap_w / 2.0, plot.y1 + 3.0, mid + cat_wrap_w / 2.0, plot.y1 + wrapped_h);
+            label_with(ctx, rctx, m, name, r, (base, text_col, false), Align::Center, Anchor::Top, LabelFlow { wrap: true, vert: None });
         } else {
             let text = if wraps { split_label(name) } else { name.clone() };
             label(
