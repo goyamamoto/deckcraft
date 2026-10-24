@@ -1420,7 +1420,7 @@ fn slide_number(s: &mut Session, _p: &Value) -> Result<Value> {
     field_run(s, "slidenum", "‹#›")
 }
 
-const DATE_FORMATS: [&str; 13] = [
+pub(crate) const DATE_FORMATS: [&str; 13] = [
     "datetime1",
     "datetime2",
     "datetime3",
@@ -1448,7 +1448,7 @@ struct DateOpts {
 /// `altLang="en-US"`, the pair PowerPoint writes on Japanese text (`lang="ja-JP"
 /// altLang="en-US"`); other languages drop an alternate language taken over from the
 /// surrounding text.
-fn set_date_lang(props: &mut deckcraft_model::text::RunProps, lang: &str) {
+pub(crate) fn set_date_lang(props: &mut deckcraft_model::text::RunProps, lang: &str) {
     props.lang = Some(lang.to_string());
     props.alt_lang = deckcraft_fonts::CjkLocale::from_lang(lang).map(|_| "en-US".to_string());
 }
@@ -1459,7 +1459,7 @@ fn date_time_apply(p: &Value) -> bool {
     p.as_object().is_some_and(|o| o.contains_key("format") || o.contains_key("update") || o.contains_key("language"))
 }
 
-fn canon_lang(raw: &str) -> Option<&'static str> {
+pub(crate) fn canon_lang(raw: &str) -> Option<&'static str> {
     match raw.trim().to_ascii_lowercase().replace('_', "-").as_str() {
         "en" | "en-us" => Some("en-US"),
         "en-gb" => Some("en-GB"),

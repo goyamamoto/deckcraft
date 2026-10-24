@@ -51,6 +51,142 @@ fn run(app: &mut SlideApp, id: &str, p: Value) {
     let _ = app.run(id, p);
 }
 
+/// Does the interface offer East Asian text tools (vertical text, half- and full-width case,
+/// Asian Typography, East Asian numbering, Distributed alignment, Match half/full width forms)?
+/// PowerPoint shows them with East Asian editing; DeckCraft also when the interface itself is
+/// in a CJK language.
+pub(crate) fn east_asian(app: &SlideApp) -> bool {
+    app.session.east_asian_editing.is_some() || crate::i18n::current().uses_cjk()
+}
+
+/// Change Case's choices, as (English label, `format.case` mode): the five Latin cases, then
+/// Half-width and Full-width with East Asian editing.
+pub(crate) fn change_case_modes(east_asian: bool) -> Vec<(&'static str, &'static str)> {
+    let mut modes = vec![
+        ("Sentence case.", "sentence"),
+        ("lowercase", "lower"),
+        ("UPPERCASE", "upper"),
+        ("Capitalize Each Word", "title"),
+        ("tOGGLE cASE", "toggle"),
+    ];
+    if east_asian {
+        modes.extend([("Half-width", "halfWidth"), ("Full-width", "fullWidth")]);
+    }
+    modes
+}
+
+/// Text Direction's choices: (`format.direction` / `format.state` name, English label, East Asian
+/// only). Vertical (`eaVert`: kana and kanji upright, Latin turned) and the stacked form with every
+/// character upright and columns from right to left (`wordArtVertRtl`) come with East Asian
+/// editing, as in PowerPoint.
+pub(crate) const TEXT_DIRECTIONS: [(&str, &str, bool); 6] = [
+    ("horizontal", "Horizontal", false),
+    ("vertical", "Vertical", true),
+    ("rotate90", "Rotate all text 90°", false),
+    ("rotate270", "Rotate all text 270°", false),
+    ("stacked", "Stacked", false),
+    ("stackedRtl", "Vertical (all characters upright)", true),
+];
+
+/// The Text Direction choices to offer: every one with East Asian editing, else the four Latin
+/// ones and whichever the selection already has.
+pub(crate) fn text_directions(east_asian: bool, current: &str) -> impl Iterator<Item = (&'static str, &'static str)> + '_ {
+    TEXT_DIRECTIONS.iter().filter(move |(d, _, ea)| !ea || east_asian || *d == current).map(|(d, l, _)| (*d, *l))
+}
+
+/// A Text Direction choice's label in the interface language.
+pub(crate) fn direction_label(label: &str) -> &str {
+    crate::i18n::tc("direction", label)
+}
+
+/// Where the lines of text in direction `dir` (a `format.state` name) follow each other when they
+/// run down the shape: `Some(true)` from right to left (`eaVert`, `vert`, `wordArtVertRtl`),
+/// `Some(false)` from left to right (`vert270`, `wordArtVert`, `mongolianVert`), `None` for
+/// horizontal text.
+pub(crate) fn vertical_lines_rtl(dir: &str) -> Option<bool> {
+    match dir {
+        "vertical" | "rotate90" | "stackedRtl" => Some(true),
+        "rotate270" | "stacked" | "mongolianVert" => Some(false),
+        _ => None,
+    }
+}
+
+/// Align Text's choices for direction `dir`, as (English label, `format.anchor` value). The
+/// anchor is the edge the first line stands at, so in vertical text it reads across the columns:
+/// Right / Center / Left when the columns run from right to left, as PowerPoint names them.
+pub(crate) fn align_text_choices(dir: &str) -> [(&'static str, &'static str); 3] {
+    match vertical_lines_rtl(dir) {
+        Some(true) => [("Right", "top"), ("Center", "middle"), ("Left", "bottom")],
+        Some(false) => [("Left", "top"), ("Center", "middle"), ("Right", "bottom")],
+        None => [("Top", "top"), ("Middle", "middle"), ("Bottom", "bottom")],
+    }
+}
+
+/// The tooltips of Align Left, Center and Align Right for direction `dir`. A line of text turned a
+/// quarter turn runs down the shape, from the top (turned clockwise: `eaVert`, `vert`, stacked) or
+/// from the bottom (`vert270`), so the buttons align along the column.
+pub(crate) fn paragraph_align_labels(dir: &str) -> [&'static str; 3] {
+    match dir {
+        "rotate270" => ["Align Bottom", "Center", "Align Top"],
+        _ if vertical_lines_rtl(dir).is_some() => ["Align Top", "Center", "Align Bottom"],
+        _ => ["Align Left", "Center", "Align Right"],
+    }
+}
+
+/// The Numbering gallery, as (scheme, sample `1. 2. 3.`): `format.numberingSchemes` in order, the
+/// East Asian schemes (① ② ③, １． ２． ３．, 一． 二． 三．) only with East Asian editing.
+pub(crate) fn numbering_gallery(app: &mut SlideApp) -> Vec<(String, String)> {
+    let ea = east_asian(app);
+    let v = app.session.execute("format.numberingSchemes", &json!({})).unwrap_or_default();
+    v.get("schemes")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|s| ea || !s.get("eastAsian").and_then(Value::as_bool).unwrap_or(false))
+        .filter_map(|s| Some((s.get("scheme")?.as_str()?.to_string(), s.get("sample")?.as_str()?.to_string())))
+        .collect()
+}
+
+/// Let the interface faces borrow a face for the samples' characters (circled and full-width
+/// digits, kanji), so they don't draw as boxes when the interface faces lack them.
+pub(crate) fn note_samples(app: &mut SlideApp, ctx: &egui::Context, samples: &[(String, String)]) {
+    let text: String = samples.iter().map(|(_, s)| s.as_str()).collect();
+    let before = app.ui_fonts.faces.len();
+    app.ui_fonts.note(ctx, &text);
+    if app.ui_fonts.faces.len() != before {
+        ctx.request_repaint();
+    }
+}
+
+/// A Text Direction menu: each choice ticked when it is the selection's.
+fn text_direction_menu(app: &mut SlideApp, ui: &mut Ui, current: &str, east_asian: bool) {
+    for (dir, label) in text_directions(east_asian, current) {
+        if widgets::check_item_shown(ui, direction_label(label), true, current == dir).clicked() {
+            run(app, "format.direction", json!({"dir": dir}));
+            ui.close();
+        }
+    }
+}
+
+/// Insert ▸ Text Box: a split button. The button inserts a horizontal text box; its arrow offers
+/// Draw Horizontal Text Box and Vertical Text Box (East Asian vertical text, `insert.verticalTextBox`).
+fn text_box_button(app: &mut SlideApp, ui: &mut Ui, label: &str) {
+    let en = enabled(app, "insert.textBox");
+    let (main, arrow) = big_button_ex(ui, Icon::TextBox, label, en, true, false);
+    let main = main.on_hover_text(tip("insert.textBox", "Text Box"));
+    if main.clicked() {
+        run(app, "insert.textBox", json!({}));
+    }
+    crate::qat::ribbon_menu(app, &main, Icon::TextBox, label, "insert.textBox", &json!({}));
+    if let Some(a) = arrow {
+        a.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, en, tl!("Text Box options")));
+        egui::Popup::menu(&a).show(|ui| {
+            menu_item(app, ui, Icon::TextBox, "Draw Horizontal Text Box", "insert.textBox", json!({}));
+            menu_item(app, ui, Icon::VerticalTextBox, "Vertical Text Box", "insert.verticalTextBox", json!({}));
+        });
+    }
+}
+
 /// The window's title row: traffic-light space, quick access, centred title, actions.
 pub fn title_bar(app: &mut SlideApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
@@ -575,15 +711,10 @@ fn font_group(app: &mut SlideApp, ui: &mut Ui, st: &Value) {
                     }
                 });
                 let r = icon_toggle(ui, Icon::ChangeCase, "Change Case", en, false);
+                let ea = east_asian(app);
                 egui::Popup::menu(&r).show(|ui| {
-                    for (label, mode) in [
-                        ("Sentence case.", "sentence"),
-                        ("lowercase", "lower"),
-                        ("UPPERCASE", "upper"),
-                        ("Capitalize Each Word", "title"),
-                        ("tOGGLE cASE", "toggle"),
-                    ] {
-                        if ui.button(label).clicked() {
+                    for (label, mode) in change_case_modes(ea) {
+                        if ui.button(tl!(label)).clicked() {
                             run(app, "format.case", json!({"mode": mode}));
                         }
                     }
@@ -732,12 +863,14 @@ fn paragraph_group(app: &mut SlideApp, ui: &mut Ui, st: &Value) {
                     run(app, "format.bullets", json!({}));
                 }
                 if let Some(a) = a {
+                    a.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, en, tl!("Bullet styles")));
                     egui::Popup::menu(&a).show(|ui| {
                         if ui.button(tl!("None")).clicked() {
                             run(app, "format.bullets", json!({"on": false}));
                         }
                         for ch in ["•", "○", "■", "□", "◆", "➢", "✓", "–", "★"] {
-                            if ui.button(egui::RichText::new(format!("{ch}  Bullet")).size(14.0)).clicked() {
+                            let label = crate::i18n::fmt(tl!("{bullet}  Bullet"), &[("bullet", ch)]);
+                            if ui.button(egui::RichText::new(label).size(14.0)).clicked() {
                                 run(app, "format.bullets", json!({"on": true, "char": ch}));
                             }
                         }
@@ -754,20 +887,15 @@ fn paragraph_group(app: &mut SlideApp, ui: &mut Ui, st: &Value) {
                     run(app, "format.numbering", json!({}));
                 }
                 if let Some(a) = a {
+                    a.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, en, tl!("Numbering styles")));
                     egui::Popup::menu(&a).show(|ui| {
+                        let gallery = numbering_gallery(app);
+                        note_samples(app, ui.ctx(), &gallery);
                         if ui.button(tl!("None")).clicked() {
                             run(app, "format.numbering", json!({"on": false}));
                         }
-                        for (label, sch) in [
-                            ("1. 2. 3.", "arabicPeriod"),
-                            ("1) 2) 3)", "arabicParenR"),
-                            ("I. II. III.", "romanUcPeriod"),
-                            ("i. ii. iii.", "romanLcPeriod"),
-                            ("A. B. C.", "alphaUcPeriod"),
-                            ("a) b) c)", "alphaLcParenR"),
-                            ("a. b. c.", "alphaLcPeriod"),
-                        ] {
-                            if ui.button(label).clicked() {
+                        for (sch, sample) in &gallery {
+                            if ui.button(sample).clicked() {
                                 run(app, "format.numbering", json!({"on": true, "scheme": sch}));
                             }
                         }
@@ -797,8 +925,8 @@ fn paragraph_group(app: &mut SlideApp, ui: &mut Ui, st: &Value) {
                 });
                 let r = icon_toggle(ui, Icon::Columns, "Columns", en, false);
                 egui::Popup::menu(&r).show(|ui| {
-                    for n in 1..=3 {
-                        if ui.button(format!("{n} Column{}", if n > 1 { "s" } else { "" })).clicked() {
+                    for (n, label) in [(1, "One Column"), (2, "Two Columns"), (3, "Three Columns")] {
+                        if ui.button(tl!(label)).clicked() {
                             run(app, "format.columns", json!({"count": n, "spacing": 18}));
                         }
                     }
@@ -808,27 +936,25 @@ fn paragraph_group(app: &mut SlideApp, ui: &mut Ui, st: &Value) {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 1.0;
                 let al = st.get("align").and_then(Value::as_str).unwrap_or("");
-                toggle(app, ui, Icon::AlignLeft, "Align Left", "format.alignLeft", al == "l");
-                toggle(app, ui, Icon::AlignCenter, "Center", "format.alignCenter", al == "ctr");
-                toggle(app, ui, Icon::AlignRight, "Align Right", "format.alignRight", al == "r");
+                let dir = st.get("dir").and_then(Value::as_str).unwrap_or("horizontal");
+                let ea = east_asian(app);
+                // In vertical text a line runs down its column, so the alignment buttons say
+                // where along the column the text sits.
+                let [left, center, right] = paragraph_align_labels(dir);
+                toggle(app, ui, Icon::AlignLeft, left, "format.alignLeft", al == "l");
+                toggle(app, ui, Icon::AlignCenter, center, "format.alignCenter", al == "ctr");
+                toggle(app, ui, Icon::AlignRight, right, "format.alignRight", al == "r");
                 toggle(app, ui, Icon::Justify, "Justify", "format.justify", al == "just");
+                if ea && icon_toggle(ui, Icon::Distributed, &tip("format.align", "Distributed"), enabled(app, "format.align"), al == "dist").clicked()
+                {
+                    run(app, "format.align", json!({"align": "distributed"}));
+                }
                 let r = icon_toggle(ui, Icon::TextDirection, "Text Direction", en, false);
-                egui::Popup::menu(&r).show(|ui| {
-                    for (l, d) in [
-                        ("Horizontal", "horizontal"),
-                        ("Rotate all text 90°", "rotate90"),
-                        ("Rotate all text 270°", "rotate270"),
-                        ("Stacked", "stacked"),
-                    ] {
-                        if ui.button(l).clicked() {
-                            run(app, "format.direction", json!({"dir": d}));
-                        }
-                    }
-                });
+                egui::Popup::menu(&r).show(|ui| text_direction_menu(app, ui, dir, ea));
                 let r = icon_toggle(ui, Icon::AlignText, "Align Text", en, false);
                 egui::Popup::menu(&r).show(|ui| {
-                    for (l, a) in [("Top", "top"), ("Middle", "middle"), ("Bottom", "bottom")] {
-                        if ui.button(l).clicked() {
+                    for (l, a) in align_text_choices(dir) {
+                        if ui.button(crate::i18n::tc("anchor", l)).clicked() {
                             run(app, "format.anchor", json!({"anchor": a}));
                         }
                     }
@@ -950,7 +1076,7 @@ fn drawing_group(app: &mut SlideApp, ui: &mut Ui) {
                 app.session.set_tool(deckcraft_engine::ToolKind::Shape { preset: p.to_string() });
             }
         });
-        big(app, ui, Icon::TextBox, "Text Box", "insert.textBox", json!({}));
+        text_box_button(app, ui, "Text Box");
         let sel = enabled(app, "shape.fill");
         let r = big_button(ui, Icon::Arrange, "Arrange", sel);
         egui::Popup::menu(&r).show(|ui| arrange_menu(app, ui));
@@ -1330,7 +1456,7 @@ fn insert(app: &mut SlideApp, ui: &mut Ui) {
         big(app, ui, Icon::Comment, "Comment", "app.dialog", json!({"id": "comment"}));
     });
     group(ui, |ui| {
-        big(app, ui, Icon::TextBox, "Text\nBox", "insert.textBox", json!({}));
+        text_box_button(app, ui, "Text\nBox");
         big(app, ui, Icon::HeaderFooter, "Header &\nFooter", "app.dialog", json!({"id": "headerFooter"}));
         let r = big_button(ui, Icon::WordArt, "WordArt", enabled(app, "insert.wordArt"));
         egui::Popup::menu(&r).show(|ui| {
@@ -2455,7 +2581,7 @@ fn shape_format(app: &mut SlideApp, ui: &mut Ui) {
                 app.session.set_tool(deckcraft_engine::ToolKind::Shape { preset: p.to_string() });
             }
         });
-        big(app, ui, Icon::TextBox, "Text\nBox", "insert.textBox", json!({}));
+        text_box_button(app, ui, "Text\nBox");
         let r = big_button(ui, Icon::EditShape, "Edit\nShape", sel);
         egui::Popup::menu(&r).show(|ui| {
             ui.label(tl!("Change Shape"));
@@ -3534,6 +3660,10 @@ mod icons_popup_tests;
 #[cfg(test)]
 #[path = "align_tests.rs"]
 mod align_tests;
+
+#[cfg(test)]
+#[path = "japanese_text_ui_tests.rs"]
+mod japanese_text_ui_tests;
 
 #[cfg(test)]
 mod title_bar_tests {

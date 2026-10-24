@@ -358,6 +358,67 @@ pub fn show(app: &mut SlideApp, ui: &mut Ui) {
     });
 }
 
+/// A picture of slide `index`'s notes as Notes Pages print them, kept while the slide and the
+/// notes master stay the same.
+#[derive(Clone)]
+struct NotesPicture {
+    slide: std::sync::Arc<deckcraft_model::Slide>,
+    master: Option<std::sync::Arc<deckcraft_model::Master>>,
+    /// The notes frame, scale and pixel density, as bits.
+    key: [u64; 6],
+    tex: egui::TextureHandle,
+    /// The picture's size in pixels.
+    size: [usize; 2],
+}
+
+/// Slide `index`'s notes drawn by the slide text engine as the printed Notes Pages lay them out
+/// ([`deckcraft_render::render_notes_text`]: the notes master's body placeholder, styles and theme
+/// fonts, wrapping with kinsoku), for the notes `frame` on a page (page points; `scale` page points
+/// per notes-page point) at `px_per_pt` pixels per page point, with its size in pixels. The Print
+/// preview and the Notes Page view show these, so they match the PDF; a few are cached.
+pub(crate) fn notes_picture(
+    ctx: &egui::Context,
+    doc: &Presentation,
+    index: usize,
+    frame: deckcraft_geom::Rect,
+    scale: f64,
+    px_per_pt: f64,
+) -> Option<(egui::TextureHandle, egui::Vec2)> {
+    let slide = doc.slides.get(index)?.clone();
+    if slide.notes.is_empty() {
+        return None;
+    }
+    let id = egui::Id::new("deckcraft.notes-pictures");
+    let key = [frame.x0, frame.y0, frame.x1, frame.y1, scale, px_per_pt].map(f64::to_bits);
+    let same = |p: &NotesPicture| {
+        std::sync::Arc::ptr_eq(&p.slide, &slide)
+            && match (&p.master, &doc.notes_master) {
+                (Some(a), Some(b)) => std::sync::Arc::ptr_eq(a, b),
+                (None, None) => true,
+                _ => false,
+            }
+            && p.key == key
+    };
+    let mut cache: Vec<NotesPicture> = ctx.data_mut(|d| d.get_temp(id)).unwrap_or_default();
+    if let Some(p) = cache.iter().find(|p| same(p)) {
+        return Some((p.tex.clone(), egui::vec2(p.size[0] as f32, p.size[1] as f32)));
+    }
+    let img = deckcraft_render::render_notes_text(doc, index, frame, scale, px_per_pt)?;
+    let image = crate::textures::to_color_image(&img, false);
+    let size = image.size;
+    let tex = crate::textures::upload_editor(ctx, format!("notes-{index}"), image);
+    cache.insert(0, NotesPicture { slide, master: doc.notes_master.clone(), key, tex: tex.clone(), size });
+    cache.truncate(8);
+    ctx.data_mut(|d| d.insert_temp(id, cache));
+    Some((tex, egui::vec2(size[0] as f32, size[1] as f32)))
+}
+
+/// How many notes pictures [`notes_picture`] holds (tests).
+#[cfg(test)]
+pub(crate) fn notes_pictures_held(ctx: &egui::Context) -> usize {
+    ctx.data_mut(|d| d.get_temp::<Vec<NotesPicture>>(egui::Id::new("deckcraft.notes-pictures"))).map_or(0, |v| v.len())
+}
+
 /// Notes Page: the slide on top and its notes underneath, on a page.
 pub fn notes_page(app: &mut SlideApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
@@ -414,10 +475,24 @@ pub fn notes_page(app: &mut SlideApp, ui: &mut Ui) {
     }
     let notes = notes_of(app);
     let mut draft = draft.filter(|d| focused || d.body == notes).unwrap_or_else(|| crate::notes::Draft::new(&notes));
-    let look = crate::notes::Look { size: 14.0, color: Some(Color32::from_gray(30)) };
+    // Not being edited, the notes show as the PDF prints them: laid out by the slide text engine
+    // with the notes master's styles and fonts. The editor stays on top with its text hidden, so a
+    // click there starts editing (and the editor shows the text it edits).
+    let printed = if focused {
+        None
+    } else {
+        let px = f64::from(k * ppp);
+        notes_picture(ui.ctx(), &doc, idx, notes_box, paper.1 / doc.notes_size.height.max(1.0), px)
+    };
+    if let Some((tex, size)) = &printed {
+        let at = crate::textures::device_pixel_rect(notes_rect, ppp).min;
+        ui.painter().image(tex.id(), Rect::from_min_size(at, *size / ppp), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+    }
+    let ink = if printed.is_some() { Color32::TRANSPARENT } else { Color32::from_gray(30) };
+    let look = crate::notes::Look { size: 14.0, color: Some(ink) };
     let width = notes_rect.width();
     let r = crate::notes::editor(&mut child, &mut draft, &look, |e| {
-        e.id(edit_id).hint_text("Click to add text").desired_width(width).desired_rows(12).frame(egui::Frame::NONE)
+        e.id(edit_id).hint_text(tl!("Click to add text")).desired_width(width).desired_rows(12).frame(egui::Frame::NONE)
     })
     .response
     .response;
