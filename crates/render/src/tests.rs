@@ -2889,3 +2889,36 @@ fn empty_bullet_is_gray_only_while_editing_and_never_in_exports() {
     assert!(changed.iter().any(|(px, _)| px[0] == 179 && px[1] == 179 && px[2] == 179));
     assert!(changed.iter().all(|(px, _)| px[0] >= 179 && px[0] == px[1] && px[1] == px[2]));
 }
+
+/// Speaker notes of a deck without a notes master, whose slide master swaps the colour map for a
+/// dark design (bg1=dk1, tx1=lt1): the stand-in notes master keeps the standard map, as
+/// PowerPoint's default notes master does, so the notes print in dk1 on the white notes page
+/// rather than white on white. A notes master of the deck's own keeps its map.
+#[test]
+fn notes_stay_dark_under_a_dark_slide_master() {
+    use deckcraft_color::SchemeSlot;
+    let mut p = deckcraft_model::defaults::new_presentation(None);
+    p.notes_master = None;
+    std::sync::Arc::make_mut(&mut p.slides[0]).notes = TextBody::from_text("ノートの文章");
+    let (dark, white) = (Rgba::rgb(0x11, 0x22, 0x33), Rgba::rgb(0xff, 0xff, 0xff));
+    let swapped: Vec<(String, String)> =
+        [("bg1", "dk1"), ("tx1", "lt1"), ("bg2", "dk2"), ("tx2", "lt2")].iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+    {
+        let m = std::sync::Arc::make_mut(&mut p.masters[0]);
+        m.theme.colors.set(SchemeSlot::Dk1, dark);
+        m.theme.colors.set(SchemeSlot::Lt1, white);
+        m.color_map = swapped.clone();
+    }
+    let frame = Rect::new(50.0, 400.0, 550.0, 700.0);
+    let colours = |p: &Presentation| -> Vec<Rgba> {
+        let pt = place_notes_text(p, 0, frame, 1.0).expect("notes");
+        pt.layout.runs.iter().filter(|r| !r.glyphs.is_empty()).map(|r| r.color).collect()
+    };
+    let c = colours(&p);
+    assert!(!c.is_empty() && c.iter().all(|&c| c == dark), "notes in dk1, not the dark design's white text: {c:?}");
+    // A notes master of the deck's own (without notes styles) keeps its colour map.
+    p.notes_master =
+        Some(std::sync::Arc::new(deckcraft_model::Master { theme: p.masters[0].theme.clone(), color_map: swapped, ..Default::default() }));
+    let c = colours(&p);
+    assert!(!c.is_empty() && c.iter().all(|&c| c == white), "the notes master's own map: {c:?}");
+}

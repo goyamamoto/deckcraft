@@ -203,8 +203,9 @@ pub fn set_ime_surrounding_text(text: Option<ImeSurroundingText>) {
 }
 
 /// The range of the surrounding text (UTF-16 code units) the input method asked to replace with
-/// its marked text, if `setMarkedText:selectedRange:replacementRange:` named one since the last
-/// call; the `Ime::Preedit` event carrying that marked text follows.
+/// its marked text or its commit, if `setMarkedText:selectedRange:replacementRange:` or a
+/// committing `insertText:replacementRange:` named one since the last call; the `Ime::Preedit`
+/// or `Ime::Commit` event carrying that text follows, in the same frame.
 pub fn take_ime_replacement_range() -> Option<Range<usize>> {
     IME_REPLACEMENT.lock().ok().and_then(|mut r| r.take())
 }
@@ -244,6 +245,19 @@ impl WinitView {
             let start = s.selected.start.min(s.selected.end);
             start..s.selected.end.max(start)
         })
+    }
+
+    /// DeckCraft patch: hand the application the replacement range the input method named for
+    /// an edit (`take_ime_replacement_range`), if it named one: the `Ime::Preedit` or
+    /// `Ime::Commit` that edit queues next takes the place of that text.
+    fn ime_record_replacement(&self, replacement_range: NSRange) {
+        if replacement_range.location != NSNotFound as NSUInteger {
+            let start = replacement_range.location as usize;
+            let end = start.saturating_add(replacement_range.length as usize);
+            if let Ok(mut r) = IME_REPLACEMENT.lock() {
+                *r = Some(start..end);
+            }
+        }
     }
 
     /// DeckCraft patch: the surrounding text follows an edit by the input method at once
@@ -523,14 +537,10 @@ declare_class!(
             // The range of the surrounding text (marked text included) the new marked text
             // takes the place of: the one named, else the marked text, else the selection.
             let replaces = self.ime_edit_range(replacement_range);
-            if replacement_range.location != NSNotFound as NSUInteger {
-                let start = replacement_range.location as usize;
-                let end = start.saturating_add(replacement_range.length as usize);
-                if let Ok(mut r) = IME_REPLACEMENT.lock() {
-                    *r = Some(start..end);
-                }
-                self.ivars().marked_location.set(start);
-            } else if !had_marked_text {
+            self.ime_record_replacement(replacement_range);
+            // The marked text moves to a named range only once the surrounding text has read
+            // it where it lies (below).
+            if replacement_range.location == NSNotFound as NSUInteger && !had_marked_text {
                 let start = ime_surrounding().map_or(0, |s| s.selected.start.min(s.selected.end));
                 self.ivars().marked_location.set(start);
             }
@@ -556,8 +566,14 @@ declare_class!(
             };
 
             // DeckCraft patch: what the input method reads next answers from the text as it
-            // stands now — the application reports it again after the next frame.
+            // stands now — the application reports it again after the next frame. The marked
+            // text being replaced is read at its old place (`ime_marked`), and a named range
+            // mapped through it, which puts the new marked text where it lies; without reported
+            // text it lies where the named range starts.
             self.ime_update_surrounding(replaces, &string.to_string(), Some(selected_range));
+            if replacement_range.location != NSNotFound as NSUInteger && ime_surrounding().is_none() {
+                self.ivars().marked_location.set(replacement_range.location as usize);
+            }
 
             // Update marked text.
             *self.ivars().marked_text.borrow_mut() = marked_text;
@@ -682,15 +698,12 @@ declare_class!(
         #[method(insertText:replacementRange:)]
         fn insert_text(&self, string: &NSObject, replacement_range: NSRange) {
             trace_scope!("insertText:replacementRange:");
-            // DeckCraft patch: a commit naming committed text to replace (an input method that
-            // reconverts without marking first) is reported like a marked-text replacement.
-            if replacement_range.location != NSNotFound as NSUInteger && unsafe { self.hasMarkedText() } {
-                let start = replacement_range.location as usize;
-                let end = start.saturating_add(replacement_range.length as usize);
-                if let Ok(mut r) = IME_REPLACEMENT.lock() {
-                    *r = Some(start..end);
-                }
-            }
+            // DeckCraft patch: a commit naming committed text to replace hands the application
+            // that range (`ime_record_replacement`, in each branch below that commits) as
+            // `setMarkedText:` does — with marked text (committed text a live conversion took in)
+            // or without (an input method that reconverts without marking first) — so the slide
+            // replaces what the surrounding text says was replaced (`ime_edit_range`), as
+            // `NSTextView` does, rather than inserting at the caret.
 
             // SAFETY: This method is guaranteed to get either a `NSString` or a `NSAttributedString`.
             let string = if string.is_kind_of::<NSAttributedString>() {
@@ -719,6 +732,7 @@ declare_class!(
                 // what the input method reads next is the committed state.
                 let range = self.ime_edit_range(replacement_range);
                 self.ime_update_surrounding(range, &string, None);
+                self.ime_record_replacement(replacement_range);
                 *self.ivars().marked_text.borrow_mut() = NSMutableAttributedString::new();
                 self.queue_event(WindowEvent::Ime(Ime::Preedit(String::new(), None)));
                 self.queue_event(WindowEvent::Ime(Ime::Commit(string)));
@@ -729,6 +743,7 @@ declare_class!(
                 // within a key event the key's own text comes with the key event, as before.
                 let range = self.ime_edit_range(replacement_range);
                 self.ime_update_surrounding(range, &string, None);
+                self.ime_record_replacement(replacement_range);
                 self.queue_event(WindowEvent::Ime(Ime::Commit(string)));
             } else if self.ivars().in_key_event.get()
                 && self.is_ime_enabled()
@@ -749,6 +764,7 @@ declare_class!(
                 // event ended).
                 let range = self.ime_edit_range(replacement_range);
                 self.ime_update_surrounding(range, &string, None);
+                self.ime_record_replacement(replacement_range);
                 self.queue_event(WindowEvent::Ime(Ime::Commit(string)));
                 self.ivars().ime_state.set(ImeState::Committed);
             }
