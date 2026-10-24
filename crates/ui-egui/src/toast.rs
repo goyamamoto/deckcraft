@@ -15,17 +15,24 @@ pub struct Toast {
     pub at: f64,
 }
 
-/// The notice for fonts a presentation uses that aren't installed, or `None` when all are.
+/// The notice for fonts a presentation uses that aren't installed, or `None` when all are. Kept in
+/// English, one whole sentence per number of names, so each has an `@msg` template that
+/// [`crate::i18n::message`] translates when the toast is painted.
 pub fn missing_fonts_message(fonts: &[String]) -> Option<String> {
-    let names = match fonts {
+    let fmt = crate::i18n::fmt;
+    Some(match fonts {
         [] => return None,
-        [a] => a.clone(),
-        [a, b] => format!("{a} and {b}"),
-        [a, b, c] => format!("{a}, {b} and {c}"),
-        [a, b, c, rest @ ..] => format!("{a}, {b}, {c} and {} more", rest.len()),
-    };
-    let (it, them) = if fonts.len() == 1 { ("isn't", "it") } else { ("aren't", "them") };
-    Some(format!("{names} {it} installed on this computer. Text that uses {them} is shown in a similar font."))
+        [a] => fmt("{a} isn't installed on this computer. Text that uses it is shown in a similar font.", &[("a", a)]),
+        [a, b] => fmt("{a} and {b} aren't installed on this computer. Text that uses them is shown in a similar font.", &[("a", a), ("b", b)]),
+        [a, b, c] => fmt(
+            "{a}, {b} and {c} aren't installed on this computer. Text that uses them is shown in a similar font.",
+            &[("a", a), ("b", b), ("c", c)],
+        ),
+        [a, b, c, rest @ ..] => fmt(
+            "{a}, {b}, {c} and {n} more aren't installed on this computer. Text that uses them is shown in a similar font.",
+            &[("a", a), ("b", b), ("c", c), ("n", &rest.len().to_string())],
+        ),
+    })
 }
 
 /// Toast the active presentation's missing fonts, once per opened document.
