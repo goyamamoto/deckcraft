@@ -431,8 +431,10 @@ fn report_catalog_gaps(mut keys: BTreeSet<String>) {
     keys.extend(crate::ribbon::vocabulary());
     // A pattern of placeholders and figures only has nothing to translate.
     let words = |s: &str| english_words(&s.split('{').map(|p| p.split_once('}').map_or(p, |(_, rest)| rest)).collect::<String>());
+    let wordy = keys.iter().filter(|s| words(s)).count();
     for lang in super::Lang::all().filter(|l| *l != super::Lang::EN) {
         let missing: Vec<&String> = keys.iter().filter(|s| words(s) && !super::has(lang, s)).collect();
+        eprintln!("{}: {} of {wordy} interface strings translated", lang.code(), wordy - missing.len());
         if !missing.is_empty() {
             eprintln!("{} strings have no {} translation:\n{missing:#?}", missing.len(), lang.code());
         }
