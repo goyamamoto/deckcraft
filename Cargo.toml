@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "apps/*", "xtask"]
+# A vendored dependency (`vendor/README.md`), not a workspace member: it keeps its own lints.
+exclude = ["vendor/winit"]
 default-members = ["crates/*", "apps/deckcraft", "apps/deckcraft-cli"]
 
 [workspace.package]
@@ -103,4 +105,7 @@ codegen-units = 16
 debug = 0
 
 [patch.crates-io]
+# winit 0.30.13 with the macOS input-method patch (`vendor/README.md`, `vendor/patches/winit/`):
+# the input method keeps the rest of a conversion, reads committed text and reconverts it.
+winit = { path = "vendor/winit" }
 krilla = { git = "https://github.com/storytold/craft-libs", rev = "9f75d3dc19b4b514c4f3d4847ed1ec1b0e86b4ef", version = "=0.8.2" }

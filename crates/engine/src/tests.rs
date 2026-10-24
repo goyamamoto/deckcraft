@@ -1350,6 +1350,58 @@ fn ime_cancel_restores_the_text_and_selection() {
     assert_eq!(s.doc().unwrap().history.undo.len(), undo0 + 1);
 }
 
+/// The input method's caret in text not yet converted (an empty selection in its preedit, moved
+/// with the arrow keys): the caret stands there and nothing is drawn thick; what is typed there
+/// arrives as the whole preedit again. A clause being converted puts the caret at its end.
+#[test]
+fn ime_caret_stands_where_the_input_method_moved_it_in_the_composition() {
+    let mut s = session();
+    let title = s.doc().unwrap().current_slide().unwrap().shapes[0].id.0;
+    s.execute("text.edit", &json!({"id": title})).unwrap();
+    s.execute("text.insert", &json!({"text": "ab"})).unwrap();
+    s.execute("text.select", &json!({"anchor": [0, 1], "caret": [0, 1]})).unwrap();
+    let caret = |s: &Session| {
+        let t = s.doc().unwrap().selection.text.clone().unwrap();
+        assert_eq!(t.anchor, t.caret, "a caret, not a selection");
+        t.caret
+    };
+    let thick = |s: &Session| cmd::text::composition_underlines(s.doc().unwrap()).iter().filter(|u| u.2).count();
+    s.compose_text("にほご", Some((3, 3))).unwrap();
+    assert_eq!(caret(&s), (0, 4), "typing: the caret ends the preedit");
+    // Left arrow twice: the input method's caret after に.
+    s.compose_text("にほご", Some((1, 1))).unwrap();
+    assert_eq!(title_text(&s), "aにほごb");
+    assert_eq!(caret(&s), (0, 2), "the caret follows the input method's");
+    assert_eq!(s.doc().unwrap().composition.as_ref().unwrap().active, None, "no clause is being converted");
+    assert_eq!(thick(&s), 0);
+    // ん typed there: the whole preedit again, with the input method's caret after ん.
+    s.compose_text("にほんご", Some((3, 3))).unwrap();
+    assert_eq!(title_text(&s), "aにほんごb");
+    assert_eq!(caret(&s), (0, 4));
+    // Converting: the clause 日本 drawn thick, the caret at its end (the candidate window's place).
+    s.compose_text("日本語", Some((0, 2))).unwrap();
+    assert_eq!(caret(&s), (0, 3));
+    assert_eq!(thick(&s), 1);
+    // Past the end, reversed or hostile ranges stay in the preedit, never panic.
+    s.compose_text("日本語", Some((9, 9))).unwrap();
+    assert_eq!(caret(&s), (0, 4));
+    s.compose_text("日本語", Some((2, 1))).unwrap();
+    assert_eq!(caret(&s), (0, 2), "a reversed range stands for its end");
+    s.execute("text.compose", &json!({"text": "日本語", "active": [u64::MAX, u64::MAX]})).unwrap();
+    assert_eq!(caret(&s), (0, 4));
+    // The commit puts the caret after the committed text, one undo step.
+    let undo0 = s.doc().unwrap().history.undo.len();
+    s.commit_text("日本語").unwrap();
+    assert_eq!(title_text(&s), "a日本語b");
+    assert_eq!(caret(&s), (0, 4));
+    assert_eq!(s.doc().unwrap().history.undo.len(), undo0 + 1);
+    // Cancelled from inside: the text and the caret are as they were.
+    s.compose_text("に", Some((0, 0))).unwrap();
+    assert_eq!(caret(&s), (0, 4));
+    s.compose_text("", None).unwrap();
+    assert_eq!((title_text(&s), caret(&s)), ("a日本語b".to_string(), (0, 4)));
+}
+
 /// #101: anything else settles the composition first: its text stays and is its own undo step.
 #[test]
 fn ime_composition_is_kept_by_a_key_a_click_or_another_command() {

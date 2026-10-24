@@ -1,6 +1,7 @@
 //! #101: Korean, Japanese and Chinese in the interface: input method composition on the slide and
-//! in the notes pane (egui `Ime` events, as egui-winit sends them), and interface text drawn with
-//! real glyphs rather than boxes.
+//! in the notes pane (egui `Ime` events, as egui-winit sends them), the input method's caret and
+//! clause-by-clause commits, what it reads of the slide's text and the committed text it
+//! reconverts (再変換, `crate::ime`), and interface text drawn with real glyphs rather than boxes.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use egui::{Event, FontId, ImeEvent};
@@ -163,6 +164,271 @@ fn korean_composes_in_the_notes_pane() {
     let d = h.state().session.active().unwrap();
     assert_eq!(d.doc.slides[0].notes_text(), "노트요");
     assert_eq!(d.doc.slides[1].notes_text(), "");
+}
+
+fn preedit_at(text: &str, active: std::ops::Range<usize>) -> Event {
+    Event::Ime(ImeEvent::Preedit { text: text.into(), active_range_chars: Some(active) })
+}
+
+fn commit(text: &str) -> Event {
+    Event::Ime(ImeEvent::Commit(text.into()))
+}
+
+/// A harness editing the title, which holds `text`.
+fn editing_title(text: &str) -> egui_kittest::Harness<'static, SlideApp> {
+    let mut s = Session::with_new();
+    let title = s.doc().unwrap().current_slide().unwrap().shapes[0].id.0;
+    if !text.is_empty() {
+        s.execute("text.set", &json!({"id": title, "text": text})).unwrap();
+    }
+    let mut h = harness(s);
+    h.state_mut().run("text.edit", json!({"id": title})).unwrap();
+    h.run_steps(2);
+    h
+}
+
+fn caret(app: &SlideApp) -> (usize, usize) {
+    app.session.active().unwrap().selection.text.as_ref().unwrap().caret
+}
+
+fn ime_allowed(h: &egui_kittest::Harness<'_, SlideApp>) -> bool {
+    h.output().platform_output.ime.is_some()
+}
+
+/// Committing the first clause of a multi-clause conversion: the input method commits it and
+/// marks the rest again (on macOS `insertText:` then `setMarkedText:`; the events in one frame or
+/// the next), and later commits the rest. Every clause reaches the slide, and the input method
+/// stays allowed (the IME position is reported every frame), so its remaining marked text is not
+/// dropped. With stock winit the rest was lost on macOS (`vendor/patches/winit/01`).
+#[test]
+fn committing_the_first_clause_keeps_the_rest_of_the_composition() {
+    let mut h = editing_title("");
+    assert!(ime_allowed(&h));
+    h.event(preedit_at("きょうはいいてんき", 0..9));
+    h.run_steps(1);
+    h.event(preedit_at("今日はいい天気", 0..3));
+    h.run_steps(1);
+    assert!(ime_allowed(&h));
+    let undo0 = undo_len(h.state());
+    // The first clause committed and the rest marked again, in the same frame.
+    h.event(preedit(""));
+    h.event(commit("今日は"));
+    h.event(preedit_at("いい天気", 0..2));
+    for _ in 0..3 {
+        h.run_steps(1);
+        assert!(ime_allowed(&h), "the input method stays allowed while the rest is marked");
+    }
+    assert_eq!(title_text(h.state()), "今日はいい天気", "the first clause committed, the rest composing in place");
+    let c = h.state().session.active().unwrap().composition.clone().expect("the rest is still a composition");
+    assert_eq!((c.start, c.len), ((0, 3), 4));
+    assert_eq!(undo_len(h.state()), undo0 + 1, "the committed clause is an undo step");
+    h.event(preedit(""));
+    h.event(commit("いい天気"));
+    h.run_steps(1);
+    assert_eq!(title_text(h.state()), "今日はいい天気");
+    assert!(h.state().session.active().unwrap().composition.is_none());
+    // The same with the rest marked a frame later.
+    h.event(preedit_at("あしたははれ", 0..3));
+    h.run_steps(1);
+    h.event(preedit(""));
+    h.event(commit("明日は"));
+    h.run_steps(1);
+    assert!(ime_allowed(&h));
+    h.event(preedit_at("晴れ", 0..2));
+    h.run_steps(1);
+    assert!(ime_allowed(&h));
+    h.event(preedit(""));
+    h.event(commit("晴れ"));
+    h.run_steps(1);
+    assert_eq!(title_text(h.state()), "今日はいい天気明日は晴れ");
+    // A full-width space the input method types is kept full width.
+    h.event(commit("\u{3000}"));
+    h.run_steps(1);
+    assert_eq!(title_text(h.state()), "今日はいい天気明日は晴れ\u{3000}");
+}
+
+/// The input method's caret moved with the arrow keys inside text not yet converted (an empty
+/// selection in its marked text): the caret and the candidate window's position go there, and
+/// what is typed there arrives as the whole composition again. A clause being converted puts
+/// them at its end.
+#[test]
+fn the_caret_follows_the_input_methods_caret_inside_the_composition() {
+    let mut h = editing_title("");
+    let ime_x = |h: &egui_kittest::Harness<'_, SlideApp>| h.output().platform_output.ime.map(|ime| ime.rect.center().x);
+    h.event(preedit_at("にほご", 3..3));
+    h.run_steps(2);
+    let at_end = ime_x(&h).expect("IME position");
+    assert_eq!(caret(h.state()), (0, 3));
+    // Left arrow twice.
+    h.event(preedit_at("にほご", 1..1));
+    h.run_steps(2);
+    assert_eq!(caret(h.state()), (0, 1), "the caret stands after に");
+    let inside = ime_x(&h).expect("IME position");
+    assert!(inside < at_end - 10.0, "the candidate window follows the caret: {inside} vs {at_end}");
+    let u = deckcraft_engine::cmd::text::composition_underlines(h.state().session.active().unwrap());
+    assert!(!u.is_empty() && u.iter().all(|x| !x.2), "underlined, nothing thick: {u:?}");
+    // ん typed there.
+    h.event(preedit_at("にほんご", 3..3));
+    h.run_steps(2);
+    assert_eq!(caret(h.state()), (0, 3));
+    // Converting: the first clause thick, the caret and the candidate window at its end.
+    h.event(preedit_at("日本語", 0..2));
+    h.run_steps(2);
+    assert_eq!(caret(h.state()), (0, 2));
+    let clause = ime_x(&h).expect("IME position");
+    assert!(clause < at_end, "{clause} vs {at_end}");
+    // Committed: the caret ends the committed text.
+    h.event(preedit(""));
+    h.event(commit("日本語"));
+    h.run_steps(2);
+    assert_eq!(title_text(h.state()), "日本語");
+    assert_eq!(caret(h.state()), (0, 3), "after the commit the caret ends the committed text");
+}
+
+/// 再変換: the input method reads the caret's paragraph and the selection (gathered each frame
+/// for the platform), names the committed text its composition replaces, and that text gives way
+/// to the composition — put back if the composition is dismissed, replaced for good by the
+/// commit, as one undo step.
+#[test]
+fn ime_reconverts_committed_text_it_asked_to_replace() {
+    let mut h = editing_title("a日本語b");
+    h.state_mut().run("text.select", json!({"anchor": [0, 1], "caret": [0, 4]})).unwrap();
+    h.run_steps(2);
+    assert_eq!(
+        h.state().ime.surrounding,
+        Some(crate::ime::ImeSurrounding { text: "a日本語b".into(), selected: 1..4 }),
+        "the paragraph and the selection are reported"
+    );
+    let undo0 = undo_len(h.state());
+    // The input method asks for 1..4 to be replaced by the reading it marks.
+    h.state_mut().ime.replace = Some(1..4);
+    h.event(preedit_at("にほんご", 0..4));
+    h.run_steps(1);
+    assert_eq!(title_text(h.state()), "aにほんごb", "the committed text gives way to the composition");
+    assert!(h.state().ime.replace.is_none(), "taken");
+    assert_eq!(undo_len(h.state()), undo0);
+    // Dismissed: the committed text is back, still selected.
+    h.event(preedit(""));
+    h.run_steps(1);
+    assert_eq!(title_text(h.state()), "a日本語b");
+    let t = h.state().session.active().unwrap().selection.text.clone().unwrap();
+    assert_eq!(t.ordered(), ((0, 1), (0, 4)));
+    // From the caret: reconverted and committed, one undo step.
+    h.state_mut().run("text.select", json!({"anchor": [0, 5], "caret": [0, 5]})).unwrap();
+    h.run_steps(1);
+    assert_eq!(h.state().ime.surrounding.as_ref().map(|s| s.selected.clone()), Some(5..5), "the caret");
+    h.state_mut().ime.replace = Some(1..4);
+    h.event(preedit_at("にほんご", 0..4));
+    h.run_steps(1);
+    assert_eq!(title_text(h.state()), "aにほんごb");
+    h.event(preedit(""));
+    h.event(commit("二本後"));
+    h.run_steps(1);
+    assert_eq!(title_text(h.state()), "a二本後b");
+    assert_eq!(undo_len(h.state()), undo0 + 1);
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    assert_eq!(title_text(h.state()), "a日本語b");
+    // A range that doesn't fit the paragraph is ignored: the composition goes at the caret.
+    let title = h.state().session.active().unwrap().doc.slides[0].shapes[0].id.0;
+    h.state_mut().run("text.edit", json!({"id": title})).unwrap();
+    h.state_mut().run("text.select", json!({"anchor": [0, 5], "caret": [0, 5]})).unwrap();
+    h.state_mut().ime.replace = Some(2..40);
+    h.event(preedit("あ"));
+    h.run_steps(1);
+    assert_eq!(title_text(h.state()), "a日本語bあ");
+    h.event(preedit(""));
+    h.run_steps(1);
+    assert_eq!(title_text(h.state()), "a日本語b");
+}
+
+/// The input method may name committed text while its composition shows (macOS live conversion
+/// marks the words before its marked text again to convert them together), and a commit may name
+/// the text it replaces: both replace that text, never add to it.
+#[test]
+fn ime_replaces_committed_text_named_while_composing_and_on_commit() {
+    let mut h = editing_title("a日本b");
+    let before_b = |h: &mut egui_kittest::Harness<'static, SlideApp>| {
+        h.state_mut().run("text.select", json!({"anchor": [0, 3], "caret": [0, 3]})).unwrap();
+        h.run_steps(1);
+    };
+    before_b(&mut h);
+    // Composing ご before b: the input method reads a日本ごb.
+    h.event(preedit("ご"));
+    h.run_steps(1);
+    assert_eq!(title_text(h.state()), "a日本ごb");
+    assert_eq!(h.state().ime.surrounding.as_ref().map(|s| s.text.as_str()), Some("a日本ごb"));
+    // It marks 日本ご (1..4 of that text) again as 日本語: the committed 日本 gives way too.
+    h.state_mut().ime.replace = Some(1..4);
+    h.event(preedit_at("日本語", 0..3));
+    h.run_steps(1);
+    assert_eq!(title_text(h.state()), "a日本語b", "no duplicated 日本");
+    let c = h.state().session.active().unwrap().composition.clone().unwrap();
+    assert_eq!((c.start, c.len), ((0, 1), 3));
+    // Dismissed: the committed text is back; committed: replaced for good, one undo step.
+    h.event(preedit(""));
+    h.run_steps(1);
+    assert_eq!(title_text(h.state()), "a日本b");
+    let undo0 = undo_len(h.state());
+    before_b(&mut h);
+    h.event(preedit("ご"));
+    h.run_steps(1);
+    h.state_mut().ime.replace = Some(1..4);
+    h.event(preedit_at("日本語", 0..3));
+    h.run_steps(1);
+    h.event(preedit(""));
+    h.event(commit("日本語"));
+    h.run_steps(1);
+    assert_eq!(title_text(h.state()), "a日本語b");
+    assert_eq!(undo_len(h.state()), undo0 + 1);
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    assert_eq!(title_text(h.state()), "a日本b");
+    // A commit naming the text it replaces without marking it first (the dismissal carries the
+    // range, as the vendored winit reports `insertText:replacementRange:`): 日本ご → 日本語.
+    let title = h.state().session.active().unwrap().doc.slides[0].shapes[0].id.0;
+    h.state_mut().run("text.edit", json!({"id": title})).unwrap();
+    before_b(&mut h);
+    h.event(preedit("ご"));
+    h.run_steps(1);
+    assert_eq!(title_text(h.state()), "a日本ごb");
+    h.state_mut().ime.replace = Some(1..4);
+    h.event(preedit(""));
+    h.event(commit("日本語"));
+    h.run_steps(1);
+    assert_eq!(title_text(h.state()), "a日本語b");
+    assert!(h.state().ime.replace.is_none());
+    assert_eq!(caret(h.state()), (0, 4), "the caret after the committed text");
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    assert_eq!(title_text(h.state()), "a日本b");
+}
+
+/// What the input method may read is gathered every frame the slide's text has the keyboard: the
+/// title's paragraph, a table cell's; nothing once no text is edited, or while the notes pane (an
+/// egui text field, which reports nothing) has the keyboard.
+#[test]
+fn the_input_method_reads_the_text_being_edited_each_frame() {
+    let mut h = editing_title("第1段落\n日本語の文章です");
+    h.state_mut().run("text.select", json!({"anchor": [1, 8], "caret": [1, 8]})).unwrap();
+    h.run_steps(2);
+    assert_eq!(h.state().ime.surrounding, Some(crate::ime::ImeSurrounding { text: "日本語の文章です".into(), selected: 8..8 }));
+    assert!(h.state().ime.rect.is_some(), "the IME position is kept for frames that can't place the caret");
+    // A table cell.
+    let id = h.state_mut().run("insert.table", json!({"rows": 2, "cols": 2, "rect": [80.0, 300.0, 400.0, 120.0]})).unwrap()["id"].as_u64().unwrap();
+    h.state_mut().run("text.edit", json!({"id": id, "cell": [0, 1]})).unwrap();
+    h.state_mut().run("text.insert", json!({"text": "セルの文"})).unwrap();
+    h.run_steps(2);
+    assert_eq!(h.state().ime.surrounding, Some(crate::ime::ImeSurrounding { text: "セルの文".into(), selected: 4..4 }));
+    // The table selected, not edited: the input method is on (typing starts editing) but reads nothing.
+    h.state_mut().run("text.exit", json!({})).unwrap();
+    h.run_steps(2);
+    assert!(ime_allowed(&h));
+    assert_eq!(h.state().ime.surrounding, None);
+    // The notes pane has the keyboard: nothing from the slide.
+    h.state_mut().run("text.edit", json!({"id": id, "cell": [0, 1]})).unwrap();
+    h.run_steps(2);
+    assert!(h.state().ime.surrounding.is_some());
+    h.ctx.memory_mut(|m| m.request_focus(egui::Id::new("notes_edit")));
+    h.run_steps(2);
+    assert_eq!(h.state().ime.surrounding, None);
 }
 
 /// Does some font on this machine (embedded or installed) draw every letter of `s`? Machines

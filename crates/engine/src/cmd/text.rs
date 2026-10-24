@@ -42,7 +42,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Compose Text",
             menu: &[],
             shortcut: None,
-            params: "{text, active?: [start, end]} — an input method's composition (preedit) at the insertion point; empty text cancels it",
+            params: "{text, active?: [start, end]} — an input method's composition (preedit) at the insertion point; empty text cancels it; active: the clause being converted, or (start = end) the input method's caret in it",
             enabled: has_text,
             run: compose,
             journal: false,
@@ -979,13 +979,24 @@ fn composition_fits(st: &DocState, c: &crate::Composition) -> bool {
 /// `text.compose`: put an input method's preedit at the insertion point (replacing the selection)
 /// or replace the composition with the new preedit. An empty preedit cancels: the presentation
 /// goes back to how it was before the composition began.
+///
+/// `active` is the input method's selection in its preedit: the clause being converted (drawn
+/// thick, the caret at its end, where the candidate window opens), or, empty, the input method's
+/// own caret in text not yet converted (moved with the arrow keys, to type into the middle of the
+/// composition), as Cocoa text views and Office for Mac show it (observed in Word for Mac). Without
+/// one the caret ends the preedit.
 fn compose(s: &mut Session, p: &Value) -> Result<Value> {
     let text = ime_text(str_param(p, "text").ok_or_else(|| bad("text.compose", "missing `text`"))?);
     let n = text.chars().count();
-    let active = p.get("active").and_then(Value::as_array).and_then(|a| {
-        let (x, y) = (a.first()?.as_u64()? as usize, a.get(1)?.as_u64()? as usize);
-        (x < y).then_some((x.min(n), y.min(n)))
+    // A reversed range (from the platform, unchecked) stands for its end, the input method's caret.
+    let selected = p.get("active").and_then(Value::as_array).and_then(|a| {
+        let at = |v: &Value| v.as_u64().map(|x| usize::try_from(x).unwrap_or(usize::MAX).min(n));
+        let (x, y) = (at(a.first()?)?, at(a.get(1)?)?);
+        Some(if x <= y { (x, y) } else { (y, y) })
     });
+    let active = selected.filter(|(x, y)| x < y);
+    // Characters of the preedit after the caret.
+    let after_caret = selected.map_or(0, |(_, y)| n.saturating_sub(y));
     let current = s.doc()?.composition.clone();
     let (lang, editing) = (inherited_lang(s), s.east_asian_editing);
     let tagging = (lang.as_deref(), editing);
@@ -1008,6 +1019,7 @@ fn compose(s: &mut Session, p: &Value) -> Result<Value> {
                 let props = if a != b { Some(ed::props_at(body, at)) } else { unlinked_at_link_end(body, at) };
                 // The composition keeps the untagged formatting: each preedit is tagged afresh.
                 let c = ed::insert(body, at, &text, tagged_props(body, at, props.clone(), &text, tagging));
+                let c = (c.0, c.1.saturating_sub(after_caret));
                 t.anchor = c;
                 t.caret = c;
                 (at, props)
@@ -1029,6 +1041,7 @@ fn compose(s: &mut Session, p: &Value) -> Result<Value> {
                 ed::delete(body, start, (start.0, start.1 + len));
                 let props = tagged_props(body, start, props, &text, tagging);
                 let e = ed::insert(body, start, &text, props);
+                let e = (e.0, e.1.saturating_sub(after_caret));
                 t.anchor = e;
                 t.caret = e;
             })?;

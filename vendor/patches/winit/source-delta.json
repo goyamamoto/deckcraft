@@ -1,0 +1,31 @@
+{
+  "crate": "winit",
+  "version": "0.30.13",
+  "pristine_archive_sha256": "a6755fa58a9f8350bd1e472d4c3fcc25f824ec358933bba33306d0b63df5978d",
+  "changed_source_files": [
+    {
+      "path": "src/platform/macos.rs",
+      "patches": [
+        "01"
+      ],
+      "pristine_sha256": "c6685a9e320715b00124d66eb5e9be088cf1f165678e832a86459f0026d215e9",
+      "vendor_sha256": "a02ed3858b62cff6cbadc544520782e74ae3d091de6238277b4d492087641a28"
+    },
+    {
+      "path": "src/platform_impl/macos/mod.rs",
+      "patches": [
+        "01"
+      ],
+      "pristine_sha256": "584af72536847910a3e461fb40b9a0f9a375da3200f7ecf38f5d989b3c143d9d",
+      "vendor_sha256": "c9b4018a3432e6db6f5eaaafcf48164c017b8eb155838d9c4045d41f782925ec"
+    },
+    {
+      "path": "src/platform_impl/macos/view.rs",
+      "patches": [
+        "01"
+      ],
+      "pristine_sha256": "de63351d7a757d58883600c3f1702fc369cb77b2ae323a4efca7cb520e9da90e",
+      "vendor_sha256": "ee8e0c3417021a2774bfb391b091e37cf5cbb09639f988bd67516f4d1ad16718"
+    }
+  ]
+}
