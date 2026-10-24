@@ -295,6 +295,7 @@ fn master_list(app: &mut SlideApp, ui: &mut Ui) {
                         scale: px.0 as f64 / doc.slide_size.width.max(1.0),
                         edit: true,
                         size: Some(px),
+                        prompt: Some(crate::i18n::placeholder_prompt),
                         ..Default::default()
                     },
                 );
