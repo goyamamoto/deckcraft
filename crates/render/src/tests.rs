@@ -643,6 +643,9 @@ fn date_fields_show_the_date_in_their_format() {
     let f = Renderer::fields(&p, 0, &RenderOpts { now: Some(fri), ..Default::default() });
     assert_eq!(f.field_in("datetime4", Some("en-US")).as_deref(), Some("October 9, 2026"));
     assert_eq!(f.field_in("datetimeFigureOut", Some("en-GB")).as_deref(), Some("09/10/2026"));
+    // A Japanese run's named and era formats update too (a Japanese deck's footer date).
+    assert_eq!(f.field_in("datetime2", Some("ja-JP")).as_deref(), Some("2026年10月9日(金)"));
+    assert_eq!(f.field_in("datetime3", Some("ja-JP")).as_deref(), Some("令和8年10月9日"));
     assert_eq!(f.field("datetime13").as_deref(), Some("8:05:07 PM"));
     assert_eq!(f.field("slidenum").as_deref(), Some("1"));
     // A date the app can't compute (no clock, unknown type, other-language names) keeps the saved text.
