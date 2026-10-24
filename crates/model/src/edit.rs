@@ -281,11 +281,24 @@ fn para_text(body: &TextBody, pi: usize) -> String {
     body.paragraphs.get(pi).map(Paragraph::text).unwrap_or_default()
 }
 
+/// Is paragraph `pi`'s text Japanese (a run in Japanese, as PowerPoint tags text typed with
+/// Japanese editing; runs naming no language are in `default`)? Its words then break the East
+/// Asian way (see [`words`]).
+fn para_japanese(body: &TextBody, pi: usize, default: Option<&str>) -> bool {
+    body.paragraphs.get(pi).is_some_and(|p| p.runs.iter().any(|r| r.props.lang.as_deref().or(default).is_some_and(words::is_japanese_lang)))
+}
+
 /// The word a double-click selects around `pos` (see [`words::word_at`]): the word without its
 /// trailing spaces, as PowerPoint selects it.
 pub fn word_at(body: &TextBody, pos: Pos) -> (Pos, Pos) {
+    word_at_in(body, pos, None)
+}
+
+/// [`word_at`] in text whose runs naming no language are in `default_lang` (inherited from the
+/// list styles or the deck's default).
+pub fn word_at_in(body: &TextBody, pos: Pos, default_lang: Option<&str>) -> (Pos, Pos) {
     let (pi, ch) = clamp(body, pos);
-    let (s, e) = words::word_at(&para_text(body, pi), ch);
+    let (s, e) = words::word_at_in(&para_text(body, pi), ch, para_japanese(body, pi, default_lang));
     ((pi, s), (pi, e))
 }
 
@@ -293,16 +306,22 @@ pub fn word_at(body: &TextBody, pos: Pos) -> (Pos, Pos) {
 /// a paragraph Ctrl+Right goes to the start of the next one; at its start Ctrl+Left goes to the
 /// end of the previous one.
 pub fn word_move(body: &TextBody, pos: Pos, forward: bool) -> Pos {
+    word_move_in(body, pos, forward, None)
+}
+
+/// [`word_move`] in text whose runs naming no language are in `default_lang`.
+pub fn word_move_in(body: &TextBody, pos: Pos, forward: bool, default_lang: Option<&str>) -> Pos {
     let (pi, ch) = clamp(body, pos);
     let t = para_text(body, pi);
+    let ja = para_japanese(body, pi, default_lang);
     if forward {
-        match words::next_stop(&t, ch) {
+        match words::next_stop_in(&t, ch, ja) {
             Some(s) => (pi, s),
             None if pi + 1 < body.paragraphs.len() => (pi + 1, 0),
             None => (pi, ch),
         }
     } else {
-        match words::prev_stop(&t, ch) {
+        match words::prev_stop_in(&t, ch, ja) {
             Some(s) => (pi, s),
             None if pi > 0 => (pi - 1, body.paragraphs.get(pi - 1).map(Paragraph::char_len).unwrap_or(0)),
             None => (pi, 0),
@@ -332,19 +351,25 @@ pub fn para_down(body: &TextBody, pos: Pos) -> Pos {
 /// at the end of the paragraph after a word go, and sentence punctuation left against a word
 /// gets a space. At a paragraph's end it joins the next paragraph.
 pub fn delete_word(body: &mut TextBody, pos: Pos, forward: bool) -> Pos {
+    delete_word_in(body, pos, forward, None)
+}
+
+/// [`delete_word`] in text whose runs naming no language are in `default_lang`.
+pub fn delete_word_in(body: &mut TextBody, pos: Pos, forward: bool, default_lang: Option<&str>) -> Pos {
     if body.paragraphs.is_empty() {
         return (0, 0);
     }
     let (pi, ch) = clamp(body, pos);
     let t = para_text(body, pi);
+    let ja = para_japanese(body, pi, default_lang);
     if !forward {
-        let to = match words::prev_stop(&t, ch) {
+        let to = match words::prev_stop_in(&t, ch, ja) {
             Some(s) => (pi, s),
             None => char_move(body, (pi, ch), false),
         };
         return delete(body, to, (pi, ch));
     }
-    let Some(e) = words::delete_forward_end(&t, ch) else {
+    let Some(e) = words::delete_forward_end_in(&t, ch, ja) else {
         let to = char_move(body, (pi, ch), true);
         return delete(body, (pi, ch), to);
     };
@@ -368,9 +393,11 @@ fn smart_space(body: &mut TextBody, at: Pos) -> Pos {
         }
         return at;
     }
+    // Japanese and Chinese text takes no ASCII space after `…` or `.` before it.
     if let (Some(b), Some(a)) = (before, after)
         && words::is_sentence_punct(b)
         && a.is_alphanumeric()
+        && !words::is_east_asian(a)
     {
         let digits = s >= 2 && chars.get(s - 2).is_some_and(|c| c.is_numeric()) && a.is_numeric();
         if !digits {
@@ -553,6 +580,33 @@ mod tests {
         assert_eq!(char_move(&b, (0, 17), true), (0, 17));
         assert_eq!(change_case("hello world. again", "sentence"), "Hello world. Again");
         assert_eq!(change_case("hello world", "title"), "Hello World");
+    }
+
+    /// Text in Japanese moves, selects and deletes by runs of kanji, kana and katakana; the same
+    /// text without a language keeps one character per word.
+    #[test]
+    fn japanese_paragraphs_use_east_asian_words() {
+        let ja = RunProps { lang: Some("ja-JP".into()), ..Default::default() };
+        let mut b = TextBody::default();
+        insert(&mut b, (0, 0), "日本語のテキストです。", Some(ja));
+        assert_eq!(word_at(&b, (0, 5)), ((0, 4), (0, 8)));
+        assert_eq!(word_move(&b, (0, 0), true), (0, 3));
+        assert_eq!(word_move(&b, (0, 8), false), (0, 4));
+        assert_eq!(delete_word(&mut b, (0, 8), false), (0, 4));
+        assert_eq!(b.text(), "日本語のです。");
+        assert_eq!(delete_word(&mut b, (0, 0), true), (0, 0));
+        assert_eq!(b.text(), "のです。");
+        let plain = body("日本語のテキスト");
+        assert_eq!(word_at(&plain, (0, 5)), ((0, 5), (0, 6)));
+        // Runs naming no language take the inherited one (a Japanese deck's default).
+        assert_eq!(word_at_in(&plain, (0, 5), Some("ja-JP")), ((0, 4), (0, 8)));
+        assert_eq!(word_move_in(&plain, (0, 0), true, Some("ja-JP")), (0, 3));
+        assert_eq!(word_move_in(&plain, (0, 0), true, Some("en-US")), (0, 1));
+        let mut b = body("日本語のテキスト");
+        assert_eq!(delete_word_in(&mut b, (0, 8), false, Some("ja")), (0, 4));
+        // Ctrl+Delete after … in Japanese text adds no ASCII space.
+        assert_eq!(del_word("それは…テストです", (0, 4), true), ("それは…ストです".into(), (0, 4)));
+        assert_eq!(del_word("cd...ef gh", (0, 5), true), ("cd... gh".into(), (0, 6)));
     }
 
     #[test]
