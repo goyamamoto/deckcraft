@@ -37,7 +37,15 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         cmd!("design.variant", "Variants", ["Design", "Variants"], None, "{index: 0..3} (see design.variants)", has_doc, variant),
         cmd!(query "design.variants", "Variant Gallery", [], None, "{} → the current theme's four colour variants and which is applied", has_doc, variants),
-        cmd!("design.fonts", "Fonts", ["Design", "Variants"], None, "{} opens Create New Theme Fonts | {name} | {major, minor}", has_doc, fonts),
+        cmd!(
+            "design.fonts",
+            "Fonts",
+            ["Design", "Variants"],
+            None,
+            "{} opens Create New Theme Fonts (params: name, major, minor, majorEa, minorEa) | {name} | {major, minor} | {majorEa?, minorEa?} (the Asian text heading/body fonts, a:ea; with or without the others) — a built-in scheme keeps the deck's East Asian and script fonts",
+            has_doc,
+            fonts
+        ),
         cmd!("design.effects", "Effects", ["Design", "Variants"], None, "{name} (see design.themes)", has_doc, effects),
         cmd!(
             "design.background",
@@ -130,6 +138,9 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+/// Design ▸ Themes. DeckCraft's built-in themes name Latin fonts only, so the deck keeps its
+/// East Asian, complex-script and per-script theme fonts (a Japanese deck's `Jpan` face), as
+/// Japanese text keeps a Japanese theme font across a theme change in PowerPoint.
 fn theme(s: &mut Session, p: &Value) -> Result<Value> {
     let name = str_param(p, "name").ok_or_else(|| bad("design.theme", "missing `name`"))?;
     let t =
@@ -138,12 +149,39 @@ fn theme(s: &mut Session, p: &Value) -> Result<Value> {
         let mi = master_index(doc, sel);
         let m = doc.masters.get_mut(mi).ok_or_else(|| bad("design.theme", "no master"))?;
         let m = Arc::make_mut(m);
-        m.theme = t.clone();
-        m.name = t.name.clone();
+        let mut t = t.clone();
+        t.fonts.keep_scripts_of(&m.theme.fonts);
+        m.theme = t;
+        m.name = m.theme.name.clone();
         m.color_map = vec![];
         Ok(())
     })?;
     Ok(json!({"theme": name}))
+}
+
+/// The East Asian editing language a command names (`eastAsian`: a Chinese, Japanese or Korean
+/// language tag such as `ja-JP`): `None` when it names none (the session's language would
+/// apply), `Some(None)` for an explicit none (`""`, `"none"` or null). Another language is an
+/// error.
+pub(crate) fn east_asian_param(p: &Value, cmd: &str) -> Result<Option<Option<deckcraft_fonts::CjkLocale>>> {
+    match p.get("eastAsian") {
+        None => Ok(None),
+        Some(Value::Null) => Ok(Some(None)),
+        Some(Value::String(t)) if t.trim().is_empty() || t.trim() == "none" => Ok(Some(None)),
+        Some(Value::String(t)) => deckcraft_fonts::CjkLocale::from_lang(t)
+            .map(|l| Some(Some(l)))
+            .ok_or_else(|| bad(cmd, format!("`eastAsian` must be a Chinese, Japanese or Korean language (ja-JP, zh-CN, zh-TW, ko-KR), not `{t}`"))),
+        Some(_) => Err(bad(cmd, "`eastAsian` must be a language tag")),
+    }
+}
+
+/// Set a new deck up for East Asian editing in `l`, as PowerPoint makes a blank deck with that
+/// East Asian language: its default text style is in the language (`ja-JP`), and for Japanese
+/// the theme's heading and body fonts name an openly licensed Japanese face for `Jpan` (DeckCraft
+/// has none to name for Chinese or Korean, so those decks get the language only).
+pub fn east_asian_deck(p: &mut Presentation, l: deckcraft_fonts::CjkLocale) {
+    let font = (l == deckcraft_fonts::CjkLocale::Japanese).then_some((l.theme_script(), deckcraft_model::defaults::JAPANESE_THEME_FONT));
+    deckcraft_model::defaults::set_east_asian_editing(p, l.lang(), font);
 }
 
 fn browse_theme(s: &mut Session, p: &Value) -> Result<Value> {
@@ -357,7 +395,9 @@ fn fonts(s: &mut Session, p: &Value) -> Result<Value> {
     let name_v = p.get("name");
     let major_v = p.get("major");
     let minor_v = p.get("minor");
-    if name_v.is_none() && major_v.is_none() && minor_v.is_none() {
+    let major_ea = face_param("majorEa", p.get("majorEa"))?;
+    let minor_ea = face_param("minorEa", p.get("minorEa"))?;
+    if name_v.is_none() && major_v.is_none() && minor_v.is_none() && major_ea.is_none() && minor_ea.is_none() {
         let scheme = current_fonts(s)?;
         s.ui_requests.push(crate::UiRequest::Dialog { id: "themeFonts".into(), params: font_dialog_params(&scheme) });
         return ok();
@@ -376,7 +416,21 @@ fn fonts(s: &mut Session, p: &Value) -> Result<Value> {
     let major = face_param("major", major_v)?;
     let minor = face_param("minor", minor_v)?;
     let current = current_fonts(s)?;
-    let next = next_font_scheme(&current, given.as_deref(), major.as_deref(), minor.as_deref())?;
+    let mut next = if given.is_none() && major.is_none() && minor.is_none() {
+        // Only Asian text faces: the Latin faces and the name stay as they are, but it is no
+        // longer the built-in scheme it was.
+        let mut n = current.clone();
+        n.name = "Custom".into();
+        n
+    } else {
+        next_font_scheme(&current, given.as_deref(), major.as_deref(), minor.as_deref())?
+    };
+    if let Some(f) = major_ea {
+        next.major.ea = f;
+    }
+    if let Some(f) = minor_ea {
+        next.minor.ea = f;
+    }
     if next == current {
         return ok();
     }
@@ -394,8 +448,17 @@ fn current_fonts(s: &Session) -> Result<deckcraft_model::theme::FontScheme> {
     st.doc.masters.get(mi).map(|m| m.theme.fonts.clone()).ok_or_else(|| bad("design.fonts", "no master"))
 }
 
+/// Create New Theme Fonts' fields: the Latin heading and body fonts, and with East Asian editing
+/// the Asian text heading and body fonts (`a:majorFont/a:ea`, `a:minorFont/a:ea`; "" when the
+/// theme names none).
 fn font_dialog_params(scheme: &deckcraft_model::theme::FontScheme) -> Value {
-    json!({"name": scheme.name, "major": scheme.major.latin, "minor": scheme.minor.latin})
+    json!({
+        "name": scheme.name,
+        "major": scheme.major.latin,
+        "minor": scheme.minor.latin,
+        "majorEa": scheme.major.ea,
+        "minorEa": scheme.minor.ea,
+    })
 }
 
 /// `None` when the key is absent. A present face must be a non-blank string.
@@ -411,7 +474,9 @@ fn face_param(key: &str, v: Option<&Value>) -> Result<Option<String>> {
 }
 
 /// A builtin `name` is applied first, then `major` / `minor` replace only the latin faces (East
-/// Asian, complex-script and per-script slots stay). The stored name is the given string when
+/// Asian, complex-script and per-script slots stay). DeckCraft's builtins name only Latin faces,
+/// so the deck's East Asian, complex-script and per-script fonts carry over into them (a
+/// Japanese deck keeps its `Jpan` and `a:ea` fonts). The stored name is the given string when
 /// faces are overlaid or the name is not a builtin; a name-only builtin keeps its own name.
 /// Faces without a name are a custom scheme: an omitted `minor` copies `major`.
 fn next_font_scheme(
@@ -422,7 +487,8 @@ fn next_font_scheme(
 ) -> Result<deckcraft_model::theme::FontScheme> {
     let mut next = current.clone();
     if let Some(name) = given {
-        let replaced = if let Some(builtin) = builtin_font_schemes().into_iter().find(|f| f.name.eq_ignore_ascii_case(name)) {
+        let replaced = if let Some(mut builtin) = builtin_font_schemes().into_iter().find(|f| f.name.eq_ignore_ascii_case(name)) {
+            builtin.keep_scripts_of(current);
             next = builtin;
             true
         } else {
@@ -1683,8 +1749,9 @@ mod tests {
         assert_eq!(font_scheme(&s).name, "Classic");
         assert_eq!(font_scheme(&s).major.latin, "Inter");
         assert_eq!(font_scheme(&s).minor.latin, "Open Sans");
-        assert_eq!(font_scheme(&s).major.ea, "");
-        assert!(font_scheme(&s).major.scripts.is_empty(), "a builtin is applied before the latin overlay");
+        assert_eq!(font_scheme(&s).major.ea, "EA Major", "a Latin-only builtin keeps the deck's East Asian font");
+        assert_eq!(font_scheme(&s).minor.cs, "CS Minor");
+        assert_eq!(font_scheme(&s).major.scripts, marked.major.scripts, "and its script fonts");
         assert_eq!(undo_len(&s), n + 3);
 
         s.edit(|doc, _| {
@@ -1703,6 +1770,129 @@ mod tests {
         assert_eq!(font_scheme(&s).name, "Classic");
         assert_eq!(font_scheme(&s).major.ea, "Kept");
         assert_eq!(font_scheme(&s).minor.latin, "Open Sans");
+    }
+
+    #[test]
+    fn a_japanese_deck_keeps_its_theme_fonts_across_theme_and_font_changes() {
+        let mut s = Session::new();
+        s.execute("file.new", &json!({"eastAsian": "ja-JP"})).unwrap();
+        assert_eq!(font_scheme(&s).minor.script("Jpan"), Some("BIZ UDPGothic"));
+        s.edit(|doc, _| {
+            std::sync::Arc::make_mut(&mut doc.masters[0]).theme.fonts.minor.ea = "Body EA".into();
+            Ok(())
+        })
+        .unwrap();
+        s.execute("design.theme", &json!({"name": "Harbor"})).unwrap();
+        let f = font_scheme(&s);
+        assert_eq!((f.major.latin.as_str(), f.minor.latin.as_str()), ("Merriweather", "Open Sans"), "the theme's Latin fonts apply");
+        assert_eq!(f.major.script("Jpan"), Some("BIZ UDPGothic"));
+        assert_eq!(f.minor.script("Jpan"), Some("BIZ UDPGothic"));
+        assert_eq!(f.minor.ea, "Body EA");
+        assert_eq!(s.doc().unwrap().doc.masters[0].theme.name, "Harbor");
+        s.execute("design.fonts", &json!({"name": "Neutral"})).unwrap();
+        let f = font_scheme(&s);
+        assert_eq!(f.name, "Neutral");
+        assert_eq!(f.minor.latin, "Roboto");
+        assert_eq!(f.minor.script("Jpan"), Some("BIZ UDPGothic"));
+        assert_eq!(f.minor.ea, "Body EA");
+        // The deck goes to PowerPoint with its Jpan font.
+        let bytes = deckcraft_pptx::export(&s.doc().unwrap().doc).unwrap();
+        let back = deckcraft_pptx::import(&bytes).unwrap();
+        assert_eq!(back.masters[0].theme.fonts.minor.script("Jpan"), Some("BIZ UDPGothic"));
+    }
+
+    fn part(bytes: &[u8], name: &str) -> String {
+        use std::io::Read;
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let mut out = String::new();
+        zip.by_name(name).unwrap().read_to_string(&mut out).unwrap();
+        out
+    }
+
+    #[test]
+    fn a_new_deck_carries_powerpoints_asian_typography_and_japanese_editing_makes_it_japanese() {
+        // Every new deck: eaLnBrk/latinLnBrk/hangingPunct on its default and master text styles.
+        let s = Session::with_new();
+        let bytes = deckcraft_pptx::export(&s.doc().unwrap().doc).unwrap();
+        for name in ["ppt/presentation.xml", "ppt/slideMasters/slideMaster1.xml"] {
+            let xml = part(&bytes, name);
+            for attr in [r#"eaLnBrk="1""#, r#"latinLnBrk="0""#, r#"hangingPunct="1""#] {
+                assert!(xml.contains(attr), "{name} lacks {attr}");
+            }
+        }
+        assert!(!part(&bytes, "ppt/presentation.xml").contains("ja-JP"), "no East Asian language unless asked");
+        assert!(s.doc().unwrap().doc.default_text_style.default.is_none());
+
+        // With Japanese editing: the deck is in Japanese and its theme names a Jpan font.
+        let mut s = Session::new();
+        let r = s.execute("file.new", &json!({"eastAsian": "ja-JP", "theme": "Ember"})).unwrap();
+        assert_eq!(r["slides"], 1);
+        let doc = s.doc().unwrap().doc.clone();
+        let def = doc.default_text_style.default.clone().unwrap();
+        assert_eq!((def.run.lang.as_deref(), def.run.kumimoji), (Some("ja-JP"), Some(true)));
+        let fonts = &doc.masters[0].theme.fonts;
+        assert_eq!((fonts.major.script("Jpan"), fonts.minor.script("Jpan")), (Some("BIZ UDPGothic"), Some("BIZ UDPGothic")));
+        assert_eq!(fonts.major.latin, "Montserrat", "the chosen theme's Latin fonts");
+        let bytes = deckcraft_pptx::export(&doc).unwrap();
+        let pres = part(&bytes, "ppt/presentation.xml");
+        assert!(pres.contains("<a:defPPr>") && pres.contains(r#"lang="ja-JP""#), "{pres}");
+        assert!(part(&bytes, "ppt/theme/theme1.xml").contains(r#"script="Jpan" typeface="BIZ UDPGothic""#));
+        let back = deckcraft_pptx::import(&bytes).unwrap();
+        assert_eq!(back.default_text_style.default.and_then(|d| d.run.lang).as_deref(), Some("ja-JP"));
+
+        // A template starts in Japanese too; Korean gets the language only.
+        let starter = crate::templates::starters().first().map(|t| t.name).unwrap();
+        s.execute("file.new", &json!({"eastAsian": "ja", "template": starter})).unwrap();
+        assert_eq!(s.doc().unwrap().doc.default_text_style.default.clone().and_then(|d| d.run.lang).as_deref(), Some("ja-JP"));
+        s.execute("file.new", &json!({"eastAsian": "ko-KR"})).unwrap();
+        let doc = s.doc().unwrap().doc.clone();
+        assert_eq!(doc.default_text_style.default.clone().and_then(|d| d.run.lang).as_deref(), Some("ko-KR"));
+        assert!(doc.masters[0].theme.fonts.minor.scripts.is_empty());
+        for none in [json!({"eastAsian": ""}), json!({"eastAsian": "none"}), json!({"eastAsian": null}), json!({})] {
+            s.execute("file.new", &none).unwrap();
+            assert!(s.doc().unwrap().doc.default_text_style.default.is_none(), "{none}");
+        }
+        let docs = s.documents().len();
+        assert!(s.execute("file.new", &json!({"eastAsian": "fr-FR"})).is_err());
+        assert!(s.execute("file.new", &json!({"eastAsian": 1})).is_err());
+        assert_eq!(s.documents().len(), docs, "a bad language opens no deck");
+    }
+
+    #[test]
+    fn theme_fonts_take_asian_text_heading_and_body_fonts() {
+        let mut s = Session::with_new();
+        s.ui_requests.clear();
+        s.execute("design.fonts", &json!({})).unwrap();
+        match s.ui_requests.last() {
+            Some(UiRequest::Dialog { id, params }) => {
+                assert_eq!(id, "themeFonts");
+                assert_eq!(params["majorEa"], "");
+                assert_eq!(params["minorEa"], "");
+            }
+            other => panic!("expected a dialog, got {other:?}"),
+        }
+        let n = undo_len(&s);
+        s.execute("design.fonts", &json!({"majorEa": "BIZ UDPGothic", "minorEa": "BIZ UDMincho"})).unwrap();
+        let f = font_scheme(&s);
+        assert_eq!((f.major.ea.as_str(), f.minor.ea.as_str()), ("BIZ UDPGothic", "BIZ UDMincho"));
+        assert_eq!(f.major.latin, "Inter", "the Latin fonts stay");
+        assert_eq!(f.name, "Custom");
+        assert_eq!(undo_len(&s), n + 1);
+        s.execute("design.fonts", &json!({"major": "Lato", "minor": "Roboto", "majorEa": "Head JP"})).unwrap();
+        let f = font_scheme(&s);
+        assert_eq!(
+            (f.major.latin.as_str(), f.minor.latin.as_str(), f.major.ea.as_str(), f.minor.ea.as_str()),
+            ("Lato", "Roboto", "Head JP", "BIZ UDMincho")
+        );
+        assert_eq!(undo_len(&s), n + 2, "one undo step for the whole scheme");
+        assert!(s.execute("design.fonts", &json!({"minorEa": ""})).is_err());
+        assert!(s.execute("design.fonts", &json!({"majorEa": 3})).is_err());
+        assert_eq!(undo_len(&s), n + 2);
+        let bytes = deckcraft_pptx::export(&s.doc().unwrap().doc).unwrap();
+        let back = deckcraft_pptx::import(&bytes).unwrap();
+        assert_eq!(back.masters[0].theme.fonts.major.ea, "Head JP");
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(font_scheme(&s).major.ea, "BIZ UDPGothic");
     }
 
     #[test]

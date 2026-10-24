@@ -8,7 +8,7 @@ use deckcraft_geom::{Size, Xfrm};
 
 use crate::style::ColorRef;
 use crate::text::{Anchor, AutoFit, BodyProps, Bullet, LevelStyle, ListStyle, ParaProps, RunProps, Spacing, TextBody, TextDir};
-use crate::theme::Theme;
+use crate::theme::{ScriptFont, Theme};
 use crate::{
     Background, Fill, HeaderFooter, Layout, LayoutId, LayoutType, Master, MasterId, PhType, Placeholder, Presentation, Shape, ShapeId, ShapeKind,
     Slide, SlideId,
@@ -62,9 +62,16 @@ impl B {
     }
 }
 
+/// PowerPoint's Asian typography on every level of the text styles of the decks it makes: East
+/// Asian line breaking (kinsoku) on, Latin words kept whole at a line end, and closing East Asian
+/// punctuation allowed to hang past the margin (`eaLnBrk="1" latinLnBrk="0" hangingPunct="1"`).
+fn asian_typography(p: ParaProps) -> ParaProps {
+    ParaProps { east_asian_line_break: Some(true), latin_line_break: Some(false), hanging_punct: Some(true), ..p }
+}
+
 fn level(size: f64, margin: f64, indent: f64, before: f64) -> LevelStyle {
     LevelStyle {
-        para: ParaProps {
+        para: asian_typography(ParaProps {
             align: Some(crate::text::Align::Left),
             margin_left: Some(margin),
             indent: Some(indent),
@@ -73,7 +80,7 @@ fn level(size: f64, margin: f64, indent: f64, before: f64) -> LevelStyle {
             bullet: Some(Bullet::Char { char: "•".into() }),
             bullet_font: Some("Arial".into()),
             ..Default::default()
-        },
+        }),
         run: RunProps {
             size: Some(size),
             font: Some("+mn-lt".into()),
@@ -90,13 +97,13 @@ pub fn master_styles() -> (ListStyle, ListStyle, ListStyle) {
     title.set(
         0,
         LevelStyle {
-            para: ParaProps {
+            para: asian_typography(ParaProps {
                 align: Some(crate::text::Align::Left),
                 line_spacing: Some(Spacing::Pct(0.9)),
                 space_before: Some(Spacing::Pts(0.0)),
                 bullet: Some(Bullet::None),
                 ..Default::default()
-            },
+            }),
             run: RunProps {
                 size: Some(44.0),
                 font: Some("+mj-lt".into()),
@@ -117,7 +124,7 @@ pub fn master_styles() -> (ListStyle, ListStyle, ListStyle) {
         other.set(
             i,
             LevelStyle {
-                para: ParaProps { margin_left: Some(36.0 * i as f64), align: Some(crate::text::Align::Left), ..Default::default() },
+                para: asian_typography(ParaProps { margin_left: Some(36.0 * i as f64), align: Some(crate::text::Align::Left), ..Default::default() }),
                 run: RunProps {
                     size: Some(18.0),
                     font: Some("+mn-lt".into()),
@@ -138,7 +145,7 @@ pub fn default_text_style() -> ListStyle {
         s.set(
             i,
             LevelStyle {
-                para: ParaProps { margin_left: Some(36.0 * i as f64), align: Some(crate::text::Align::Left), ..Default::default() },
+                para: asian_typography(ParaProps { margin_left: Some(36.0 * i as f64), align: Some(crate::text::Align::Left), ..Default::default() }),
                 run: RunProps {
                     size: Some(18.0),
                     font: Some("+mn-lt".into()),
@@ -530,6 +537,40 @@ pub fn blank_presentation(size: Size, theme: Theme, title_slide: bool) -> Presen
     p
 }
 
+/// The theme font a new deck gets for Japanese text when Japanese is the East Asian editing
+/// language, for headings and body alike: the openly licensed Japanese face DeckCraft's interface
+/// uses (craft-fonts), never an Office font.
+pub const JAPANESE_THEME_FONT: &str = "BIZ UDPGothic";
+
+/// Set a new deck up for an East Asian editing language, as PowerPoint makes a blank deck with
+/// that language: the deck's default text style is in `lang` (`a:defPPr/a:defRPr lang="ja-JP"`,
+/// with `kumimoji="1"` for Japanese), so its text is in that language unless it says otherwise,
+/// and every master's theme names `script_font` (`("Jpan", face)`, `a:font script="Jpan"`) for
+/// its heading and body text, unless the theme already names a font for that script. A blank
+/// `lang` changes nothing.
+pub fn set_east_asian_editing(p: &mut Presentation, lang: &str, script_font: Option<(&str, &str)>) {
+    let lang = lang.trim();
+    if lang.is_empty() {
+        return;
+    }
+    let def = p.default_text_style.default.get_or_insert_with(LevelStyle::default);
+    def.run.lang = Some(lang.to_string());
+    if lang.get(..2).is_some_and(|l| l.eq_ignore_ascii_case("ja")) {
+        def.run.kumimoji = Some(true);
+    }
+    let Some((script, face)) = script_font.map(|(s, f)| (s.trim(), f.trim())).filter(|(s, f)| !s.is_empty() && !f.is_empty()) else { return };
+    for m in &mut p.masters {
+        let m = Arc::make_mut(m);
+        for set in [&mut m.theme.fonts.major, &mut m.theme.fonts.minor] {
+            if set.script(script).is_none() {
+                // An entry naming no typeface is replaced, not repeated.
+                set.scripts.retain(|f| !f.script.eq_ignore_ascii_case(script));
+                set.scripts.push(ScriptFont { script: script.to_string(), typeface: face.to_string() });
+            }
+        }
+    }
+}
+
 /// A slide for `layout` with its placeholders instantiated (empty, inheriting position). `None`
 /// when the deck has used every object id and cannot grow (#407).
 pub fn new_slide(p: &mut Presentation, layout: LayoutId) -> Option<Slide> {
@@ -558,4 +599,59 @@ pub fn new_slide(p: &mut Presentation, layout: LayoutId) -> Option<Slide> {
 /// Layout for a kind in the first master.
 pub fn layout_of_kind(p: &Presentation, kind: LayoutType) -> Option<LayoutId> {
     p.masters.first().and_then(|m| m.layouts.iter().find(|l| l.kind == kind)).map(|l| l.id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn asian(p: &ParaProps) -> (Option<bool>, Option<bool>, Option<bool>) {
+        (p.east_asian_line_break, p.latin_line_break, p.hanging_punct)
+    }
+
+    #[test]
+    fn new_decks_carry_powerpoints_asian_typography_on_every_level() {
+        let want = (Some(true), Some(false), Some(true));
+        let p = new_presentation(None);
+        for i in 0..9u8 {
+            let lvl = p.default_text_style.level(i).map(|l| asian(&l.para));
+            assert_eq!(lvl, Some(want), "default text style level {i}");
+        }
+        let m = p.masters.first().unwrap();
+        assert_eq!(m.title_style.level(0).map(|l| asian(&l.para)), Some(want));
+        for i in 0..9u8 {
+            assert_eq!(m.body_style.level(i).map(|l| asian(&l.para)), Some(want), "body level {i}");
+            assert_eq!(m.other_style.level(i).map(|l| asian(&l.para)), Some(want), "other level {i}");
+        }
+        // No language and no script fonts unless an East Asian editing language asks for them.
+        assert!(p.default_text_style.default.is_none());
+        assert!(m.theme.fonts.minor.scripts.is_empty() && m.theme.fonts.major.scripts.is_empty());
+    }
+
+    #[test]
+    fn japanese_editing_gives_the_deck_its_language_and_a_jpan_theme_font() {
+        let mut p = new_presentation(None);
+        set_east_asian_editing(&mut p, "ja-JP", Some(("Jpan", JAPANESE_THEME_FONT)));
+        let def = p.default_text_style.default.clone().unwrap_or_default();
+        assert_eq!(def.run.lang.as_deref(), Some("ja-JP"));
+        assert_eq!(def.run.kumimoji, Some(true));
+        for m in &p.masters {
+            assert_eq!(m.theme.fonts.major.script("Jpan"), Some("BIZ UDPGothic"));
+            assert_eq!(m.theme.fonts.minor.script("Jpan"), Some("BIZ UDPGothic"));
+        }
+        // Again: no second entry.
+        set_east_asian_editing(&mut p, "ja-JP", Some(("Jpan", "Other Face")));
+        assert!(p.masters.iter().all(|m| m.theme.fonts.minor.scripts.len() == 1 && m.theme.fonts.minor.script("Jpan") == Some("BIZ UDPGothic")));
+
+        // Korean: the language, no kumimoji, no font when none is given; blank changes nothing.
+        let mut k = new_presentation(None);
+        set_east_asian_editing(&mut k, "ko-KR", None);
+        let def = k.default_text_style.default.clone().unwrap_or_default();
+        assert_eq!((def.run.lang.as_deref(), def.run.kumimoji), (Some("ko-KR"), None));
+        assert!(k.masters.iter().all(|m| m.theme.fonts.minor.scripts.is_empty()));
+        let mut blank = new_presentation(None);
+        set_east_asian_editing(&mut blank, "  ", Some(("Jpan", JAPANESE_THEME_FONT)));
+        assert!(blank.default_text_style.default.is_none());
+        assert!(blank.masters.iter().all(|m| m.theme.fonts.minor.scripts.is_empty()));
+    }
 }
