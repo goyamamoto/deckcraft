@@ -230,6 +230,34 @@ fn supported_unicode_is_shaped_and_recovered_from_the_page_text_layer() {
     assert_eq!(page_text(page).0, text);
 }
 
+/// The text layer carries the text as drawn: a field shows its value (the slide number, not its
+/// saved text), and the text after a manual line break keeps its place.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn the_text_layer_reads_fields_and_text_after_a_line_break_as_drawn() {
+    use deckcraft_model::text::{Paragraph, Run, RunKind, RunProps};
+    use deckcraft_model::{Shape, ShapeId, Xfrm};
+
+    let props = RunProps { font: Some("Ubuntu".into()), size: Some(20.0), ..Default::default() };
+    let run = |text: &str, kind: RunKind| Run { text: text.into(), props: props.clone(), kind };
+    let mut body = TextBody::from_text("");
+    body.paragraphs = vec![Paragraph {
+        runs: vec![
+            run("AB", RunKind::Text),
+            run("", RunKind::Break),
+            run("CD", RunKind::Text),
+            run("99", RunKind::Field { field: "slidenum".into() }),
+        ],
+        ..Default::default()
+    }];
+    let mut p = deck(1);
+    Arc::make_mut(&mut p.slides[0]).shapes =
+        vec![Shape { id: ShapeId(9001), xfrm: Some(Xfrm::new(20.0, 20.0, 920.0, 200.0)), text: Some(body), ..Default::default() }];
+    let bytes = export(&p, &opts(PageLayout::Slides)).unwrap();
+    let pdf = hayro_syntax::Pdf::new(bytes).unwrap();
+    assert_eq!(page_text(&pdf.pages()[0]).0, "ABCD1");
+}
+
 /// The text a page shows, decoded through each font's ToUnicode map (the writer's two-byte CIDs
 /// and bfchar mappings), not through document metadata; and every CID shown, in order.
 fn page_text(page: &hayro_syntax::page::Page<'_>) -> (String, Vec<u16>) {
