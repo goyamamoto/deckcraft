@@ -175,6 +175,23 @@ fn startup(mut control_port: Option<u16>, args: impl IntoIterator<Item = String>
     Startup::Run { control_port, files, sample, show }
 }
 
+/// The East Asian editing language: the first Japanese, Chinese or Korean language among the
+/// system's preferred languages (an English Mac in Japan lists `en-JP`, then `ja-JP`), as
+/// PowerPoint takes Japanese editing from them; none without one. `DECKCRAFT_EAST_ASIAN_LANGUAGE`
+/// (a language tag such as `ja-JP`, or `none`) overrides it, for tests and CI.
+fn east_asian_editing() -> Option<deckcraft_engine::CjkLocale> {
+    if let Ok(tag) = std::env::var("DECKCRAFT_EAST_ASIAN_LANGUAGE") {
+        return deckcraft_engine::CjkLocale::from_lang(&tag);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let tags: Vec<String> = sys_locale::get_locales().take(16).collect();
+        deckcraft_engine::east_asian_editing_language(tags.iter().map(String::as_str))
+    }
+    #[cfg(target_arch = "wasm32")]
+    None
+}
+
 fn app_icon() -> Option<egui::IconData> {
     let png: &[u8] = include_bytes!("../../../assets/app-icon/hicolor/256x256/apps/ai.storyteller.deckcraft.png");
     eframe::icon_data::from_png_bytes(png).map_err(|e| log::warn!("app icon: {e}")).ok()
@@ -256,6 +273,11 @@ fn main() -> eframe::Result {
         options,
         Box::new(move |cc| {
             let mut app = SlideApp::new(Session::new(), services());
+            // Japanese editing tags typed Japanese `ja-JP` and draws Han text without a language
+            // the Japanese way.
+            let east_asian = east_asian_editing();
+            log::info!("East Asian editing language: {east_asian:?}");
+            app.session.set_east_asian_editing(east_asian);
             load_prefs(&mut app);
             // AutoRecover: reopen what a previous run left unsaved, then keep it current.
             if std::env::var_os("DECKCRAFT_NO_RECOVERY").is_none() {

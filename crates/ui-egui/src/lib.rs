@@ -1474,7 +1474,7 @@ impl SlideApp {
             }
         };
         let params = if cmd == "slide.fromOutline" {
-            json!({"text": String::from_utf8_lossy(bytes), "markdown": name.to_ascii_lowercase().ends_with(".md")})
+            json!({"text": deckcraft_engine::cmd::file::decode_text(bytes), "markdown": name.to_ascii_lowercase().ends_with(".md")})
         } else {
             json!({"name": name, "data": deckcraft_engine::cmd::base64_encode(bytes)})
         };
