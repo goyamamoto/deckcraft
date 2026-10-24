@@ -27,6 +27,7 @@ pub mod fontpick;
 pub mod i18n;
 pub mod icons;
 pub mod ime;
+pub mod keylayout;
 pub mod media;
 pub mod menus;
 pub mod notes;
@@ -46,6 +47,7 @@ pub mod theme;
 pub mod thumbs;
 pub mod toast;
 pub mod uifonts;
+pub mod units;
 pub mod widgets;
 
 use std::collections::HashMap;
@@ -409,7 +411,7 @@ pub const UI_COMMANDS: &[(&str, &str, Option<&str>, &str)] = &[
         "app.print",
         "Print",
         Some("Cmd+P"),
-        "{layout?, perPage?, slides?, includeHidden?, frame?, paper?: letter|a4|legal|a3, orientation?: portrait|landscape}",
+        "{layout?, perPage?, slides?, includeHidden?, frame?, paper?: letter|a4|legal|a3|b4|b5, orientation?: portrait|landscape}",
     ),
     ("app.about", "About DeckCraft", None, "{}"),
     ("app.palette", "Command Palette", Some("Cmd+Shift+P"), "{}"),
@@ -729,7 +731,7 @@ impl SlideApp {
         let key = self.docs_key();
         match &mut self.backstage {
             Some(b) => b.go(page),
-            None => self.backstage = Some(backstage::Backstage::new(page, key)),
+            None => self.backstage = Some(backstage::Backstage::new(page, key).with_paper(self.session.default_paper())),
         }
     }
 
@@ -749,7 +751,7 @@ impl SlideApp {
         if has_doc && stale {
             self.backstage = None;
         } else if !has_doc && (stale || self.backstage.is_none()) {
-            self.backstage = Some(backstage::Backstage::new(backstage::Page::Home, key));
+            self.backstage = Some(backstage::Backstage::new(backstage::Page::Home, key).with_paper(self.session.default_paper()));
         }
     }
 
@@ -818,7 +820,9 @@ impl SlideApp {
                 }
                 return any;
             }
-            "pdf" => deckcraft_engine::cmd::file::pdf_bytes(&doc, &extra),
+            "pdf" => {
+                deckcraft_engine::cmd::file::pdf_bytes(&doc, &deckcraft_engine::cmd::file::with_default_paper(&extra, self.session.default_paper()))
+            }
             "gif" => deckcraft_engine::cmd::file::gif_bytes(&doc, &extra),
             other => deckcraft_engine::cmd::file::save_bytes(&doc, other),
         };
@@ -1810,8 +1814,10 @@ impl SlideApp {
             // shortcuts (New, Open, Command Palette…); typing, pasting or deleting would edit the
             // hidden presentation.
             for e in events {
-                if let egui::Event::Key { key, pressed: true, modifiers, .. } = e {
-                    let mods = Mods { shift: modifiers.shift, alt: modifiers.alt, cmd: modifiers.command || modifiers.ctrl };
+                if let egui::Event::Key { key, physical_key, pressed: true, modifiers, .. } = e {
+                    // `=` and `+` typed with Shift on JIS and other layouts (see `keylayout`).
+                    let (key, shift) = keylayout::shortcut_key(key, physical_key, modifiers.shift);
+                    let mods = Mods { shift, alt: modifiers.alt, cmd: modifiers.command || modifiers.ctrl };
                     if backstage::key(self, key, mods) || !(mods.cmd || mods.alt) || menus::ui_shortcut(self, key, mods) {
                         continue;
                     }
@@ -1869,7 +1875,9 @@ impl SlideApp {
                         self.set_status(e.to_string());
                     }
                 }
-                egui::Event::Key { key, pressed: true, modifiers, .. } => {
+                egui::Event::Key { key, physical_key, pressed: true, modifiers, .. } => {
+                    // `=` and `+` typed with Shift on JIS and other layouts (see `keylayout`).
+                    let (key, shift) = keylayout::shortcut_key(key, physical_key, modifiers.shift);
                     if key == egui::Key::Tab {
                         // The slide has the keyboard, so Tab is ours (indent, tab character, next
                         // shape). Left to egui it would also focus the first ribbon widget, and
@@ -1880,7 +1888,7 @@ impl SlideApp {
                         self.anim_preview = None;
                         continue;
                     }
-                    let mods = Mods { shift: modifiers.shift, alt: modifiers.alt, cmd: modifiers.command || modifiers.ctrl };
+                    let mods = Mods { shift, alt: modifiers.alt, cmd: modifiers.command || modifiers.ctrl };
                     if !self.session.tool.drawing_freeform() && menus::ui_shortcut(self, key, mods) {
                         continue;
                     }
@@ -2201,6 +2209,9 @@ mod datetime_tests;
 
 #[cfg(test)]
 mod inbox_tests;
+
+#[cfg(test)]
+mod units_tests;
 
 #[cfg(test)]
 mod tests {

@@ -38,6 +38,9 @@ pub fn start() {
                     }
                     let inbox: Inbox = Inbox::default();
                     let mut app = SlideApp::new(Session::new(), services(inbox.clone(), cc.egui_ctx.clone()));
+                    // The browser's language picks the measurement unit and the default paper
+                    // (centimetres and A4 for `ja`), as the system region does on the desktop.
+                    app.session.set_region(deckcraft_ui_egui::units::system_region());
                     let q = query();
                     if !q.contains("blank") {
                         if let Err(e) = deckcraft_engine::sample::open_sample(&mut app.session) {

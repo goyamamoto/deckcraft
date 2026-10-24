@@ -21,6 +21,7 @@ pub mod io;
 pub mod keys;
 pub mod links;
 pub mod media_refs;
+pub mod names;
 pub mod recovery;
 pub mod sample;
 pub mod sounds;
@@ -263,11 +264,15 @@ impl DocState {
     pub fn is_dirty(&self) -> bool {
         !Arc::ptr_eq(&self.doc, &self.saved_doc)
     }
+    /// The name the window, its tab and the File pages show: the file's name without its
+    /// extension (composed for display, [`names::display_name`]: a macOS name like
+    /// `フ\u{309A}レセ\u{3099}ン` shows as `プレゼン`), else the untitled name. [`DocState::path`]
+    /// keeps the real name for reading and writing.
     pub fn title(&self) -> String {
         self.path
             .as_deref()
             .and_then(|p| std::path::Path::new(p).file_stem())
-            .map(|n| n.to_string_lossy().to_string())
+            .map(|n| names::display_name(&n.to_string_lossy()))
             .unwrap_or_else(|| self.title.clone())
     }
     pub fn current_slide(&self) -> Option<&Slide> {
@@ -348,6 +353,16 @@ pub struct Prefs {
     pub undo_limit: usize,
     /// Minutes between AutoRecover saves of unsaved presentations.
     pub recovery_minutes: f64,
+    /// Preferences ▸ Measurement units: the unit rulers and length fields show, or `None` to
+    /// follow the system region ([`Session::units`]).
+    #[serde(skip_serializing_if = "Option::is_none", deserialize_with = "lenient_unit")]
+    pub units: Option<deckcraft_geom::Unit>,
+}
+
+/// A saved measurement unit, or `None` (follow the region) for anything that doesn't name one: a
+/// hand-edited `prefs.json` with `"units": "furlongs"` keeps the rest of its preferences.
+fn lenient_unit<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Option<deckcraft_geom::Unit>, D::Error> {
+    Ok(Value::deserialize(d)?.as_str().and_then(deckcraft_geom::Unit::from_id))
 }
 
 impl Default for Prefs {
@@ -370,6 +385,7 @@ impl Default for Prefs {
             author: "Presenter".into(),
             undo_limit: 500,
             recovery_minutes: 1.0,
+            units: None,
         }
     }
 }
@@ -389,6 +405,10 @@ impl Prefs {
         self.recovery_minutes = within(self.recovery_minutes, 0.1, 24.0 * 60.0, d.recovery_minutes);
         if self.author.chars().count() > 256 {
             self.author = self.author.chars().take(256).collect();
+        }
+        // Pixels are not on offer as a measurement unit (a hand-edited file).
+        if self.units.is_some_and(|u| !deckcraft_geom::Unit::CHOICES.contains(&u)) {
+            self.units = None;
         }
         self
     }
@@ -489,6 +509,11 @@ pub struct Session {
     /// PowerPoint tags text with the input language). `None` (tests, headless sessions, systems
     /// without one) tags Han text as Japanese, kana as Japanese and Hangul as Korean.
     pub east_asian_editing: Option<CjkLocale>,
+    /// The system region, which the desktop app sets at start ([`Session::set_region`]): it picks
+    /// the unit the rulers and length fields show ([`Session::units`], unless
+    /// [`Prefs::units`] says otherwise) and the paper PDF notes pages and handouts default to
+    /// ([`Session::default_paper`]). `en-US` (inches, Letter) in tests and headless sessions.
+    pub region: deckcraft_geom::Region,
     /// Command panics caught by the guard (the document was rolled back); soak tests require 0.
     pub panics_caught: u64,
     /// Presentations a host read off the UI thread, waiting for `file.adopt` (by token).
@@ -523,6 +548,7 @@ impl Session {
             gif_paused: Default::default(),
             mac_keys: cfg!(target_os = "macos"),
             east_asian_editing: None,
+            region: deckcraft_geom::Region::default(),
             panics_caught: 0,
             loaded: vec![],
             next_loaded: 0,
@@ -552,6 +578,21 @@ impl Session {
     pub fn set_east_asian_editing(&mut self, l: Option<CjkLocale>) {
         self.east_asian_editing = l;
         deckcraft_fonts::set_default_cjk_locale(l);
+    }
+    /// Set the system region ([`Session::region`]). The desktop app calls this once at start.
+    pub fn set_region(&mut self, region: deckcraft_geom::Region) {
+        self.region = region;
+    }
+    /// The unit lengths are shown in: the Preferences choice ([`Prefs::units`]), else the
+    /// region's (centimetres in Japan and other metric regions, inches in the United States), as
+    /// PowerPoint takes it from the system. Command parameters stay in points whatever it is.
+    pub fn units(&self) -> deckcraft_geom::Unit {
+        self.prefs.units.unwrap_or_else(|| self.region.units())
+    }
+    /// The paper PDF notes pages and handouts are printed on when none is named: A4, or US Letter
+    /// in the regions that use it (an id from [`cmd::file::PAPERS`]).
+    pub fn default_paper(&self) -> &'static str {
+        self.region.paper_id()
     }
     /// A session with one new presentation open.
     pub fn with_new() -> Self {

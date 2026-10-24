@@ -2750,16 +2750,18 @@ fn size_group(app: &mut SlideApp, ui: &mut Ui) {
                 ui.label(tl!("Width:"));
                 return;
             };
+            // In the measurement unit (`4.45 cm` in Japan, `1.75"` in the United States).
+            let unit = app.session.units();
             ui.horizontal(|ui| {
                 ui.label(tl!("Height:"));
-                if let Some(v) = widgets::spinner(ui, "sh", x.h / 72.0, 0.1, "\"", 54.0) {
-                    run(app, "shape.resize", json!({"h": v.max(0.0) * 72.0}));
+                if let Some(v) = crate::units::length_spinner(ui, "sh", x.h, unit, 62.0) {
+                    run(app, "shape.resize", json!({"h": v.max(0.0)}));
                 }
             });
             ui.horizontal(|ui| {
                 ui.label(tl!("Width: "));
-                if let Some(v) = widgets::spinner(ui, "sw", x.w / 72.0, 0.1, "\"", 54.0) {
-                    run(app, "shape.resize", json!({"w": v.max(0.0) * 72.0}));
+                if let Some(v) = crate::units::length_spinner(ui, "sw", x.w, unit, 62.0) {
+                    run(app, "shape.resize", json!({"w": v.max(0.0)}));
                 }
             });
         });
