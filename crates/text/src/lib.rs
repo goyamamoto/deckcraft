@@ -27,11 +27,11 @@ use std::sync::Arc;
 
 use deckcraft_color::Rgba;
 use deckcraft_fonts::script::{self, joins_following, joins_preceding};
-use deckcraft_fonts::{FontDb, FontFace, FontSlot, ScriptTag, ShapeParams};
+use deckcraft_fonts::{CjkLocale, FontDb, FontFace, FontSlot, ScriptTag, ShapeParams};
 use deckcraft_geom::{Point, Rect};
 use deckcraft_model::resolve::{self, Ctx};
 use deckcraft_model::text::{Align, Anchor, AutoFit, BodyProps, Bullet, Caps, ParaProps, RunKind, RunProps, Spacing, Strike, TextBody, TextDir};
-use deckcraft_model::{Fill, Shape};
+use deckcraft_model::{Fill, Shape, Theme};
 use unicode_segmentation::UnicodeSegmentation;
 
 /// A run of glyphs in one face, size and colour.
@@ -45,9 +45,10 @@ pub struct GlyphRun {
     pub glyphs: Vec<(u32, f64, f64)>,
     /// Per glyph: the paragraph character it draws (index, char); empty for bullets.
     pub cells: Vec<(usize, char)>,
-    /// Draw a heavier stroke because the family has no bold face.
+    /// Draw a heavier stroke: the text is bold and `face` (a regular face of the family, or a
+    /// fallback face) is not.
     pub fake_bold: bool,
-    /// Slant because the family has no italic face.
+    /// Slant: the text is italic and `face` is not.
     pub fake_italic: bool,
     pub outline: Option<(Rgba, f64)>,
     /// Paragraph and character range this run covers (for hyperlinks, selection colours).
@@ -349,8 +350,10 @@ struct Style {
     size: f64,
     color: Rgba,
     alpha: f64,
-    fake_bold: bool,
-    fake_italic: bool,
+    /// Bold and italic as the run asks for them; each glyph run is emboldened or slanted when its
+    /// own face lacks the style ([`synthetic_style`]).
+    bold: bool,
+    italic: bool,
     baseline: f64,
     spacing: f64,
     caps: Caps,
@@ -365,10 +368,11 @@ struct Style {
     style_name: &'static str,
     /// BCP 47 language (`a:rPr/@lang`), for shaping.
     lang: Option<String>,
-    /// The East Asian tradition Han characters are drawn in: the run's `lang` or `altLang` when
-    /// it is Chinese, Japanese or Korean, else the system's East Asian language.
-    cjk: Option<deckcraft_fonts::CjkLocale>,
-    /// The `a:ea` and `a:cs` families (theme references resolved), if the document names one.
+    /// The East Asian tradition Han characters fall back in ([`run_traditions`]).
+    cjk: Option<CjkLocale>,
+    /// The `a:ea` and `a:cs` families (theme references resolved), if the document names one. An
+    /// empty `a:ea` takes the theme's font for the run's East Asian language ([`run_traditions`]),
+    /// as PowerPoint draws Japanese text in the theme's `Jpan` font.
     ea: Option<String>,
     cs: Option<String>,
     /// The `a:sym` family: private-use characters (U+F000–U+F0FF, as PowerPoint stores symbol-font
@@ -435,13 +439,50 @@ fn style_name(bold: bool, italic: bool) -> &'static str {
     }
 }
 
-fn make_style(ctx: &Ctx, r: &RunProps, scale: f64, prompt: Option<Rgba>) -> Style {
+/// Whether a glyph run of a style asking for `bold`/`italic` drawn in `face` is emboldened or
+/// slanted: PowerPoint does so for a face without the style itself, decided for each face that
+/// draws the text, so bold kanji drawn in a Japanese face with no bold come out heavier beside the
+/// real bold of the Latin face, and a Japanese face with a real bold is not emboldened again.
+fn synthetic_style(bold: bool, italic: bool, face: &FontFace) -> (bool, bool) {
+    (bold && face.weight < 550.0, italic && !face.italic)
+}
+
+/// The East Asian traditions of a run with `lang` and `alt_lang`, where the system's East Asian
+/// language is `default` and kana or Hangul in the paragraph tell `text`
+/// ([`script::tradition_of_text`]): (the tradition its Han characters fall back in, the
+/// tradition whose theme font (`a:font script="Jpan"`, `Hans`, `Hant`, `Hang`) fills an empty
+/// `a:ea`).
+///
+/// PowerPoint for Mac draws a run in the theme's `Jpan` font when its `lang` or its `altLang` is
+/// `ja-JP`, and Chinese and Korean runs are taken to follow their own tradition the same way. An
+/// `en-US` run's kanji don't take the theme font; they fall back to a Japanese face on a Japanese
+/// system. A run with no language at all takes the system's East Asian language, else the one
+/// its paragraph's kana or Hangul tell.
+fn run_traditions(
+    lang: Option<&str>,
+    alt_lang: Option<&str>,
+    default: Option<CjkLocale>,
+    text: Option<CjkLocale>,
+) -> (Option<CjkLocale>, Option<CjkLocale>) {
+    let lang = lang.filter(|l| !l.trim().is_empty());
+    let own = [lang, alt_lang].into_iter().flatten().find_map(CjkLocale::from_lang);
+    let theme = own.or_else(|| if lang.is_some() { None } else { default.or(text) });
+    (own.or(default).or(text), theme)
+}
+
+/// The theme's font for East Asian tradition `t`, from the heading font set for a `+mj-ea` slot
+/// (or a heading run with no `a:ea`) and the body set otherwise.
+fn theme_script_font(theme: &Theme, ea_ref: &str, major: bool, t: CjkLocale) -> Option<String> {
+    let major = ea_ref.starts_with("+mj") || (major && !ea_ref.starts_with("+mn"));
+    let set = if major { &theme.fonts.major } else { &theme.fonts.minor };
+    set.script(t.theme_script()).filter(|f| !f.trim().is_empty()).map(String::from)
+}
+
+fn make_style(ctx: &Ctx, r: &RunProps, scale: f64, prompt: Option<Rgba>, text_cjk: Option<CjkLocale>) -> Style {
     let family = resolve::font_family(ctx, r);
     let bold = r.bold.unwrap_or(false);
     let italic = r.italic.unwrap_or(false);
     let face = FontDb::global().document_face(&family, style_name(bold, italic));
-    let fake_bold = bold && face.weight < 550.0;
-    let fake_italic = italic && !face.italic;
     let size = (r.size.unwrap_or(18.0) * scale).clamp(0.5, 4000.0);
     let (mut color, alpha, gradient) = match &r.fill {
         // The resolved colour carries the fill's transparency (`a:alpha`): it is applied once.
@@ -466,7 +507,9 @@ fn make_style(ctx: &Ctx, r: &RunProps, scale: f64, prompt: Option<Rgba>) -> Styl
         let name = theme.font(explicit.as_deref().unwrap_or(theme_ref));
         (!name.trim().is_empty()).then_some(name)
     };
-    let ea = slot_family(&r.font_ea, if major { "+mj-ea" } else { "+mn-ea" });
+    let (cjk, ea_tradition) = run_traditions(r.lang.as_deref(), r.alt_lang.as_deref(), deckcraft_fonts::default_cjk_locale(), text_cjk);
+    let ea_ref = r.font_ea.as_deref().unwrap_or(if major { "+mj-ea" } else { "+mn-ea" });
+    let ea = slot_family(&r.font_ea, ea_ref).or_else(|| ea_tradition.and_then(|t| theme_script_font(theme, ea_ref, major, t)));
     let cs = slot_family(&r.font_cs, if major { "+mj-cs" } else { "+mn-cs" });
     let underline =
         r.underline.as_deref().and_then(Underline::from_xml).map(|u| (r.underline_color.as_ref().map(|c| ctx.color(c, None)).unwrap_or(color), u));
@@ -479,8 +522,8 @@ fn make_style(ctx: &Ctx, r: &RunProps, scale: f64, prompt: Option<Rgba>) -> Styl
         size,
         color,
         alpha,
-        fake_bold,
-        fake_italic,
+        bold,
+        italic,
         baseline: r.baseline.unwrap_or(0.0),
         spacing: r.spacing.unwrap_or(0.0) * scale,
         caps: r.caps.unwrap_or(Caps::None),
@@ -493,11 +536,7 @@ fn make_style(ctx: &Ctx, r: &RunProps, scale: f64, prompt: Option<Rgba>) -> Styl
         effects: run_effects(ctx, r, scale),
         style_name: style_name(bold, italic),
         lang: r.lang.clone().filter(|l| !l.is_empty()),
-        cjk: [r.lang.as_deref(), r.alt_lang.as_deref()]
-            .into_iter()
-            .flatten()
-            .find_map(deckcraft_fonts::CjkLocale::from_lang)
-            .or_else(deckcraft_fonts::default_cjk_locale),
+        cjk,
         ea,
         cs,
         sym: r.font_sym.as_deref().map(|f| ctx.master.theme.font(f)).filter(|f| !f.trim().is_empty()),
@@ -507,7 +546,10 @@ fn make_style(ctx: &Ctx, r: &RunProps, scale: f64, prompt: Option<Rgba>) -> Styl
 }
 
 /// The faces to try for a cluster of `slot`/`script` in style `st`, in order: the slot's
-/// typeface, the theme's font for the script (`a:font[@script]`), then the run's Latin face.
+/// typeface (for the East Asian slot, the theme's font for the run's tradition when `a:ea` is
+/// empty: see [`make_style`]), the theme's font for the character's own script
+/// (`a:font[@script]`: Arabic, Hebrew, Thai… and Hangul, whose ISO 15924 code is the theme's),
+/// then the run's Latin face.
 fn face_chain(ctx: &Ctx, st: &Style, slot: FontSlot, script: Option<ScriptTag>) -> Vec<Arc<FontFace>> {
     let db = FontDb::global();
     let mut chain: Vec<Arc<FontFace>> = Vec::with_capacity(3);
@@ -735,9 +777,11 @@ fn shape_para(ctx: &Ctx, shape: &Shape, body: &TextBody, pi: usize, scale: f64, 
     // The logical paragraph: its text and each character's style.
     let mut text = String::new();
     let mut char_style: Vec<usize> = vec![];
+    // Kana or Hangul in the paragraph tell the tradition of runs with no language.
+    let text_cjk = script::tradition_of_text(para.runs.iter().flat_map(|r| r.text.chars()));
     for run in &para.runs {
         let rp = resolve::run(ctx, shape, para, &run.props);
-        let st = make_style(ctx, &rp, scale, opts.prompt_color);
+        let st = make_style(ctx, &rp, scale, opts.prompt_color, text_cjk);
         let t: String = match &run.kind {
             RunKind::Text => run.text.clone(),
             RunKind::Break => "\u{b}".into(),
@@ -751,11 +795,11 @@ fn shape_para(ctx: &Ctx, shape: &Shape, body: &TextBody, pi: usize, scale: f64, 
     }
     let cells = shape_cells(ctx, &text, &char_style, &styles, &mut faces, rtl, vertical);
     let lead = para.runs.first().map(|r| resolve::run(ctx, shape, para, &r.props)).unwrap_or_else(|| resolve::run(ctx, shape, para, &para.end_props));
-    let lead_style = make_style(ctx, &lead, scale, opts.prompt_color);
+    let lead_style = make_style(ctx, &lead, scale, opts.prompt_color, text_cjk);
     let lead_size = lead_style.size;
     let lead_face = lead_style.face.clone();
     // The paragraph mark, which ends the last line when no break does.
-    let end_style = make_style(ctx, &resolve::run(ctx, shape, para, &para.end_props), scale, opts.prompt_color);
+    let end_style = make_style(ctx, &resolve::run(ctx, shape, para, &para.end_props), scale, opts.prompt_color, text_cjk);
     let (end_size, end_face) = (end_style.size, end_style.face.clone());
     // Bullet.
     let bullet = match &props.bullet {
@@ -773,7 +817,7 @@ fn shape_para(ctx: &Ctx, shape: &Shape, body: &TextBody, pi: usize, scale: f64, 
             rp.underline = None;
             rp.strike = None;
             rp.highlight = None;
-            let mut st = make_style(ctx, &rp, scale, opts.prompt_color);
+            let mut st = make_style(ctx, &rp, scale, opts.prompt_color, text_cjk);
             st.baseline = 0.0;
             // Symbol fonts (Wingdings) aren't available: map common private-use bullets.
             let ch = map_symbol_bullet(char, props.bullet_font.as_deref());
@@ -798,7 +842,7 @@ fn shape_para(ctx: &Ctx, shape: &Shape, body: &TextBody, pi: usize, scale: f64, 
             }
             rp.size = Some(lead.size.unwrap_or(18.0) * props.bullet_size.unwrap_or(1.0));
             rp.underline = None;
-            let mut st = make_style(ctx, &rp, scale, opts.prompt_color);
+            let mut st = make_style(ctx, &rp, scale, opts.prompt_color, text_cjk);
             let label = autonum(scheme, start_at.saturating_sub(1).saturating_add(number.unwrap_or(1)));
             bullet_face(db, &mut st, &label);
             Some((label, st))
@@ -849,7 +893,11 @@ fn shape_cells(
     let style_rtl: Vec<bool> = styles.iter().map(|st| st.lang.as_deref().is_some_and(bidi::is_rtl_lang)).collect();
     let rtl_lang: Vec<bool> = char_style.iter().map(|&si| style_rtl.get(si).copied().unwrap_or(false)).collect();
     let levels = bidi::levels_lang(text, &chars, rtl, &rtl_lang);
-    let scripts = script::resolve(&chars);
+    // The characters Latin and East Asian fonts share take their slot by the run's language and
+    // East Asian font, not by the text before them.
+    let style_slot: Vec<(bool, bool)> =
+        styles.iter().map(|st| (st.lang.as_deref().and_then(CjkLocale::from_lang).is_some(), st.ea.is_some())).collect();
+    let scripts = script::resolve_in(&chars, |i| char_style.get(i).and_then(|&si| style_slot.get(si)).copied().unwrap_or((false, false)));
     let mut boundary = vec![false; n];
     let mut graphemes: Vec<(usize, usize)> = Vec::new();
     for (b, g) in text.grapheme_indices(true) {
@@ -869,14 +917,16 @@ fn shape_cells(
     // A face per grapheme cluster (never split between faces).
     let mut char_face = vec![0usize; n];
     let mut chains: HashMap<(usize, FontSlot, Option<ScriptTag>), Vec<Arc<FontFace>>> = HashMap::new();
-    let mut prev: Option<Arc<FontFace>> = None;
+    // The face and slot of the cluster before.
+    let mut prev: Option<(Arc<FontFace>, FontSlot)> = None;
     for &(a, b) in &graphemes {
         let Some(cluster) = chars.get(a..b) else { continue };
         let si = char_style.get(a).copied().unwrap_or(0);
         let Some(st) = styles.get(si) else { continue };
         let (sc, slot) = scripts.get(a).copied().unwrap_or((None, FontSlot::Latin));
         // Spaces, digits and punctuation stay in the face of the text before them when it can
-        // draw them, so a phrase isn't cut into items at every space.
+        // draw them and they take the same slot, so a phrase isn't cut into items at every space
+        // (a digit after a kanji takes the Latin font, as PowerPoint draws it).
         // Emoji, and pictographs asked to look like text (U+FE0E), pick their own face.
         let neutral =
             cluster.iter().all(|c| script::script_of(*c).is_none()) && !deckcraft_fonts::is_emoji_cluster(cluster) && !cluster.contains(&'\u{FE0E}');
@@ -892,8 +942,12 @@ fn shape_cells(
             .filter(|f| covers_symbol(f, cluster.first().copied().unwrap_or(' ')));
         let face = match (sym_face, prev.as_ref()) {
             (Some(f), _) => f,
-            (None, Some(p))
-                if neutral && !p.is_color() && deckcraft_fonts::covers_cluster(p, cluster) && char_style.get(a.wrapping_sub(1)) == Some(&si) =>
+            (None, Some((p, ps)))
+                if neutral
+                    && *ps == slot
+                    && !p.is_color()
+                    && deckcraft_fonts::covers_cluster(p, cluster)
+                    && char_style.get(a.wrapping_sub(1)) == Some(&si) =>
             {
                 p.clone()
             }
@@ -906,7 +960,7 @@ fn shape_cells(
         for f in char_face.get_mut(a..b).into_iter().flatten() {
             *f = fi;
         }
-        prev = Some(face);
+        prev = Some((face, slot));
     }
     let mut cells: Vec<Cell> = (0..n)
         .map(|i| Cell {
@@ -2240,14 +2294,15 @@ fn layout_scaled(ctx: &Ctx, shape: &Shape, body: &TextBody, bp: &BodyProps, opts
                     out.runs.push(r);
                 }
                 let Some(face) = p.faces.get(cell.face) else { continue };
+                let (fake_bold, fake_italic) = synthetic_style(st.bold, st.italic, face);
                 cur = Some(GlyphRun {
                     face: face.clone(),
                     size,
                     color: st.color,
                     glyphs: vec![],
                     cells: vec![],
-                    fake_bold: st.fake_bold,
-                    fake_italic: st.fake_italic,
+                    fake_bold,
+                    fake_italic,
                     outline: st.outline,
                     para: line.para,
                     chars: (ci, ci + 1),
@@ -2860,3 +2915,6 @@ pub fn fit_width(ctx: &Ctx, shape: &Shape, body: &TextBody, rect: Rect, fields: 
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod font_slot_tests;
