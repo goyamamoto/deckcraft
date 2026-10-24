@@ -513,7 +513,14 @@ fn system_has(s: &str) -> bool {
 #[test]
 fn cjk_text_in_the_interface_is_drawn_with_real_glyphs() {
     let h = harness(Session::with_new());
-    assert!(h.state().ui_fonts.faces.is_empty(), "nothing to borrow for {:?}", h.state().session.active().unwrap().title());
+    // A Latin deck borrows nothing; with catalogs embedded, the Preferences list's language names
+    // (日本語) may need a face of their own.
+    let names: String = crate::i18n::Lang::all().map(crate::i18n::Lang::name).collect();
+    assert!(
+        h.state().ui_fonts.faces.iter().all(|f| names.chars().any(|c| !c.is_ascii() && f.covers(c))),
+        "nothing to borrow for {:?}",
+        h.state().session.active().unwrap().title()
+    );
 
     let mut s = Session::with_new();
     let korean = "한국어 발표 자료";
