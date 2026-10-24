@@ -271,6 +271,50 @@ fn hanging_punct_off_moves_the_character_before_the_full_stop_down() {
     assert_eq!(wrapped(text, w, |p| p.hanging_punct = Some(false))[0], "白なしで続きま");
 }
 
+#[test]
+fn a_full_stop_hangs_only_where_a_line_may_start_after_it() {
+    // PowerPoint for Mac: "。」" together don't hang, and a closing "」" never starts a line, so
+    // the pair moves to the next line with the character before it; "、」", "。）" and "。。" too.
+    let w = one_line("白なしで続きます") + 0.5;
+    for tail in ["。」", "、」", "。）", "。。"] {
+        let text = format!("白なしで続きます{tail}句読点");
+        let lines = wrapped(&text, w, |_| {});
+        assert_eq!(lines, ["白なしで続きま".to_string(), format!("す{tail}句読点")], "{text}");
+    }
+    // A space, an ideographic space or a line break may follow the hanging mark: the next line
+    // starts after it, with no leading space and no empty line.
+    for tail in ["。 ", "。\u{3000}", "。\u{b}"] {
+        let text = format!("白なしで続きます{tail}句読点");
+        assert_eq!(wrapped(&text, w, |_| {}), ["白なしで続きます。", "句読点"], "{text:?}");
+    }
+    assert_eq!(wrapped("白なしで続きます。 ", w, |_| {}), ["白なしで続きます。"]);
+}
+
+#[test]
+fn a_hanging_full_stop_is_left_out_of_a_right_aligned_or_centred_line() {
+    // Like a justified line, the text before a hanging "。" is aligned as if the mark weren't
+    // there: right-aligned it ends at the margin and the mark hangs past it (a centred line
+    // centres the text before the mark: not measured in PowerPoint).
+    let text = "白なしで続きます。句読点も含めて。";
+    let w = one_line("白なしで続きます") + 0.5;
+    let lay_aligned = |align| {
+        let (p, mut sh) = bidi_setup(vec![Run::new(text)], w, false, align);
+        let t = sh.text.as_mut().unwrap();
+        t.body.inset_l = Some(0.0);
+        t.body.inset_r = Some(0.0);
+        lay(&p, &sh, w, 600.0)
+    };
+    let stop = text.chars().position(|c| c == '。').unwrap();
+    let l = lay_aligned(Align::Right);
+    let line = &l.lines[0];
+    assert_eq!(line.end, stop + 1, "the 。 hangs on the first line");
+    assert!(close(line.edges[stop].0, w), "the 。 starts at the margin: {:?} in {w}", line.edges);
+    assert!(line.extent.0 >= -0.01, "the line starts inside the box: {:?}", line.extent);
+    let l = lay_aligned(Align::Center);
+    let line = &l.lines[0];
+    assert!(close(line.edges[0].0, w - line.edges[stop].0), "the text before the 。 is centred: {:?} in {w}", line.edges);
+}
+
 /// The lines of Japanese (`ja-JP`) `text` `w` wide in a deck with `kinsoku` lists.
 fn wrapped_in_deck(text: &str, w: f64, lang: &str, kinsoku: Option<Kinsoku>, set: impl Fn(&mut ParaProps)) -> Vec<String> {
     let mut run = Run::new(text);
