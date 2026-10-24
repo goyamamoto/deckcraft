@@ -156,13 +156,33 @@ pub fn fit_text_box(s: &mut Session, id: ShapeId) -> Result<()> {
     let geo = deckcraft_render::shape_geometry(&sh, x.w, x.h);
     let fields = deckcraft_text::NoFields;
     let mut nx = x;
-    if bp.wrap == Some(false) {
-        nx.w = deckcraft_text::fit_width(&ctx, &sh, &body, geo.text_rect, &fields).max(20.0);
+    match deckcraft_text::vertical_lines(&bp) {
+        None => {
+            if bp.wrap == Some(false) {
+                nx.w = deckcraft_text::fit_width(&ctx, &sh, &body, geo.text_rect, &fields).max(20.0);
+            }
+            let geo = deckcraft_render::shape_geometry(&sh, nx.w, nx.h);
+            let need = deckcraft_text::fit_height(&ctx, &sh, &body, geo.text_rect, &fields);
+            let extra = (nx.h - geo.text_rect.height()).max(0.0);
+            nx.h = (need + extra).max(8.0);
+        }
+        // Vertical text (vert, vert270, eaVert, wordArtVert, wordArtVertRtl, mongolianVert) runs
+        // its lines down the shape, as a PowerPoint vertical text box does: the line length sets
+        // the height (when the text doesn't wrap) and the columns' extent the width, which grows
+        // away from the first column so the text already there stays put.
+        Some(order) => {
+            if bp.wrap == Some(false) {
+                nx.h = deckcraft_text::fit_width(&ctx, &sh, &body, geo.text_rect, &fields).max(20.0);
+            }
+            let geo = deckcraft_render::shape_geometry(&sh, nx.w, nx.h);
+            let need = deckcraft_text::fit_height(&ctx, &sh, &body, geo.text_rect, &fields);
+            let extra = (nx.w - geo.text_rect.width()).max(0.0);
+            nx.w = (need + extra).max(8.0);
+            if order == deckcraft_text::VerticalLines::RightToLeft {
+                nx.x = x.x + x.w - nx.w;
+            }
+        }
     }
-    let geo = deckcraft_render::shape_geometry(&sh, nx.w, nx.h);
-    let need = deckcraft_text::fit_height(&ctx, &sh, &body, geo.text_rect, &fields);
-    let extra = (nx.h - geo.text_rect.height()).max(0.0);
-    nx.h = (need + extra).max(8.0);
     if (nx.h - x.h).abs() < 0.01 && (nx.w - x.w).abs() < 0.01 && sh.xfrm.is_some() {
         return Ok(());
     }
@@ -224,6 +244,56 @@ fn fit_shrink_scale(s: &mut Session, id: ShapeId) -> Result<()> {
         st.revision += 1;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod fit_text_box_tests {
+    use deckcraft_model::text::TextDir;
+    use deckcraft_model::{ShapeId, Xfrm};
+    use serde_json::json;
+
+    use crate::Session;
+
+    /// A resize-to-fit text box 60 × 200 at (300, 100) with its text turned `vert` (wrapping or
+    /// not), and its frame after `text` is typed into it.
+    fn typed(vert: TextDir, wrap: bool, text: &str) -> Xfrm {
+        let mut s = Session::with_new();
+        let id = s.execute("insert.textBox", &json!({"rect": [300.0, 100.0, 60.0, 200.0], "text": ""})).unwrap()["id"].as_u64().unwrap();
+        let id = ShapeId(id as u32);
+        s.edit(|doc, sel| {
+            let sh = crate::shapes_mut(doc, sel).and_then(|l| deckcraft_model::find_shape_mut(l, id)).unwrap();
+            sh.xfrm = Some(Xfrm::new(300.0, 100.0, 60.0, 200.0));
+            let body = &mut sh.text.as_mut().unwrap().body;
+            body.vert = Some(vert);
+            body.wrap = Some(wrap);
+            Ok(())
+        })
+        .unwrap();
+        s.execute("text.edit", &json!({"id": id.0})).unwrap();
+        s.execute("text.insert", &json!({"text": text})).unwrap();
+        s.doc().unwrap().shape(id).unwrap().xfrm.unwrap()
+    }
+
+    #[test]
+    fn a_vertical_text_box_grows_across_as_columns_are_added() {
+        // Five columns of 縦書き: the box widens (to the left, keeping the first column where it
+        // was) and keeps its height, where it used to take the columns' extent as its height.
+        let x = typed(TextDir::EaVertical, true, "一行目\n二行目\n三行目\n四行目\n五行目");
+        assert!((x.h - 200.0).abs() < 0.01, "{x:?}");
+        assert!(x.w > 100.0, "{x:?}");
+        assert!((x.x + x.w - 360.0).abs() < 0.01, "the right edge stays: {x:?}");
+        // One short column narrows it.
+        let one = typed(TextDir::EaVertical, true, "一行目");
+        assert!(one.w < 40.0 && (one.x + one.w - 360.0).abs() < 0.01, "{one:?}");
+        // Lines turned the other way start on the left, which stays.
+        let x = typed(TextDir::Vertical270, true, "one\ntwo\nthree\nfour\nfive");
+        assert!((x.x - 300.0).abs() < 0.01 && x.w > 100.0 && (x.h - 200.0).abs() < 0.01, "{x:?}");
+        // Without wrapping the column's length sets the height.
+        let long = typed(TextDir::EaVertical, false, "あいうえおかきくけこさしすせそ");
+        let short = typed(TextDir::EaVertical, false, "あいう");
+        assert!(long.h > short.h + 150.0, "{long:?} {short:?}");
+        assert!((long.w - short.w).abs() < 0.01, "one column either way");
+    }
 }
 
 pub(crate) fn ctx_for<'a>(doc: &'a Presentation, sel: &Selection) -> Option<Ctx<'a>> {
