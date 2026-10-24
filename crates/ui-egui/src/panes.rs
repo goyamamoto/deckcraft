@@ -372,28 +372,30 @@ fn format_shape(app: &mut SlideApp, ui: &mut Ui) {
             });
             text_transparency_slider(app, ui, &sh);
             ui.add_space(6.0);
-            ui.label(egui::RichText::new("Text Box").font(theme::bold(13.0)));
+            ui.label(egui::RichText::new(tl!("Text Box")).font(theme::bold(13.0)));
+            let dir = crate::ribbon::fmt_state(app).get("dir").and_then(Value::as_str).unwrap_or("horizontal").to_string();
             ui.horizontal(|ui| {
-                ui.label("Vertical alignment");
-                for (l, a) in [("Top", "top"), ("Middle", "middle"), ("Bottom", "bottom")] {
-                    if ui.small_button(l).clicked() {
+                ui.label(tl!("Vertical alignment"));
+                for (l, a) in crate::ribbon::align_text_choices(&dir) {
+                    if ui.small_button(crate::i18n::tc("anchor", l)).clicked() {
                         run(app, "format.anchor", json!({"anchor": a}));
                     }
                 }
             });
+            text_direction_combo(app, ui, &dir);
             ui.horizontal_wrapped(|ui| {
                 for (l, m) in [("Do not Autofit", "none"), ("Shrink text on overflow", "shrink"), ("Resize shape to fit text", "resize")] {
-                    if ui.small_button(l).clicked() {
+                    if ui.small_button(tl!(l)).clicked() {
                         run(app, "format.autofit", json!({"mode": m}));
                     }
                 }
             });
             let wrap = sh.text.as_ref().and_then(|t| t.body.wrap).unwrap_or(true);
             let mut w = wrap;
-            if ui.checkbox(&mut w, "Wrap text in shape").changed() {
+            if ui.checkbox(&mut w, tl!("Wrap text in shape")).changed() {
                 run(app, "format.wrap", json!({"on": w}));
             }
-            ui.label("Margins (pt)");
+            ui.label(tl!("Margins (pt)"));
             let b = sh.text.as_ref().map(|t| t.body.clone()).unwrap_or_default();
             for (l, k, v) in [
                 ("Left", "left", b.inset_l.unwrap_or(7.2)),
@@ -402,14 +404,14 @@ fn format_shape(app: &mut SlideApp, ui: &mut Ui) {
                 ("Bottom", "bottom", b.inset_b.unwrap_or(3.6)),
             ] {
                 ui.horizontal(|ui| {
-                    ui.add_sized(vec2(60.0, 20.0), egui::Label::new(l));
+                    ui.add_sized(vec2(60.0, 20.0), egui::Label::new(tl!(l)));
                     if let Some(nv) = widgets::spinner(ui, &format!("m{k}"), v, 1.0, " pt", 60.0) {
                         run(app, "format.margins", json!({k: nv.max(0.0)}));
                     }
                 });
             }
             ui.horizontal(|ui| {
-                ui.label("Columns");
+                ui.label(tl!("Columns"));
                 for n in 1..=3 {
                     if ui.small_button(n.to_string()).clicked() {
                         run(app, "format.columns", json!({"count": n, "spacing": 18}));
@@ -548,6 +550,33 @@ fn format_shape(app: &mut SlideApp, ui: &mut Ui) {
 
 /// A labelled drop-down on the Format Shape pane: picks one of `items` (label, value) and runs
 /// `shape.line` with `{key: value}`.
+/// Format Shape ▸ Text Options ▸ Text Box ▸ Text direction: the Home tab's Text Direction choices
+/// (Vertical and the all-upright stacked form with East Asian editing), as a list showing the
+/// selection's.
+fn text_direction_combo(app: &mut SlideApp, ui: &mut Ui, current: &str) {
+    let ea = crate::ribbon::east_asian(app);
+    let shown = crate::ribbon::TEXT_DIRECTIONS.iter().find(|(d, ..)| *d == current).map_or("Horizontal", |(_, l, _)| *l);
+    let mut pick = None;
+    ui.horizontal(|ui| {
+        let l = ui.label(tl!("Text direction"));
+        egui::ComboBox::from_id_salt("format_text_direction")
+            .selected_text(crate::ribbon::direction_label(shown))
+            .width(180.0)
+            .show_ui(ui, |ui| {
+                for (dir, label) in crate::ribbon::text_directions(ea, current) {
+                    if ui.selectable_label(dir == current, crate::ribbon::direction_label(label)).clicked() {
+                        pick = Some(dir);
+                    }
+                }
+            })
+            .response
+            .labelled_by(l.id);
+    });
+    if let Some(dir) = pick.filter(|d| *d != current) {
+        run(app, "format.direction", json!({"dir": dir}));
+    }
+}
+
 fn line_choice(app: &mut SlideApp, ui: &mut Ui, label: &str, key: &str, current: &str, items: &[(&str, &str)]) {
     ui.horizontal(|ui| {
         ui.add_sized(vec2(90.0, 20.0), egui::Label::new(label));

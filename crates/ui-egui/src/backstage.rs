@@ -1172,17 +1172,37 @@ fn preview(app: &mut SlideApp, ui: &mut Ui, bs: &mut Backstage, doc: &deckcraft_
         }
         "notes" => {
             if let Some(i) = on_page.first() {
-                let w = page.width() * 0.75;
-                let r = Rect::from_min_size(pos2(page.center().x - w / 2.0, page.top() + page.height() * 0.08), vec2(w, w * aspect));
-                draw_slide(ui, *i, r);
-                let notes = doc.slides.get(*i).map(|s| s.notes_text()).unwrap_or_default();
-                let font = theme::font((11.0 * scale).clamp(5.0, 13.0));
-                let text_rect = Rect::from_min_max(
-                    pos2(page.left() + page.width() * 0.12, r.bottom() + 20.0 * scale),
-                    page.max - vec2(page.width() * 0.12, 30.0 * scale),
-                );
-                let galley = ui.painter().layout(notes, font, Color32::from_gray(30), text_rect.width());
-                ui.painter().with_clip_rect(text_rect).galley(text_rect.min, galley, Color32::from_gray(30));
+                // Where the printed page puts them: the notes master's slide image and body
+                // placeholders (else the default layout), its header and footer, and the notes
+                // laid out by the slide text engine, as the PDF draws them.
+                let paper = (f64::from(pw), f64::from(ph));
+                let (slide_box, notes_box) = deckcraft_engine::pdf::notes_frames(doc, paper);
+                let to_screen = |r: deckcraft_geom::Rect| {
+                    Rect::from_min_max(
+                        page.min + vec2(r.x0 as f32 * scale, r.y0 as f32 * scale),
+                        page.min + vec2(r.x1 as f32 * scale, r.y1 as f32 * scale),
+                    )
+                };
+                let ppp = ui.ctx().pixels_per_point();
+                draw_slide(ui, *i, crate::textures::device_pixel_rect(to_screen(slide_box), ppp));
+                if let Some(m) = doc.notes_master.as_deref() {
+                    for piece in deckcraft_engine::pdf::master_text_pieces(doc, m, paper, i + 1) {
+                        let size = (piece.size as f32 * scale).max(3.0);
+                        let at = page.min + vec2(piece.at.0 as f32 * scale, piece.at.1 as f32 * scale - size * 0.8);
+                        let c = Color32::from_rgba_unmultiplied(piece.color.r, piece.color.g, piece.color.b, piece.color.a);
+                        ui.painter().text(at, egui::Align2::LEFT_TOP, &piece.text, theme::font(size), c);
+                    }
+                }
+                let notes_scale = paper.1 / doc.notes_size.height.max(1.0);
+                if let Some((tex, size)) = crate::sorter::notes_picture(ui.ctx(), doc, *i, notes_box, notes_scale, f64::from(scale * ppp)) {
+                    let at = crate::textures::device_pixel_rect(to_screen(notes_box), ppp).min;
+                    ui.painter().with_clip_rect(page).image(
+                        tex.id(),
+                        Rect::from_min_size(at, size / ppp),
+                        Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+                        Color32::WHITE,
+                    );
+                }
             }
         }
         l => {
