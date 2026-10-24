@@ -486,15 +486,32 @@ fn slides_group(app: &mut SlideApp, ui: &mut Ui) {
     });
 }
 
-pub fn font_families(app: &SlideApp) -> Vec<String> {
-    let mut v = vec![];
-    if let Some(m) = app.session.active().and_then(|d| d.doc.masters.first()) {
-        v.push(m.theme.fonts.major.latin.clone());
-        v.push(m.theme.fonts.minor.latin.clone());
+/// What the font box shows for the formatting state `st`: the font at the selection (the East
+/// Asian font on Japanese text), with "(Headings)" or "(Body)" after the name when it is the
+/// theme's, as PowerPoint's box does.
+pub fn font_box_text(st: &Value) -> String {
+    let font = st.get("font").and_then(Value::as_str).unwrap_or("");
+    match st.get("fontTheme").and_then(Value::as_str) {
+        Some(role) if !font.is_empty() => crate::fontpick::role_label(font, role),
+        _ => font.to_string(),
     }
-    v.extend(deckcraft_fonts::FontDb::global().families());
-    v.dedup();
-    v
+}
+
+/// Home › Font: apply a font picked in the font box. A family is written by the name the list
+/// shows; the engine applies an East Asian family to Japanese text too (`a:ea`). A theme entry
+/// writes the theme's reference: the Latin heading or body font (`+mj-lt`, `+mn-lt`), or for
+/// Asian text both the Latin and the East Asian reference, as an East Asian font sets both.
+pub fn apply_font_pick(app: &mut SlideApp, pick: &crate::fontpick::Pick) {
+    use crate::fontpick::Pick;
+    let params = match pick {
+        Pick::Font(f) => json!({"family": f}),
+        Pick::Theme(t) if t.east_asian => {
+            let latin = if t.role == "headings" { "+mj-lt" } else { "+mn-lt" };
+            json!({"family": latin, "eastAsian": t.reference})
+        }
+        Pick::Theme(t) => json!({"family": t.reference}),
+    };
+    run(app, "format.font", params);
 }
 
 fn font_group(app: &mut SlideApp, ui: &mut Ui, st: &Value) {
@@ -503,34 +520,29 @@ fn font_group(app: &mut SlideApp, ui: &mut Ui, st: &Value) {
         rows(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 3.0;
-                let font = st.get("font").and_then(Value::as_str).unwrap_or("").to_string();
+                let shown = font_box_text(st);
                 let size = st.get("size").and_then(Value::as_f64);
-                let fams = font_families(app);
-                let theme_fonts: Vec<String> = fams.iter().take(2).cloned().collect();
-                dropdown(ui, "font", &font, 150.0, en, |ui| {
-                    for (k, f) in fams.iter().enumerate() {
-                        let label = if k == 0 && theme_fonts.len() == 2 {
-                            format!("{f} (Headings)")
-                        } else if k == 1 && theme_fonts.len() == 2 {
-                            format!("{f} (Body)")
-                        } else {
-                            f.clone()
-                        };
-                        if ui.button(egui::RichText::new(label)).clicked() {
-                            run(app, "format.font", json!({"family": f}));
+                let ctx = ui.ctx().clone();
+                let mut rescan = false;
+                let picked = {
+                    let mut fetch = || crate::fontpick::font_list(app, &ctx);
+                    let mut extra = |ui: &mut Ui| {
+                        // Fonts installed while DeckCraft runs (e.g. into ~/.local/share/fonts).
+                        if ui.button(tl!("Rescan Installed Fonts")).clicked() {
+                            rescan = true;
                             ui.close();
                         }
-                        if k == 1 {
-                            ui.separator();
-                        }
-                    }
-                    ui.separator();
-                    // Fonts installed while DeckCraft runs (e.g. into ~/.local/share/fonts).
-                    if ui.button(tl!("Rescan Installed Fonts")).clicked() {
-                        run(app, "font.rescan", json!({}));
-                        ui.close();
-                    }
-                });
+                    };
+                    crate::fontpick::font_box(ui, "font", 150.0, &shown, en, tl!("Font"), crate::fontpick::Offer::All, &mut fetch, Some(&mut extra))
+                        .pick
+                };
+                if rescan {
+                    run(app, "font.rescan", json!({}));
+                    crate::fontpick::forget_fonts(&ctx);
+                }
+                if let Some(p) = picked {
+                    apply_font_pick(app, &p);
+                }
                 let size_text = size.map(|s| widgets::fmt_num(s, "")).unwrap_or_default();
                 dropdown(ui, "size", &size_text, 52.0, en, |ui| {
                     for s in deckcraft_engine::cmd::format::SIZES.iter().chain([72.0, 80.0, 88.0, 96.0].iter()) {
