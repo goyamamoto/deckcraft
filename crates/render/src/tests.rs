@@ -340,6 +340,95 @@ fn chart_axis_titles_are_drawn() {
     assert!(ink(&titled, bottom) > ink(&bare, bottom) + 30, "category axis title");
 }
 
+/// Format Axis Title ▸ Text direction: a stacked (縦書き) or East Asian vertical value axis title
+/// stands its kanji upright down the left band, as slide text does, so "一" is a horizontal
+/// stroke; the default title is turned to read upwards and lays it on its side.
+#[test]
+fn chart_vertical_axis_title_stands_kanji_upright() {
+    use deckcraft_model::text::TextDir;
+    let stroke = |dir: Option<TextDir>| {
+        let mut c = Chart::sample(ChartType::Column);
+        c.title = None;
+        c.legend = None;
+        c.text_size = Some(40.0);
+        c.axis_titles = (None, Some("一".into()));
+        c.axis_title_dirs = (None, dir);
+        let sh = Shape { id: ShapeId(625), xfrm: Some(Xfrm::new(0.0, 0.0, 960.0, 540.0)), kind: ShapeKind::Chart(Box::new(c)), ..Default::default() };
+        let img = render_slide(&deck_with(vec![sh]), 0, &RenderOpts { scale: 1.0, ..Default::default() });
+        // The title's band: 1.6 em from the chart area's left edge (4 % in).
+        let (mut x0, mut y0, mut x1, mut y1) = (u32::MAX, u32::MAX, 0, 0);
+        for y in 20..520 {
+            for x in 38..100 {
+                if img.pixel(x, y)[0] < 160 {
+                    (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+                }
+            }
+        }
+        assert!(x1 >= x0 && y1 >= y0, "no title ink for {dir:?}");
+        (x1 - x0 + 1, y1 - y0 + 1)
+    };
+    for dir in [TextDir::Stacked, TextDir::EaVertical] {
+        let (w, h) = stroke(Some(dir));
+        assert!(w > h * 2, "{dir:?}: upright stroke {w}x{h}");
+    }
+    let (w, h) = stroke(None);
+    assert!(h > w * 2, "the default turned title lays it on its side: {w}x{h}");
+    let (w, h) = stroke(Some(TextDir::Horizontal));
+    assert!(h > w * 2, "horz keeps the default turn: {w}x{h}");
+}
+
+/// Japanese category labels too long for their band wrap between characters, as slide text
+/// does, instead of running into their neighbours: six labels of eight kanji under a narrow
+/// chart take two lines each and stay six separate blocks.
+#[test]
+fn chart_japanese_category_labels_wrap_between_characters() {
+    let mut c = Chart::sample(ChartType::Column);
+    c.title = None;
+    c.legend = None;
+    c.text_size = Some(12.0);
+    // No value axis labels: the "0" beside the columns' feet would read as a seventh block.
+    c.y_hidden = true;
+    c.series.truncate(1);
+    c.categories = ["関東地区営業成績", "関西地区営業成績", "九州地区営業成績", "東北地区営業成績", "中部地区営業成績", "四国地区営業成績"]
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    c.series[0].values = vec![Some(5.0); 6];
+    let sh = Shape { id: ShapeId(626), xfrm: Some(Xfrm::new(0.0, 0.0, 480.0, 320.0)), kind: ShapeKind::Chart(Box::new(c)), ..Default::default() };
+    let img = render_slide(&deck_with(vec![sh]), 0, &RenderOpts { scale: 2.0, ..Default::default() });
+    let text = |x: u32, y: u32| {
+        let p = img.pixel(x, y);
+        p[0] < 160 && (p[0] as i32 - p[2] as i32).abs() < 24 && (p[1] as i32 - p[2] as i32).abs() < 24
+    };
+    // Below the columns' feet: the category labels.
+    let bar = |x: u32, y: u32| {
+        let p = img.pixel(x, y);
+        p[2] as i32 - p[0] as i32 > 60
+    };
+    let feet = (0..640).rev().find(|&y| (0..960).any(|x| bar(x, y))).expect("columns");
+    let rows: Vec<u32> = (feet + 1..640).filter(|&y| (0..960).any(|x| text(x, y))).collect();
+    let lines = rows.windows(2).filter(|w| w[1] > w[0] + 4).count() + usize::from(!rows.is_empty());
+    assert!(lines >= 2, "the labels take two lines: rows {rows:?}");
+    // Each column stands in the middle of its category's band: the bands meet halfway between
+    // neighbouring columns, and no label's ink crosses from one band into the next.
+    let bar_cols: Vec<u32> = (0..960).filter(|&x| bar(x, feet - 2)).collect();
+    let mut centres = vec![];
+    let mut start = None;
+    for (k, x) in bar_cols.iter().enumerate() {
+        start = start.or(Some(*x));
+        if bar_cols.get(k + 1) != Some(&(x + 1)) {
+            centres.push((start.unwrap_or(*x) + x) / 2);
+            start = None;
+        }
+    }
+    assert_eq!(centres.len(), 6, "{centres:?}");
+    for w in centres.windows(2) {
+        let edge = (w[0] + w[1]) / 2;
+        let crossing = (edge - 1..=edge + 1).any(|x| (feet + 1..640).any(|y| text(x, y)));
+        assert!(!crossing, "a label runs across the band edge at {edge} px (columns at {centres:?})");
+    }
+}
+
 #[test]
 fn column_points_take_their_own_fill_and_smooth_lines_curve() {
     // One column series where only the middle point is given a red c:dPt fill.

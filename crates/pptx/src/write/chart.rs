@@ -58,10 +58,10 @@ fn sp_pr(w: &mut W, fill: Option<&Fill>, line: Option<&deckcraft_model::Line>) {
     w.close("c:spPr");
 }
 
-fn rich(w: &mut W, text: &str) {
+fn rich(w: &mut W, text: &str, dir: Option<deckcraft_model::text::TextDir>) {
     w.open0("c:tx");
     w.open0("c:rich");
-    w.empty0("a:bodyPr");
+    w.empty("a:bodyPr", A::new().o("vert", dir.map(deckcraft_model::text::TextDir::xml)));
     w.empty0("a:lstStyle");
     for line in text.split('\n') {
         w.open0("a:p");
@@ -75,8 +75,13 @@ fn rich(w: &mut W, text: &str) {
 }
 
 fn title(w: &mut W, text: &str) {
+    axis_title(w, text, None);
+}
+
+/// A title in text direction `dir` (an axis title's Text direction; `None` the default).
+fn axis_title(w: &mut W, text: &str, dir: Option<deckcraft_model::text::TextDir>) {
     w.open0("c:title");
-    rich(w, text);
+    rich(w, text, dir);
     w.val("c:overlay", 0);
     w.close("c:title");
 }
@@ -355,7 +360,7 @@ fn axes(w: &mut W, c: &Chart, g: Group) {
         w.val("c:delete", 0);
         w.val("c:axPos", "b");
         if let Some(t) = &c.axis_titles.0 {
-            title(w, t);
+            axis_title(w, t, c.axis_title_dirs.0);
         }
         w.empty("c:numFmt", A::new().a("formatCode", "General").a("sourceLinked", 1));
         w.val("c:majorTickMark", "out");
@@ -374,7 +379,7 @@ fn axes(w: &mut W, c: &Chart, g: Group) {
         w.val("c:delete", 0);
         w.val("c:axPos", cat_pos);
         if let Some(t) = &c.axis_titles.0 {
-            title(w, t);
+            axis_title(w, t, c.axis_title_dirs.0);
         }
         w.empty("c:numFmt", A::new().a("formatCode", "General").a("sourceLinked", 1));
         w.val("c:majorTickMark", "none");
@@ -411,7 +416,7 @@ fn axes(w: &mut W, c: &Chart, g: Group) {
         w.empty0("c:minorGridlines");
     }
     if let Some(t) = &c.axis_titles.1 {
-        title(w, t);
+        axis_title(w, t, c.axis_title_dirs.1);
     }
     match c.y_format.as_deref().filter(|f| !f.is_empty()) {
         Some(f) => w.empty("c:numFmt", A::new().a("formatCode", f).a("sourceLinked", 0)),
