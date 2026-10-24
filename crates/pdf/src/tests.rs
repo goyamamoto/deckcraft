@@ -200,8 +200,7 @@ fn unembeddable_font_returns_error_instead_of_a_pdf_missing_text() {
 #[cfg_attr(not(target_arch = "wasm32"), test)]
 fn supported_unicode_is_shaped_and_recovered_from_the_page_text_layer() {
     use deckcraft_model::{Shape, ShapeId, Xfrm};
-    use hayro_syntax::content::ops::TypedInstruction;
-    use hayro_syntax::object::{Dict, Object, Stream};
+    use hayro_syntax::object::Dict;
 
     let text = "Café Ελληνικά Привет";
     let face = FontDb::global().face("Ubuntu", "Regular");
@@ -228,54 +227,203 @@ fn supported_unicode_is_shaped_and_recovered_from_the_page_text_layer() {
     let resources = page.raw().get::<Dict<'_>>(b"Resources").unwrap();
     let fonts = resources.get::<Dict<'_>>(b"Font").unwrap();
     assert_eq!(fonts.len(), 1);
-    let font = fonts.get::<Dict<'_>>(fonts.keys().next().unwrap()).unwrap();
-    let cmap = font.get::<Stream<'_>>(b"ToUnicode").unwrap().decoded().unwrap().into_owned();
-    let cmap = std::str::from_utf8(&cmap).unwrap();
-    // This fixture uses the writer's two-byte CIDs and bfchar mappings. Decode the
-    // content's text-showing operators through that map, not document metadata.
-    let mut mapping = HashMap::<u16, String>::new();
-    let mut in_char_map = false;
-    for line in cmap.lines() {
-        if line.ends_with("beginbfchar") {
-            in_char_map = true;
-        } else if line == "endbfchar" {
-            in_char_map = false;
-        } else if in_char_map {
-            let parts: Vec<_> = line.split_whitespace().collect();
-            let cid = u16::from_str_radix(parts[0].trim_matches(['<', '>']), 16).unwrap();
-            let value = parts[1].trim_matches(['<', '>']);
-            let units: Vec<_> = value
-                .as_bytes()
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .map(|chunk| u16::from_str_radix(std::str::from_utf8(chunk).unwrap(), 16).unwrap())
-                .collect();
-            mapping.insert(cid, String::from_utf16(&units).unwrap());
+    assert_eq!(page_text(page).0, text);
+}
+
+/// The text a page shows, decoded through each font's ToUnicode map (the writer's two-byte CIDs
+/// and bfchar mappings), not through document metadata; and every CID shown, in order.
+fn page_text(page: &hayro_syntax::page::Page<'_>) -> (String, Vec<u16>) {
+    use hayro_syntax::content::ops::TypedInstruction;
+    use hayro_syntax::object::{Dict, Object, Stream};
+    let resources = page.raw().get::<Dict<'_>>(b"Resources").unwrap();
+    let fonts = resources.get::<Dict<'_>>(b"Font").unwrap();
+    let mapping_of = |key: &[u8]| {
+        let font = fonts.get::<Dict<'_>>(key).unwrap();
+        let cmap = font.get::<Stream<'_>>(b"ToUnicode").unwrap().decoded().unwrap().into_owned();
+        let cmap = String::from_utf8(cmap).unwrap();
+        let mut mapping = HashMap::<u16, String>::new();
+        let mut in_char_map = false;
+        for line in cmap.lines() {
+            if line.ends_with("beginbfchar") {
+                in_char_map = true;
+            } else if line == "endbfchar" {
+                in_char_map = false;
+            } else if in_char_map {
+                let parts: Vec<_> = line.split_whitespace().collect();
+                let cid = u16::from_str_radix(parts[0].trim_matches(['<', '>']), 16).unwrap();
+                let value = parts[1].trim_matches(['<', '>']);
+                let units: Vec<_> = value
+                    .as_bytes()
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|chunk| u16::from_str_radix(std::str::from_utf8(chunk).unwrap(), 16).unwrap())
+                    .collect();
+                mapping.insert(cid, String::from_utf16(&units).unwrap());
+            }
         }
-    }
-    let mut extracted = String::new();
-    let mut append = |bytes: &[u8]| {
+        mapping
+    };
+    let (mut extracted, mut cids) = (String::new(), Vec::new());
+    let mut mapping = HashMap::new();
+    let mut append = |mapping: &HashMap<u16, String>, bytes: &[u8]| {
         assert!(bytes.len().is_multiple_of(2));
         for pair in bytes.as_chunks::<2>().0 {
-            extracted.push_str(mapping.get(&u16::from_be_bytes([pair[0], pair[1]])).unwrap());
+            let cid = u16::from_be_bytes([pair[0], pair[1]]);
+            cids.push(cid);
+            extracted.push_str(mapping.get(&cid).map_or("\u{FFFD}", String::as_str));
         }
     };
     let mut operations = page.typed_operations();
     while let Some(operation) = operations.next() {
         match operation {
-            TypedInstruction::ShowText(value) => append(value.0.as_bytes()),
+            TypedInstruction::TextFont(font) => mapping = mapping_of(font.0.as_ref()),
+            TypedInstruction::ShowText(value) => append(&mapping, value.0.as_bytes()),
             TypedInstruction::ShowTexts(values) => {
                 for value in values.0.iter::<Object<'_>>() {
                     if let Object::String(value) = value {
-                        append(value.as_bytes());
+                        append(&mapping, value.as_bytes());
                     }
                 }
             }
             _ => {}
         }
     }
-    assert_eq!(extracted, text);
+    (extracted, cids)
+}
+
+/// A deck whose default text language is Japanese (`a:defPPr lang="ja-JP"`), with Japanese
+/// speaker notes long enough to wrap several times on a notes page.
+fn japanese_notes_deck() -> (Presentation, String) {
+    use deckcraft_model::text::{LevelStyle, RunProps};
+    let mut p = deck(1);
+    p.default_text_style.default = Some(LevelStyle { run: RunProps { lang: Some("ja-JP".into()), ..Default::default() }, ..Default::default() });
+    let notes = "本日の議題は、来期の売上目標と新製品の発売計画についてです。".repeat(7);
+    Arc::make_mut(&mut p.slides[0]).notes = TextBody::from_text(&notes);
+    (p, notes)
+}
+
+/// Notes Pages print the speaker notes as PowerPoint does, laid out by the slide text engine:
+/// Japanese notes take a face that has their kana and kanji (no .notdef boxes), wrap between
+/// characters within the notes area with kinsoku (no line starts with 、 or 。), and come back
+/// out of the PDF as the same text.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn japanese_notes_pages_are_laid_out_by_the_text_engine() {
+    use hayro_syntax::object::Dict;
+    let (p, notes) = japanese_notes_deck();
+    let paper = (612.0, 792.0);
+    let frame = notes_frames(&p, paper).1;
+    let k = paper.1 / p.notes_size.height;
+    let pt = deckcraft_render::place_notes_text(&p, 0, frame, k).expect("notes");
+    assert!(pt.layout.lines.len() >= 3, "wraps: {} lines", pt.layout.lines.len());
+    let mut ys: Vec<i64> = vec![];
+    for run in pt.layout.runs.iter().filter(|r| !r.glyphs.is_empty()) {
+        assert!((run.size * k - 12.0 * k).abs() < 0.01, "the default 12 pt notes style, scaled to the paper: {}", run.size);
+        for &(gid, x, y) in &run.glyphs {
+            assert_ne!(gid, 0, ".notdef in {}", run.face.family);
+            let q = pt.transform * kurbo::Point::new(x, y);
+            // A hanging 。 or 、 may stand up to one character past the right edge.
+            assert!(q.x >= frame.x0 - 0.01 && q.x <= frame.x1 + run.size * k, "inside the notes area: {q:?} {frame:?}");
+            ys.push(q.y.round() as i64);
+        }
+    }
+    ys.dedup();
+    assert!(ys.len() >= 3, "on several baselines: {ys:?}");
+    let chars: Vec<char> = notes.chars().collect();
+    for l in pt.layout.lines.iter().skip(1) {
+        assert!(!matches!(chars.get(l.start), Some('、' | '。')), "kinsoku: a line starts with {:?}", chars.get(l.start));
+    }
+    // Exported: real text in a face other than the UI font, every glyph a real one, which reads
+    // back as the notes.
+    let bytes = export(&p, &opts(PageLayout::Notes)).unwrap();
+    let pdf = hayro_syntax::Pdf::new(bytes).unwrap();
+    let page = &pdf.pages()[0];
+    let (text, cids) = page_text(page);
+    assert!(!cids.contains(&0), "no .notdef glyphs");
+    assert!(text.contains(&notes), "the notes read back: {text}");
+    let fonts = page.raw().get::<Dict<'_>>(b"Resources").unwrap().get::<Dict<'_>>(b"Font").unwrap();
+    assert!(fonts.len() >= 2, "the notes' East Asian face besides the slide's Latin one");
+}
+
+/// The notes master's body placeholder and notes styles shape the printed notes: its frame, its
+/// text size and colour, and bullets.
+#[test]
+fn notes_follow_the_notes_master_body_and_styles() {
+    use deckcraft_model::text::{Bullet, LevelStyle, ParaProps, RunProps};
+    use deckcraft_model::{ColorRef, Fill, PhType, Rgba};
+    let (mut p, _) = japanese_notes_deck();
+    p.notes_size = deckcraft_model::Size::new(612.0, 792.0);
+    let mut body_style = deckcraft_model::text::ListStyle::default();
+    body_style.set(
+        0,
+        LevelStyle {
+            para: ParaProps { bullet: Some(Bullet::Char { char: "•".into() }), margin_left: Some(18.0), indent: Some(-18.0), ..Default::default() },
+            run: RunProps { size: Some(20.0), fill: Some(Fill::solid(ColorRef::rgb(Rgba::rgb(0, 0, 200)))), ..Default::default() },
+        },
+    );
+    p.notes_master = Some(Arc::new(deckcraft_model::Master {
+        shapes: vec![ph(PhType::SlideImage, 100.0, 40.0, 412.0, 240.0, ""), ph(PhType::Body, 60.0, 400.0, 300.0, 300.0, "")],
+        body_style,
+        theme: p.masters[0].theme.clone(),
+        ..Default::default()
+    }));
+    let paper = (612.0, 792.0);
+    let frame = notes_frames(&p, paper).1;
+    assert_eq!(frame, Rect::new(60.0, 400.0, 360.0, 700.0));
+    let pt = deckcraft_render::place_notes_text(&p, 0, frame, 1.0).expect("notes");
+    let runs: Vec<_> = pt.layout.runs.iter().filter(|r| !r.glyphs.is_empty()).collect();
+    assert!(runs.iter().all(|r| (r.size - 20.0).abs() < 0.01 && r.color == Rgba::rgb(0, 0, 200)), "{runs:?}");
+    assert!(runs.iter().any(|r| r.cells.is_empty()), "a bullet");
+    for r in &runs {
+        for &(_, x, _) in &r.glyphs {
+            let q = pt.transform * kurbo::Point::new(x, 0.0);
+            assert!(q.x >= 60.0 - 0.01 && q.x <= 360.0 + 20.0, "{q:?}");
+        }
+    }
+    assert!(export(&p, &opts(PageLayout::Notes)).is_ok());
+}
+
+/// The catalog names the deck's language (`/Lang`) as PowerPoint's PDFs do: the default text
+/// style's, else the first run's that names one; nothing for a deck without a language or with
+/// a malformed one.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn pdf_catalog_names_the_deck_language() {
+    use hayro_syntax::object::Dict;
+    let lang_of = |p: &Presentation| {
+        let bytes = export(p, &opts(PageLayout::Slides)).unwrap();
+        let pdf = hayro_syntax::Pdf::new(bytes).unwrap();
+        let catalog = pdf.xref().get::<Dict<'_>>(pdf.xref().root_id()).unwrap();
+        catalog.get::<hayro_syntax::object::String<'_>>(b"Lang").map(|s| String::from_utf8_lossy(s.as_bytes()).into_owned())
+    };
+    let (p, _) = japanese_notes_deck();
+    assert_eq!(document_language(&p).as_deref(), Some("ja-JP"));
+    assert_eq!(lang_of(&p).as_deref(), Some("ja-JP"));
+    // No default language: the first run that names one.
+    let mut p = deck(2);
+    if let Some(run) = Arc::make_mut(&mut p.slides[1])
+        .shapes
+        .first_mut()
+        .and_then(|s| s.text.as_mut())
+        .and_then(|t| t.paragraphs.first_mut())
+        .and_then(|p| p.runs.first_mut())
+    {
+        run.props.lang = Some("en-GB".into());
+    }
+    p.default_text_style.default = None;
+    if let Some(l) = p.default_text_style.levels.first_mut().and_then(Option::as_mut) {
+        l.run.lang = None;
+    }
+    assert_eq!(lang_of(&p).as_deref(), Some("en-GB"));
+    for bad in ["日本語", "", "en US", "ja--JP", "toolongsubtag-JP"] {
+        let mut q = deck(1);
+        q.default_text_style.default = None;
+        if let Some(l) = q.default_text_style.levels.first_mut().and_then(Option::as_mut) {
+            l.run.lang = Some(bad.into());
+        }
+        assert_eq!(lang_of(&q), None, "{bad:?}");
+    }
 }
 
 /// Notes pages and handouts print on the chosen paper, landscape included, with every slide box

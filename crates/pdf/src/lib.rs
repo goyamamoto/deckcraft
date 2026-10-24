@@ -6,7 +6,10 @@
 //! Hyperlinks and shape actions become link annotations, slide titles become bookmarks.
 //!
 //! Layouts: one slide per page, notes pages (slide above its speaker notes) and handouts (1, 2, 3,
-//! 4, 6 or 9 slides per page).
+//! 4, 6 or 9 slides per page). Speaker notes, and the header, footer, date and page number of the
+//! notes and handout masters, are laid out by the same text engine as slide text (formatting,
+//! bullets, East Asian and fallback faces, kinsoku line breaking) and written as visible text.
+//! The catalog names the deck's language (`/Lang`, e.g. `ja-JP`).
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
@@ -174,7 +177,7 @@ fn export_inner(pres: &Presentation, opts: &PdfOptions) -> Result<Vec<u8>> {
         authors: if pres.props.author.trim().is_empty() { Vec::new() } else { vec![pres.props.author.clone()] },
         ..Default::default()
     };
-    let mut writer = Writer::new(Default::default(), metadata);
+    let mut writer = Writer::new_with_language(Default::default(), metadata, document_language(pres));
     let pdf = writer.document_mut();
 
     let (sw, sh) = (pres.slide_size.width.max(1.0), pres.slide_size.height.max(1.0));
@@ -201,9 +204,13 @@ fn export_inner(pres: &Presentation, opts: &PdfOptions) -> Result<Vec<u8>> {
             }
             match opts.layout {
                 PageLayout::Notes => {
-                    if let Some((i, _)) = v.first() {
-                        let notes = pres.slides[*i].notes_text();
-                        ex.paragraphs(&mut s, &notes, notes_frames(pres, opts.paper).1, 12.0)?;
+                    // The notes in the notes master's body placeholder, sizes scaled from the notes
+                    // page to the paper as the master's header and footer are.
+                    if let Some((i, _)) = v.first()
+                        && let Some(pt) =
+                            deckcraft_render::place_notes_text(pres, *i, notes_frames(pres, opts.paper).1, ph / pres.notes_size.height.max(1.0))
+                    {
+                        ex.text_layer(&mut s, &pt, Affine::IDENTITY, true)?;
                     }
                     ex.page_texts(&mut s, pres.notes_master.as_deref(), pw, ph, v.first().map(|x| x.0 + 1).unwrap_or(1))?;
                 }
@@ -225,6 +232,41 @@ fn export_inner(pres: &Presentation, opts: &PdfOptions) -> Result<Vec<u8>> {
         page.finish();
     }
     writer.finish().map_err(Into::into)
+}
+
+/// The deck's language for the PDF catalog (`/Lang`), which screen readers and read-aloud use as
+/// they do in PowerPoint's PDFs: the default text style's (`a:defPPr`, then its first level;
+/// `ja-JP` in a deck made in Japanese PowerPoint), else that of the first run on a slide that
+/// names one. Only a plausible BCP 47 tag (ASCII letters and digits in hyphen-separated subtags)
+/// is written.
+pub fn document_language(pres: &Presentation) -> Option<String> {
+    let ok = |l: &&String| {
+        let l = l.trim();
+        !l.is_empty() && l.len() <= 35 && l.split('-').all(|p| (1..=8).contains(&p.len()) && p.bytes().all(|b| b.is_ascii_alphanumeric()))
+    };
+    let style = &pres.default_text_style;
+    let default = style.default.as_ref().and_then(|d| d.run.lang.as_ref()).or_else(|| style.level(0).and_then(|l| l.run.lang.as_ref()));
+    if let Some(l) = default.filter(ok) {
+        return Some(l.trim().to_string());
+    }
+    let mut found = None;
+    for slide in &pres.slides {
+        deckcraft_model::walk(&slide.shapes, &mut |sh, _| {
+            if found.is_none() {
+                found = sh
+                    .text
+                    .iter()
+                    .flat_map(|t| &t.paragraphs)
+                    .flat_map(|p| p.runs.iter().map(|r| &r.props).chain(std::iter::once(&p.end_props)))
+                    .find_map(|r| r.lang.as_ref().filter(ok))
+                    .cloned();
+            }
+        });
+        if found.is_some() {
+            break;
+        }
+    }
+    found.map(|l| l.trim().to_string())
 }
 
 /// A notes-size master's rect of placeholder `kind`, scaled to a page of `paper` points.
@@ -502,10 +544,20 @@ impl Exporter<'_> {
         Ok(())
     }
 
-    /// Invisible glyphs exactly over the rasterised text.
+    /// The text of `pt` as real glyphs: invisible exactly over the rasterised slide text, or
+    /// `visible` in the runs' own colours where nothing else draws it (speaker notes, the notes and
+    /// handout masters' header and footer), then with bullets and numbers, underlines,
+    /// strikethroughs and highlights, and a stroked (bold) or slanted (italic) face where the
+    /// family has no such style. Glyphs that stand upright in vertical text are turned back about
+    /// their em box as the slide renderer draws them.
     fn text_layer(&mut self, s: &mut Surface, pt: &PlacedText, view: Affine, visible: bool) -> Result<()> {
+        let at = view * pt.transform;
+        if visible {
+            decos(s, pt, at, true);
+        }
         for run in &pt.layout.runs {
-            if run.glyphs.is_empty() || run.size <= 0.0 {
+            let Some(&(_, x0, y0)) = run.glyphs.first() else { continue };
+            if !run.size.is_finite() || run.size <= 0.0 {
                 continue;
             }
             let text: String = pt
@@ -518,37 +570,59 @@ impl Exporter<'_> {
                 .skip(run.chars.0)
                 .take(run.chars.1.saturating_sub(run.chars.0))
                 .collect();
-            if text.trim().is_empty() {
+            // A bullet or number has no characters of its own: drawn, but it carries no text.
+            let bullet = run.cells.is_empty();
+            if text.trim().is_empty() && !(visible && bullet) {
                 continue;
             }
             let font = self.font(&run.face)?;
             let n = run.glyphs.len();
             let ranges = glyph_text_ranges(&text, run.chars, &run.cells, n);
-            let (x0, y0) = (run.glyphs[0].1, run.glyphs[0].2);
-            let kg: Vec<KrillaGlyph> = run
-                .glyphs
-                .iter()
-                .enumerate()
-                .map(|(gi, g)| {
-                    let next = run.glyphs.get(gi + 1).map_or(g.1 + run.face.advance(g.0) * run.size / run.face.upem.max(1.0), |nx| nx.1);
+            let c = run.color;
+            let (paint, opacity) = (krilla::color::rgb::Color::new(c.r, c.g, c.b), (f64::from(c.a) / 255.0 * run.alpha) as f32);
+            let opacity = NormalizedF32::new(opacity.clamp(0.0, 1.0)).unwrap_or(NormalizedF32::ONE);
+            s.set_fill(Some(if visible { Fill { paint: paint.into(), opacity, ..Default::default() } } else { grey(0, 0.0) }));
+            s.set_stroke((visible && run.fake_bold).then(|| krilla::paint::Stroke {
+                paint: paint.into(),
+                width: (run.size * 0.025) as f32,
+                opacity,
+                ..Default::default()
+            }));
+            let skew = if visible && run.fake_italic { Affine::new([1.0, 0.0, -0.2, 1.0, 0.0, 0.0]) } else { Affine::IDENTITY };
+            let advance = |gi: usize, g: &(u32, f64, f64)| {
+                run.glyphs.get(gi + 1).map_or(g.1 + run.face.advance(g.0) * run.size / run.face.upem.max(1.0), |nx| nx.1) - g.1
+            };
+            if run.upright {
+                // One glyph at a time, each turned about the centre of its em box.
+                for (gi, g) in run.glyphs.iter().enumerate() {
+                    let Some(c) = run.upright_centre(g.0, g.1, g.2) else { continue };
+                    let turn = Affine::translate(c) * Affine::rotate(-std::f64::consts::FRAC_PI_2) * Affine::translate((-c.0, -c.1));
                     let range = ranges.get(gi).cloned().unwrap_or(text.len()..text.len());
-                    KrillaGlyph::new(GlyphId::new(g.0), ((next - g.1) / run.size) as f32, 0.0, ((g.2 - y0) / run.size) as f32, 0.0, range, None)
-                })
-                .collect();
-            s.push_transform(&tf(view * pt.transform * Affine::translate((x0, y0))));
-            s.set_fill(Some(if visible {
-                let c = run.color;
-                Fill {
-                    paint: krilla::color::rgb::Color::new(c.r, c.g, c.b).into(),
-                    opacity: NormalizedF32::new((f64::from(c.a) / 255.0 * run.alpha) as f32).unwrap_or(NormalizedF32::ONE),
-                    ..Default::default()
+                    let adv = (run.face.advance(g.0) / run.face.upem.max(1.0)) as f32;
+                    let kg = [KrillaGlyph::new(GlyphId::new(g.0), adv, 0.0, 0.0, 0.0, range, None)];
+                    s.push_transform(&tf(at * turn * Affine::translate((g.1, g.2)) * skew));
+                    s.draw_glyphs(Point::from_xy(0.0, 0.0), &kg, font.clone(), &text, run.size as f32, false);
+                    s.pop();
                 }
             } else {
-                grey(0, 0.0)
-            }));
-            s.draw_glyphs(Point::from_xy(0.0, 0.0), &kg, font, &text, run.size as f32, false);
+                let kg: Vec<KrillaGlyph> = run
+                    .glyphs
+                    .iter()
+                    .enumerate()
+                    .map(|(gi, g)| {
+                        let range = ranges.get(gi).cloned().unwrap_or(text.len()..text.len());
+                        KrillaGlyph::new(GlyphId::new(g.0), (advance(gi, g) / run.size) as f32, 0.0, ((g.2 - y0) / run.size) as f32, 0.0, range, None)
+                    })
+                    .collect();
+                s.push_transform(&tf(at * Affine::translate((x0, y0)) * skew));
+                s.draw_glyphs(Point::from_xy(0.0, 0.0), &kg, font, &text, run.size as f32, false);
+                s.pop();
+            }
             s.set_fill(None);
-            s.pop();
+            s.set_stroke(None);
+        }
+        if visible {
+            decos(s, pt, at, false);
         }
         Ok(())
     }
@@ -581,45 +655,10 @@ impl Exporter<'_> {
         out
     }
 
-    fn ui_font(&mut self) -> Result<(Font, std::sync::Arc<deckcraft_fonts::FontFace>)> {
+    /// DeckCraft's own face, for the page number of a page without a master (digits only).
+    fn ui_font(&mut self) -> Result<Font> {
         let face = FontDb::global().face(deckcraft_fonts::DEFAULT_FAMILY, "Regular");
-        let f = self.font(&face)?;
-        Ok((f, face))
-    }
-
-    /// Wrapped plain text (notes).
-    fn paragraphs(&mut self, s: &mut Surface, text: &str, area: Rect, size: f64) -> Result<()> {
-        let (font, face) = self.ui_font()?;
-        let k = size / face.upem.max(1.0);
-        let width = |w: &str| w.chars().map(|c| face.advance(face.glyph_for(c)) * k).sum::<f64>();
-        let lh = size * 1.3;
-        let mut y = area.y0 + size;
-        s.set_fill(Some(grey(0x20, 1.0)));
-        'outer: for para in text.split('\n') {
-            let mut line = String::new();
-            for word in para.split(' ') {
-                let cand = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
-                if width(&cand) > area.width() && !line.is_empty() {
-                    if y > area.y1 {
-                        break 'outer;
-                    }
-                    s.draw_text(Point::from_xy(area.x0 as f32, y as f32), font.clone(), size as f32, &line, false, TextDirection::Auto);
-                    y += lh;
-                    line = word.to_string();
-                } else {
-                    line = cand;
-                }
-            }
-            if y > area.y1 {
-                break;
-            }
-            if !line.is_empty() {
-                s.draw_text(Point::from_xy(area.x0 as f32, y as f32), font.clone(), size as f32, &line, false, TextDirection::Auto);
-            }
-            y += lh;
-        }
-        s.set_fill(None);
-        Ok(())
+        self.font(&face)
     }
 
     /// Ruled lines for handwritten notes (3-per-page handouts).
@@ -656,7 +695,7 @@ impl Exporter<'_> {
         Ok(())
     }
     fn footer(&mut self, s: &mut Surface, pw: f64, ph: f64, n: usize) -> Result<()> {
-        let (font, _) = self.ui_font()?;
+        let font = self.ui_font()?;
         s.set_fill(Some(grey(0x60, 1.0)));
         s.draw_text(Point::from_xy((pw - 72.0) as f32, (ph - 30.0) as f32), font, 9.0, &n.to_string(), false, TextDirection::Auto);
         s.set_fill(None);
@@ -676,6 +715,37 @@ fn glyph_text_ranges(text: &str, chars: (usize, usize), cells: &[(usize, char)],
     heads.dedup();
     let end = |ci: usize| heads.get(heads.partition_point(|&h| h <= ci)).copied().unwrap_or(chars.1);
     (0..n).map(|gi| cells.get(gi).map_or(text.len()..text.len(), |&(ci, _)| byte(ci)..byte(end(ci)))).collect()
+}
+
+/// The highlights (`behind`) or the underlines and strikethroughs of `pt`'s text, `at` mapping its
+/// layout to the page: solid and dashed lines as filled boxes, wavy ones stroked.
+fn decos(s: &mut Surface, pt: &PlacedText, at: Affine, behind: bool) {
+    for d in pt.layout.decos.iter().filter(|d| d.behind == behind && d.color.a > 0) {
+        let c = d.color;
+        let paint = krilla::color::rgb::Color::new(c.r, c.g, c.b);
+        let opacity = NormalizedF32::new(f32::from(c.a) / 255.0).unwrap_or(NormalizedF32::ONE);
+        s.push_transform(&tf(at));
+        if let Some((pts, width)) = d.wave() {
+            let path = to_path(&kurbo::BezPath::from_vec(
+                pts.iter().enumerate().map(|(i, p)| if i == 0 { kurbo::PathEl::MoveTo(*p) } else { kurbo::PathEl::LineTo(*p) }).collect(),
+            ));
+            if let Some(path) = path {
+                s.set_fill(None);
+                s.set_stroke(Some(krilla::paint::Stroke { paint: paint.into(), width: width.max(0.01) as f32, opacity, ..Default::default() }));
+                s.draw_path(&path);
+                s.set_stroke(None);
+            }
+        } else {
+            s.set_fill(Some(Fill { paint: paint.into(), opacity, ..Default::default() }));
+            for r in d.pieces() {
+                if let Some(path) = to_path(&kurbo::Shape::to_path(&r, 0.1)) {
+                    s.draw_path(&path);
+                }
+            }
+            s.set_fill(None);
+        }
+        s.pop();
+    }
 }
 
 fn to_path(bp: &kurbo::BezPath) -> Option<krilla::geom::Path> {
