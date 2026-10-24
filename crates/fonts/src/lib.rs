@@ -11,19 +11,26 @@
 pub mod cjk;
 mod fallback;
 mod fontdb;
+#[cfg(test)]
+mod japanese_tests;
 pub mod script;
 mod shape;
+mod substitute;
+#[cfg(test)]
+mod test_fonts;
 
 pub use cjk::{CjkLocale, default_cjk_locale, set_default_cjk_locale};
 pub use fallback::{bundled_families, covers_cluster, is_emoji_cluster, ligature_carets};
 pub use fontdb::{
-    FALLBACK_FAMILY, FaceRef, FontDb, FontFace, LAST_RESORT_FAMILY, MISSING_FONT_FAMILY, base_style, bundled, substitutes, system_font_dirs,
+    FALLBACK_FAMILY, FaceRef, FontDb, FontFace, LAST_RESORT_FAMILY, LocalName, MISSING_FONT_FAMILY, base_style, bundled, fold_compact,
+    fold_font_name, name_language_matches, substitutes, system_font_dirs,
 };
 pub use harfrust::Feature;
 use harfrust::Tag;
 pub use kurbo::BezPath;
 pub use script::{FontSlot, ScriptTag};
 pub use shape::{ShapeParams, ShapedGlyph, shape_range};
+pub use substitute::{is_cjk_family, is_fixed_pitch_cjk_family, is_half_width_char};
 
 /// A font from the optional craft-fonts build input (https://github.com/storytold/craft-fonts;
 /// empty unless built with `CRAFT_FONTS_DIR`, see `build.rs`).

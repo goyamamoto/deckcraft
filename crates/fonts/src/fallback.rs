@@ -7,15 +7,24 @@
 //!    bundled for the script (Noto Naskh Arabic for Arabic), so every machine draws the same; then
 //!    openly licensed or OS-native families found by name among the installed fonts (no platform
 //!    API is called); then any installed face covering the cluster;
-//! 3. any loaded face (bundled first: Japanese keeps its craft-fonts faces), then the first
-//!    requested face (drawn as .notdef).
+//! 3. for Chinese, Japanese and Korean clusters (Han, kana, Hangul, bopomofo, CJK punctuation and
+//!    full-width forms): faces of the text's East Asian tradition — kana is always Japanese and
+//!    Hangul Korean; Han follows the run's language, else the system's East Asian language — so
+//!    a kanji in Japanese text never takes a Chinese face (Han unification gives both the same
+//!    code point, drawn differently). The craft-fonts faces of the requested genre come first
+//!    (a Mincho when the requested face is a serif one, else a gothic), then the platform's
+//!    families (Hiragino, Yu Gothic, Meiryo… for Japanese; PingFang SC, Microsoft YaHei… for
+//!    Simplified Chinese), in the requested style (bold text takes Hiragino W6 or Yu Gothic Bold);
+//! 4. any loaded face (bundled first; faces of the text's tradition first for East Asian text),
+//!    in the requested style when its family has it, then the first requested face (drawn as
+//!    .notdef).
 
 use std::sync::Arc;
 
 use skrifa::raw::TableProvider;
 
 use crate::script::{ScriptTag, script_of};
-use crate::{CRAFT_FONTS, FontDb, FontFace};
+use crate::{CRAFT_FONTS, CjkLocale, FontDb, FontFace};
 
 /// Variation selector 15: text presentation.
 const TEXT_SELECTOR: char = '\u{FE0E}';
@@ -123,19 +132,68 @@ pub fn bundled_families(script: ScriptTag) -> Vec<&'static str> {
     v
 }
 
+/// Kana: hiragana, katakana (full and half width, phonetic extensions, small kana and the kana
+/// supplements).
+fn is_kana(c: char) -> bool {
+    matches!(u32::from(c), 0x3040..=0x309F | 0x30A0..=0x30FF | 0x31F0..=0x31FF | 0xFF66..=0xFF9F | 0x1AFF0..=0x1B16F)
+}
+
+/// Hangul syllables and jamo.
+fn is_hangul(c: char) -> bool {
+    matches!(u32::from(c), 0x1100..=0x11FF | 0x3130..=0x318F | 0xA960..=0xA97F | 0xAC00..=0xD7FF | 0xFFA0..=0xFFDC)
+}
+
+/// Bopomofo.
+fn is_bopomofo(c: char) -> bool {
+    matches!(u32::from(c), 0x3100..=0x312F | 0x31A0..=0x31BF)
+}
+
+/// Is `c` drawn by an East Asian face: Han (radicals, strokes, ideographs, compatibility
+/// ideographs), kana, Hangul, bopomofo, CJK punctuation and symbols, enclosed CJK letters and
+/// compatibility characters, CJK compatibility forms and the half- and full-width forms?
+pub(crate) fn is_east_asian_char(c: char) -> bool {
+    is_kana(c)
+        || is_hangul(c)
+        || is_bopomofo(c)
+        || matches!(u32::from(c),
+            0x2E80..=0x2FDF
+            | 0x3000..=0x303F
+            | 0x3190..=0x319F
+            | 0x31C0..=0x31EF
+            | 0x3200..=0x33FF
+            | 0x3400..=0x4DBF
+            | 0x4E00..=0x9FFF
+            | 0xF900..=0xFAFF
+            | 0xFE30..=0xFE4F
+            | 0xFF00..=0xFFEF
+            | 0x20000..=0x323AF)
+}
+
+/// The East Asian tradition a cluster is drawn in: kana is always Japanese, Hangul always
+/// Korean, bopomofo Traditional Chinese; Han characters, CJK punctuation and full-width forms
+/// follow the text's tradition `cjk`. `None` for other clusters, and for shared characters in
+/// text with no tradition.
+pub(crate) fn east_asian_locale(cluster: &[char], cjk: Option<CjkLocale>) -> Option<CjkLocale> {
+    if cluster.iter().any(|c| is_kana(*c)) {
+        return Some(CjkLocale::Japanese);
+    }
+    if cluster.iter().any(|c| is_hangul(*c)) {
+        return Some(CjkLocale::Korean);
+    }
+    if cluster.iter().any(|c| is_bopomofo(*c)) {
+        return Some(CjkLocale::TraditionalChinese);
+    }
+    cjk.filter(|_| cluster.iter().any(|c| is_east_asian_char(*c)))
+}
+
 impl FontDb {
     /// [`FontDb::cascade`] for text in East Asian tradition `cjk` (the run's language, or the
-    /// system's East Asian language for Han text without one): Han characters the requested
-    /// faces lack fall back to a face of that tradition.
-    pub fn cascade_for(&self, cluster: &[char], chain: &[Arc<FontFace>], style: &str, cjk: Option<crate::CjkLocale>) -> Arc<FontFace> {
-        let _ = cjk;
-        self.cascade(cluster, chain, style)
-    }
-
-    /// The face for one grapheme cluster: the first of `chain` that draws all of it, else the
-    /// bundled face for its script, else an installed face for the script, else any loaded
-    /// face that draws it, else `chain[0]` (or the default face if `chain` is empty).
-    pub fn cascade(&self, cluster: &[char], chain: &[Arc<FontFace>], style: &str) -> Arc<FontFace> {
+    /// system's East Asian language for Han text without one): a Chinese, Japanese or Korean
+    /// cluster the requested faces lack takes a face of its tradition (kana always Japanese,
+    /// Hangul Korean), of the requested genre (a Mincho when the run's first face is serif, else
+    /// a gothic) and style (bold: Hiragino W6, Yu Gothic Bold), before any other loaded face.
+    /// With no tradition, Han text keeps the loaded-faces-first order.
+    pub fn cascade_for(&self, cluster: &[char], chain: &[Arc<FontFace>], style: &str, cjk: Option<CjkLocale>) -> Arc<FontFace> {
         // Emoji take a colour face (with its ZWJ sequences, skin tones and flags) before the
         // document's fonts, as PowerPoint draws them, even when a text font has a plain glyph.
         if is_emoji_cluster(cluster) {
@@ -161,6 +219,13 @@ impl FontDb {
         }
         let first = || chain.first().cloned().unwrap_or_else(|| self.face(crate::DEFAULT_FAMILY, style));
         let Some(key) = cluster.iter().copied().find(|c| !ignorable(*c)) else { return first() };
+        // Chinese, Japanese and Korean: a face of the text's tradition.
+        let tradition = east_asian_locale(cluster, cjk);
+        if let Some(l) = tradition
+            && let Some(f) = self.tradition_face(l, chain.first().is_some_and(|f| f.is_serif()), style, cluster)
+        {
+            return f;
+        }
         let script = cluster.iter().find_map(|c| script_of(*c));
         // Scripts with a platform cascade (Arabic, Hebrew, Thai, Devanagari): the bundled face,
         // then installed ones; the others keep the loaded-faces-first order (Japanese documents
@@ -190,7 +255,8 @@ impl FontDb {
             }
         }
         let exclude = chain.first().map(|f| f.id()).unwrap_or(u32::MAX);
-        let f = match self.fallback_for(key, exclude) {
+        let locale = tradition.or(cjk).or_else(crate::default_cjk_locale);
+        let f = match self.fallback_styled(key, exclude, style, locale) {
             Some(f) if covers_cluster(&f, cluster) => f,
             Some(f) if chain.iter().all(|c| !c.covers(key)) => f,
             // A letter with marks the run's font lacks (stacked combining marks): a loaded plain
@@ -212,6 +278,73 @@ impl FontDb {
             return plain;
         }
         f
+    }
+
+    /// The first face of tradition `locale`'s fallback families (craft-fonts faces of the genre
+    /// first: Mincho when `serif`, else gothic) that draws all of `cluster`, in `style`. Each
+    /// family is looked up (and its files loaded) once, the first time a cluster gets that far
+    /// down the list.
+    fn tradition_face(&self, locale: CjkLocale, serif: bool, style: &str, cluster: &[char]) -> Option<Arc<FontFace>> {
+        let style = crate::fontdb::plain_style(style);
+        let families = crate::substitute::fallback_families(locale, serif);
+        let key = (locale, serif, style);
+        // Families looked at so far.
+        let mut i = 0;
+        loop {
+            {
+                let cache = self.ea_faces.read().unwrap_or_else(std::sync::PoisonError::into_inner);
+                let known = cache.get(&key).map(Vec::as_slice).unwrap_or(&[]);
+                while let Some(entry) = known.get(i) {
+                    if let Some(f) = entry
+                        && covers_cluster(f, cluster)
+                    {
+                        return Some(f.clone());
+                    }
+                    i += 1;
+                }
+            }
+            // The next family, looked up outside the lock (it may load font files).
+            let fam = families.get(i)?;
+            let face = self.try_family(fam, style);
+            let mut cache = self.ea_faces.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let v = cache.entry(key).or_default();
+            // Another thread may have got here first: the entry is the same either way.
+            if v.len() == i {
+                v.push(face);
+            } else if v.len() < i {
+                // The cache was cleared by a rescan meanwhile: look again from the start.
+                i = 0;
+            }
+        }
+    }
+
+    /// A face for a character the interface fonts can't draw: for Chinese, Japanese and Korean
+    /// characters, the platform's interface face of the tradition (kana always Japanese, Hangul
+    /// Korean, Han following `cjk`: Hiragino on macOS, Yu Gothic UI or Meiryo UI on Windows for
+    /// Japanese), then any face as [`FontDb::fallback_for_filtered`] finds it, faces of the
+    /// tradition first. Only faces `accept`ed.
+    pub fn interface_fallback(&self, c: char, cjk: Option<CjkLocale>, accept: impl Fn(&FontFace) -> bool) -> Option<Arc<FontFace>> {
+        let locale = east_asian_locale(&[c], cjk);
+        if let Some(l) = locale {
+            for fam in crate::substitute::interface_families(l) {
+                if let Some(f) = self.try_family(fam, "Regular")
+                    && f.covers(c)
+                    && accept(&f)
+                {
+                    return Some(f);
+                }
+            }
+        }
+        self.fallback_in(c, u32::MAX, locale.or(cjk), &accept, false)
+    }
+
+    /// The face for one grapheme cluster: the first of `chain` that draws all of it, else the
+    /// bundled face for its script, else an installed face for the script, else any loaded
+    /// face that draws it, else `chain[0]` (or the default face if `chain` is empty). Kana and
+    /// Hangul take a face of their tradition, and other East Asian characters one of the
+    /// system's East Asian tradition when it is set ([`FontDb::cascade_for`]).
+    pub fn cascade(&self, cluster: &[char], chain: &[Arc<FontFace>], style: &str) -> Arc<FontFace> {
+        self.cascade_for(cluster, chain, style, None)
     }
 
     /// An installed (non-bundled) face covering the cluster, loading one from the system catalog
