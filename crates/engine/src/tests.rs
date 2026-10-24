@@ -4455,3 +4455,99 @@ fn duplicating_a_moved_copy_repeats_the_move() {
     assert_eq!(boxed(&mut s, f), (340.0 + off, 100.0 + off));
     assert_eq!(s.doc().unwrap().doc.validate(), Vec::<String>::new());
 }
+
+/// View › Window: the commands need the desktop app's window host and name a window from its
+/// list (an id, or a 1-based number), leaving a request the front end carries out; Next Window
+/// cycles the windows there, and the session's own presentations without a host.
+#[test]
+fn window_commands_need_a_host_and_name_an_open_window() {
+    let mut s = session();
+    let err = s.execute("view.arrangeAll", &json!({})).unwrap_err().to_string();
+    assert!(err.contains("desktop app"), "{err}");
+    assert!(s.execute("view.switchWindows", &json!({"window": 1})).is_err());
+    // Without a host, Next Window cycles the session's presentations.
+    s.execute("file.new", &json!({})).unwrap();
+    assert_eq!(s.active_index(), Some(1));
+    s.execute("window.next", &json!({})).unwrap();
+    assert_eq!(s.active_index(), Some(0));
+    s.execute("window.next", &json!({"index": 1})).unwrap();
+    assert_eq!(s.active_index(), Some(1));
+
+    let entry = |id: u64, title: &str| WindowEntry { id, title: title.into(), path: None, document: id, view: None };
+    s.windows = Windows { host: true, this: 5, list: vec![entry(5, "A"), entry(7, "B"), entry(9, "C")] };
+    assert_eq!(s.windows.count(), 3);
+    assert_eq!(s.windows.others().map(|w| w.id).collect::<Vec<_>>(), vec![7, 9]);
+    assert_eq!((s.windows.resolve(7), s.windows.resolve(2), s.windows.resolve(4)), (Some(7), Some(7), None), "an id, else a number");
+    assert_eq!(s.execute("view.arrangeAll", &json!({})).unwrap()["windows"], 3);
+    assert_eq!(s.execute("view.cascade", &json!({})).unwrap()["windows"], 3);
+    assert_eq!(s.execute("view.switchWindows", &json!({"window": 3})).unwrap()["window"], 9);
+    let err = s.execute("view.switchWindows", &json!({"window": 42})).unwrap_err().to_string();
+    assert!(err.contains("no window 42"), "{err}");
+    assert!(s.execute("view.switchWindows", &json!({})).is_err(), "`window` is required");
+    // Next Window goes round the list; from the last it comes back to the first.
+    assert_eq!(s.execute("window.next", &json!({})).unwrap()["window"], 7);
+    s.windows.this = 9;
+    assert_eq!(s.execute("window.next", &json!({})).unwrap()["window"], 5);
+    assert_eq!(s.execute("window.next", &json!({"window": 7})).unwrap()["window"], 7);
+    assert_eq!(s.active_index(), Some(1), "with a host the session's presentations are left alone");
+    let asked: Vec<(String, Option<u64>)> = s
+        .ui_requests
+        .iter()
+        .filter_map(|r| match r {
+            UiRequest::Window { action, window } => Some((action.clone(), *window)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        asked,
+        vec![
+            ("arrangeAll".to_string(), None),
+            ("cascade".to_string(), None),
+            ("switch".to_string(), Some(9)),
+            ("switch".to_string(), Some(7)),
+            ("switch".to_string(), Some(5)),
+            ("switch".to_string(), Some(7)),
+        ]
+    );
+
+    // Two windows on one presentation: the ones with the same document number.
+    s.windows.list[1].document = 9;
+    s.windows.list[1].view = Some(2);
+    s.windows.list[2].view = Some(1);
+    assert_eq!(s.windows.others_on_this_document().map(|w| w.id).collect::<Vec<_>>(), vec![7]);
+    s.windows.this = 5;
+    assert!(s.windows.others_on_this_document().next().is_none());
+}
+
+/// View › New Window: two views of one presentation take turns with the session, each keeping its
+/// own slide and selection; a view that comes back after the other window deleted its slide is
+/// brought within the presentation.
+#[test]
+fn views_of_one_presentation_take_turns_with_their_own_selection() {
+    let mut s = session();
+    s.execute("slide.new", &json!({})).unwrap();
+    s.execute("slide.new", &json!({})).unwrap();
+    s.execute("slide.go", &json!({"index": 2})).unwrap();
+    let id = s.execute("shape.insert", &json!({"preset": "rect", "rect": [10.0, 10.0, 100.0, 100.0]})).unwrap()["id"].as_u64().unwrap() as u32;
+    assert_eq!(s.doc().unwrap().selection.shapes.len(), 1);
+    // The second window starts from this view, then goes to the first slide.
+    let mut other = s.clone_view();
+    assert_eq!(other.selection.slide, 2);
+    s.swap_view(&mut other);
+    s.execute("slide.go", &json!({"index": 0})).unwrap();
+    assert!(s.doc().unwrap().selection.shapes.is_empty());
+    // Back to the first view: its slide and selection are its own.
+    s.swap_view(&mut other);
+    assert_eq!(s.doc().unwrap().selection.slide, 2);
+    assert_eq!(s.doc().unwrap().selection.shapes, vec![deckcraft_model::ShapeId(id)]);
+    assert_eq!(other.selection.slide, 0);
+    // The first view deletes its slide and shape; the second view's turn still has slide 0, and a
+    // view pointing at the deleted slide is clamped when it comes back.
+    s.execute("slide.delete", &json!({"index": 2})).unwrap();
+    s.swap_view(&mut other);
+    assert_eq!(s.doc().unwrap().selection.slide, 0);
+    other.selection.slide = 2;
+    s.swap_view(&mut other);
+    assert_eq!(s.doc().unwrap().selection.slide, 1, "clamped to the last slide");
+    assert!(s.doc().unwrap().selection.shapes.is_empty(), "the deleted shape is no longer selected");
+}

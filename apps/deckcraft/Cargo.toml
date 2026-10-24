@@ -42,6 +42,11 @@ fmv-macos-events = "=0.1.0"
 # caret is reported to the input method each frame, so it can read committed text and reconvert
 # it (`main.rs`, `deckcraft_ui_egui::ime`). Already in the build through eframe, at this version.
 winit = { version = "0.30", default-features = false }
+# The screen's work area (the desktop less the menu bar and the Dock), for Arrange All and Cascade
+# (`screens.rs`): safe calls in these bindings. Already in the build through winit, rfd and
+# arboard, at this version; this adds only the application, window and screen bindings.
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSWindow", "NSResponder", "NSScreen", "NSGraphics"] }
+objc2 = "0.6"
 
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
 winit = { version = "0.30", default-features = false, features = ["x11"] }

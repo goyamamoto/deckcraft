@@ -104,19 +104,19 @@ struct Measured {
 }
 
 fn frame_id() -> Id {
-    Id::new("ribbon_fit_frame")
+    crate::wid("ribbon_fit_frame")
 }
 fn measured_id() -> Id {
-    Id::new("ribbon_fit_measured")
+    crate::wid("ribbon_fit_measured")
 }
 fn compact_id() -> Id {
-    Id::new("ribbon_fit_compact")
+    crate::wid("ribbon_fit_compact")
 }
 fn saving_id() -> Id {
-    Id::new("ribbon_fit_saving")
+    crate::wid("ribbon_fit_saving")
 }
 fn active_id() -> Id {
-    Id::new("ribbon_fit_active")
+    crate::wid("ribbon_fit_active")
 }
 
 /// What the measured widths depend on besides the groups themselves: the interface language, the
@@ -289,7 +289,7 @@ pub fn end_column(ui: &egui::Ui) {
 }
 
 fn column_id() -> Id {
-    Id::new("ribbon_fit_column")
+    crate::wid("ribbon_fit_column")
 }
 
 /// The level this frame planned for the first group called `title` (tests).

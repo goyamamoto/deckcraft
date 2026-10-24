@@ -1,6 +1,6 @@
 # UI parity with PowerPoint
 
-> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-23 · **Change:** trivial (scroll bars on the zoomed slide pane, #1157; previous: major, community PR wave 2026-10-14: 14 new dialogs (41 in all), Eyedropper, Export button, New Window, Grid Options, WordArt gallery and handles, Slide Sorter sections, Quick Access Toolbar, Format Background and Format Shape depth, rich-text clipboard; duplicated rows and headers folded; previous: minor, File tab / Backstage, #76) · **Target:** Microsoft PowerPoint for Mac 16.113 (Microsoft 365)
+> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-25 · **Change:** minor (presentation windows: one window per presentation, New Window as a second window on one presentation, Arrange All, Cascade, Switch Windows; previous: trivial, scroll bars on the zoomed slide pane, #1157; previous: major, community PR wave 2026-10-14: 14 new dialogs (41 in all), Eyedropper, Export button, New Window, Grid Options, WordArt gallery and handles, Slide Sorter sections, Quick Access Toolbar, Format Background and Format Shape depth, rich-text clipboard; duplicated rows and headers folded; previous: minor, File tab / Backstage, #76) · **Target:** Microsoft PowerPoint for Mac 16.113 (Microsoft 365)
 > **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-22 · **Change:** trivial (group fill and outline edits reach members, #1079; scores unchanged) · **Target:** Microsoft PowerPoint for Mac 16.113 (Microsoft 365)
 
 How DeckCraft looks and feels next to PowerPoint: the shell, the ribbon, menus, panes, dialogs,
@@ -30,7 +30,7 @@ ends and are omitted from thumbnails, slide shows and exports.
 | Status bar: slide counter, language, notes, comments, views, zoom slider | yes | yes | |
 | Command search (Tell Me) | yes | command palette | |
 | Light / dark appearance | follows the system | light or dark; doesn't follow the system (#41) | 1–2 h |
-| One window per presentation, New Window, Arrange All | yes | New Window opens one more window on the same presentation (its own slide, live with edits); tabs stay in the first window; no Arrange All | Arrange All |
+| One window per presentation, New Window, Arrange All | yes | yes: File › New and File › Open put the presentation in a window of its own (a window showing nothing, or an untouched new presentation, takes an opened file itself; a file already open comes forward), File › Close closes the presentation's window and the last window stays on the start screen; View › New Window opens a second window on the same presentation (`Presentation1:1` and `:2`: one presentation, one undo history, each window with its own slide and selection); Arrange All tiles the windows side by side (a grid past three), Cascade stacks them a step apart, Switch Windows lists them and Next Window (⌘`) cycles; quitting asks about each unsaved presentation in its window. `crates/ui-egui/src/windows.rs` | Arrange All and Cascade geometry not yet compared with PowerPoint for Mac |
 | Quick Access Toolbar customization | yes | yes: Customize menu (common commands, reset), right-click any ribbon button to add, right-click a toolbar button to remove; saved with the UI state | done |
 
 ## File tab (Backstage)
@@ -158,16 +158,15 @@ consistency is open (#73, #56).
 | Format Shape pane depth | 6–10 |
 | Missing dialogs (Print, Insert Object and the rest of PowerPoint's ~60) | 4–8 |
 | Window chrome and system appearance (#41, #71) | 3–5 |
-| Arrange All (New Window is one extra window) | 2–3 |
 | Edit points UI, crop depth | 3–6 |
-| Multiple windows | 3–5 |
 | A screenshot comparison pass on the most-used tabs | 2–4 |
-| **Total** | **~26–46** |
+| **Total** | **~21–38** |
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-25 | minor | Presentation windows: one window per presentation (New, Open, Close, the close button and quitting as PowerPoint has them), View › New Window as a real second window with its own slide, Arrange All, Cascade, Switch Windows and Next Window; the control channel lists windows (`ui.windows`) and routes requests by `window`. Estimates drop the two window rows (~21–38 h) |
 | 2026-10-23 | trivial | Scroll bars on the zoomed slide pane (#1157) |
 | 2026-10-23 | minor | Shape Fill and Shape Outline (Home and Shape Format): the button applies the last colour picked from its menu, Accent 1 and Text 1 until one is picked. Line weight and dashes are not changed by the button; Font Color and Highlight stay as they were (#1080) |
 | 2026-10-22 | trivial | Group fill and outline commands reach members, including nested groups; selection and single-step undo are preserved (#1079). The existing Arrange / Group checklist score stays D |

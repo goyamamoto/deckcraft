@@ -444,6 +444,90 @@ pub enum UiRequest {
         shape: ShapeId,
         ms: Option<u64>,
     },
+    /// View › Window, carried out by the window host (`deckcraft_ui_egui::windows`): `action` is
+    /// `arrangeAll`, `cascade`, `switch` (to the window `window`) or `newWindow`.
+    Window {
+        action: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        window: Option<u64>,
+    },
+}
+
+/// The presentation windows the front end has open, one per presentation, as the desktop app
+/// reports them to every window's session before each frame (`deckcraft_ui_egui::windows`). The
+/// session owns no window: the View › Window commands check their parameters here and leave a
+/// [`UiRequest::Window`] the front end carries out. Headless sessions, the browser and the CLI
+/// have no window host: `host` stays false and those commands are disabled.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Windows {
+    /// The front end can open, place and switch windows.
+    pub host: bool,
+    /// This window's id.
+    pub this: u64,
+    /// Every open window, in the order Switch Windows lists them (the order they were opened in).
+    pub list: Vec<WindowEntry>,
+}
+
+/// One open window: its id, the title it shows and the presentation in it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct WindowEntry {
+    pub id: u64,
+    pub title: String,
+    /// The presentation's file, when it has one: a file already open comes to the front instead
+    /// of opening twice.
+    pub path: Option<String>,
+    /// The presentation the window shows (View › New Window puts two windows on one): windows
+    /// with the same number show the same presentation; 0 when the host doesn't say.
+    pub document: u64,
+    /// The window's number among the windows on its presentation (`Presentation1:2`), when it
+    /// has several.
+    pub view: Option<u32>,
+}
+
+impl Windows {
+    /// How many windows are open; one for a host that reported nothing.
+    pub fn count(&self) -> usize {
+        self.list.len().max(1)
+    }
+    /// This window's entry, when the host reported one.
+    pub fn this_entry(&self) -> Option<&WindowEntry> {
+        self.list.iter().find(|w| w.id == self.this)
+    }
+    /// The other windows, in the Switch Windows order.
+    pub fn others(&self) -> impl Iterator<Item = &WindowEntry> {
+        self.list.iter().filter(|w| w.id != self.this)
+    }
+    /// The other windows on this window's presentation (View › New Window).
+    pub fn others_on_this_document(&self) -> impl Iterator<Item = &WindowEntry> {
+        let doc = self.this_entry().map(|w| w.document).filter(|d| *d != 0);
+        self.others().filter(move |w| Some(w.document) == doc)
+    }
+    /// The window `n` names: an id in the list, or else a 1-based position in it.
+    pub fn resolve(&self, n: u64) -> Option<u64> {
+        if self.list.iter().any(|w| w.id == n) {
+            return Some(n);
+        }
+        usize::try_from(n).ok().and_then(|i| i.checked_sub(1)).and_then(|i| self.list.get(i)).map(|w| w.id)
+    }
+    /// The window after this one in the list, wrapping round (Next Window); `None` with no other.
+    pub fn next(&self) -> Option<u64> {
+        let n = self.list.len();
+        if n < 2 {
+            return None;
+        }
+        let i = self.list.iter().position(|w| w.id == self.this)?;
+        self.list.get((i + 1) % n).map(|w| w.id)
+    }
+}
+
+/// What is one window's own when several windows show one presentation (View › New Window): the
+/// slide, the selected shapes and text. The windows take turns holding the session; the one that
+/// hands it over keeps its view here ([`Session::swap_view`]).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ViewSlot {
+    pub selection: Selection,
 }
 
 /// Playback state of a media shape as the UI host reports it (see [`Session::media_status`]).
@@ -519,6 +603,9 @@ pub struct Session {
     /// Presentations a host read off the UI thread, waiting for `file.adopt` (by token).
     loaded: Vec<(u64, cmd::file::LoadedFile)>,
     next_loaded: u64,
+    /// The presentation windows the front end has open, as it reports them before each frame
+    /// ([`Windows`]); the View › Window commands check their parameters against them.
+    pub windows: Windows,
 }
 
 impl Default for Session {
@@ -552,6 +639,7 @@ impl Session {
             panics_caught: 0,
             loaded: vec![],
             next_loaded: 0,
+            windows: Windows::default(),
         }
     }
     /// Hand over a presentation read on another thread ([`cmd::file::read_presentation_file`]);
@@ -637,9 +725,44 @@ impl Session {
             self.active = if self.docs.is_empty() { None } else { Some(i.min(self.docs.len() - 1)) };
         }
     }
+    /// Take a presentation out of the session without closing it (its recovery entry stays): the
+    /// window host moves it to a window of its own (`deckcraft_ui_egui::windows`).
+    pub fn take_document(&mut self, i: usize) -> Option<DocState> {
+        if i >= self.docs.len() {
+            return None;
+        }
+        let d = self.docs.remove(i);
+        self.active = if self.docs.is_empty() { None } else { Some(self.active.unwrap_or(0).min(self.docs.len() - 1)) };
+        Some(d)
+    }
     pub fn next_untitled(&mut self) -> String {
         self.untitled += 1;
         format!("Presentation{}", self.untitled)
+    }
+    /// How many untitled presentations this session has named (`Presentation1`, `Presentation2`…).
+    pub fn untitled_count(&self) -> u32 {
+        self.untitled
+    }
+    /// Carry the count on from another session, so windows that each have a session of their own
+    /// (`deckcraft_ui_egui::windows`) don't name two new presentations alike.
+    pub fn set_untitled_count(&mut self, n: u32) {
+        self.untitled = self.untitled.max(n);
+    }
+    /// View › New Window: this window's view of the active presentation, for another window to
+    /// start from.
+    pub fn clone_view(&self) -> ViewSlot {
+        ViewSlot { selection: self.active().map(|d| d.selection.clone()).unwrap_or_default() }
+    }
+    /// View › New Window: the windows on one presentation take turns holding the session. The
+    /// incoming view in `slot` becomes the active presentation's selection and the outgoing one is
+    /// kept in `slot`; a composition in progress is settled first, and the incoming selection is
+    /// brought within the presentation as it is now (the other window may have deleted its slide
+    /// or shapes).
+    pub fn swap_view(&mut self, slot: &mut ViewSlot) {
+        self.end_composition();
+        let Some(st) = self.active_mut() else { return };
+        std::mem::swap(&mut st.selection, &mut slot.selection);
+        clamp_selection(st);
     }
 
     /// Run command `id`. A panic inside it becomes [`EngineError::Internal`] and leaves the

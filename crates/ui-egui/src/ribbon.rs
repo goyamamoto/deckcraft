@@ -211,10 +211,15 @@ pub fn title_bar(app: &mut SlideApp, ui: &mut Ui) {
         let has_doc = app.session.active().is_some();
         let dirty = app.session.active().is_some_and(|d| d.is_dirty());
         crate::qat::show(app, &mut child);
+        // Several windows on one presentation are numbered, as PowerPoint's `Presentation1:2`.
+        let name = |d: &deckcraft_engine::DocState| match app.view_number {
+            Some(n) => format!("{}:{n}", d.title()),
+            None => d.title(),
+        };
         let title = app
             .session
             .active()
-            .map(|d| if dirty { crate::i18n::fmt(tl!("{title} — Edited"), &[("title", &d.title())]) } else { d.title() })
+            .map(|d| if dirty { crate::i18n::fmt(tl!("{title} — Edited"), &[("title", &name(d))]) } else { name(d) })
             .unwrap_or_else(|| "DeckCraft".into());
         ui.painter().text(rect.center(), Align2::CENTER_CENTER, title, theme::font(13.0), t.text);
         // Right side.
@@ -2614,10 +2619,46 @@ fn view(app: &mut SlideApp, ui: &mut Ui) {
     });
     group(ui, "Window", Icon::NewWindow, |ui| {
         let has = app.session.active().is_some();
-        let on = app.doc_window.is_some();
+        let host = app.session.windows.host;
+        let on = app.doc_window.is_some() || app.view_number.is_some();
         let resp = big_button_ex(ui, Icon::NewWindow, "New\nWindow", has, false, on).0;
         if resp.on_hover_text(tl!("Open another window on this presentation")).clicked() {
             let _ = app.run("view.newWindow", json!({}));
+        }
+        // The desktop app has windows to arrange; the web app and the CLI have one.
+        let resp = big_button_ex(ui, Icon::ArrangeAll, "Arrange\nAll", host, false, false).0;
+        if resp.on_hover_text(tl!("Tile every open window across the screen")).clicked() {
+            let _ = app.run("view.arrangeAll", json!({}));
+        }
+        let resp = big_button_ex(ui, Icon::Cascade, "Cascade", host, false, false).0;
+        if resp.on_hover_text(tl!("Stack every open window a step apart")).clicked() {
+            let _ = app.run("view.cascade", json!({}));
+        }
+        let (main, arrow) = big_button_ex(ui, Icon::SwitchWindows, "Switch\nWindows", host, true, false);
+        let main = main.on_hover_text(tl!("Bring another window to the front"));
+        for anchor in std::iter::once(&main).chain(arrow.as_ref()) {
+            egui::Popup::menu(anchor).show(|ui| {
+                let windows: Vec<(u64, String, bool)> = app
+                    .session
+                    .windows
+                    .list
+                    .iter()
+                    .map(|w| {
+                        let title = match w.view {
+                            Some(n) => format!("{}:{n}", w.title),
+                            None => w.title.clone(),
+                        };
+                        (w.id, title, w.id == app.session.windows.this)
+                    })
+                    .collect();
+                for (n, (id, title, this)) in windows.into_iter().enumerate() {
+                    let label = format!("{} {title}", n + 1);
+                    if ui.add(egui::Button::selectable(this, label)).clicked() {
+                        let _ = app.run("view.switchWindows", json!({"window": id}));
+                        ui.close();
+                    }
+                }
+            });
         }
     });
     group(ui, "Appearance", Icon::Grayscale, |ui| {
@@ -3940,7 +3981,7 @@ fn smooth_corners_row(app: &mut SlideApp, ui: &mut egui::Ui) {
     }) else {
         return;
     };
-    let key = egui::Id::new(("deckcraft-smooth-corners", id.0));
+    let key = crate::wid(("deckcraft-smooth-corners", id.0));
     let mut state: (f64, f64) = ui.data(|d| d.get_temp(key)).unwrap_or((radius.unwrap_or(0.0), 0.0));
     if let Some(r) = radius {
         state.0 = r;
@@ -3966,7 +4007,7 @@ fn smooth_corners_row(app: &mut SlideApp, ui: &mut egui::Ui) {
 /// Insert Zoom dialogs do (a checklist of slides or sections).
 fn zoom_menu(app: &mut SlideApp, ui: &mut Ui) {
     let Some(doc) = app.session.active().map(|d| d.doc.clone()) else { return };
-    let id = egui::Id::new("insert_zoom_menu");
+    let id = crate::wid("insert_zoom_menu");
     let (mut kind, mut picked): (u8, Vec<usize>) = ui.data_mut(|d| d.get_temp(id).unwrap_or((0, vec![])));
     ui.horizontal(|ui| {
         for (k, label) in [(0u8, "Slide Zoom"), (1, "Section Zoom"), (2, "Summary Zoom")] {
@@ -4023,7 +4064,7 @@ fn zoom_menu(app: &mut SlideApp, ui: &mut Ui) {
 /// Compress Pictures options, as in PowerPoint's dialog: resolution, apply to this picture or
 /// all, delete cropped areas. The choices last for the session.
 fn compress_menu(app: &mut SlideApp, ui: &mut Ui) {
-    let id = egui::Id::new("compress_pictures_opts");
+    let id = crate::wid("compress_pictures_opts");
     let (mut ppi, mut only_selected, mut delete_cropped): (u32, bool, bool) = ui.data_mut(|d| d.get_temp(id).unwrap_or((220, true, true)));
     ui.label(egui::RichText::new(tl!("Compression options")).strong());
     ui.checkbox(&mut only_selected, tl!("Apply only to this picture"));

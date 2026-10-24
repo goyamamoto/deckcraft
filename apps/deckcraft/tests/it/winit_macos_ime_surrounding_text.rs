@@ -98,7 +98,9 @@ fn winit_answers_the_input_method_from_the_reported_surrounding_text() {
     // The range belongs to the frame whose Preedit or Commit came with it: taken every frame (a
     // commit-only frame carries one too), never left for a later commit elsewhere.
     assert!(main.contains("egui::ImeEvent::Preedit { .. } | egui::ImeEvent::Commit(_)"), "a commit-only frame takes the range named with it");
-    assert!(main.contains("self.0.ime.replace = named.filter("), "every frame replaces the last frame's range");
+    // The input method talks to the focused window, whose input this is: the range goes to that
+    // window's app through the window host.
+    assert!(main.contains("w.app.ime.replace = named.filter("), "every frame replaces the last frame's range");
 }
 
 /// The text the input method reads right after it changed the marked text, before the next

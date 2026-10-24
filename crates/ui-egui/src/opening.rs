@@ -29,6 +29,11 @@ impl SlideApp {
             self.set_status(format!("Still opening {name}"));
             return;
         }
+        // A file already open in another window comes to the front instead of opening twice.
+        if let Some(open) = self.window_showing(path) {
+            self.window_requests.push(crate::windows::WindowRequest::Focus(open));
+            return;
+        }
         #[cfg(target_arch = "wasm32")]
         {
             if let Err(e) = self.open_path(path) {
@@ -79,7 +84,10 @@ impl SlideApp {
                 // Into the session through the command path, like file.open: journaled and guarded.
                 let token = self.session.stage_loaded(f);
                 match self.session.execute("file.adopt", &serde_json::json!({"path": o.path, "token": token})) {
-                    Ok(_) => self.note_recent(&o.path),
+                    Ok(_) => {
+                        self.note_recent(&o.path);
+                        self.settle_documents();
+                    }
                     Err(e) => self.notify(e.to_string()),
                 }
             }
@@ -94,7 +102,7 @@ impl SlideApp {
         let name = o.name();
         let secs = ((crate::now_ms() - o.started_ms) / 1000.0).max(0.0);
         let mut cancel = false;
-        egui::Modal::new(egui::Id::new("deckcraft-opening")).show(ctx, |ui| {
+        egui::Modal::new(crate::wid("deckcraft-opening")).show(ctx, |ui| {
             ui.set_width(320.0);
             ui.horizontal(|ui| {
                 ui.add(egui::Spinner::new().size(18.0));

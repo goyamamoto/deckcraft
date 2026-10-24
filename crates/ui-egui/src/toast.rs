@@ -56,7 +56,7 @@ pub fn show(app: &mut SlideApp, ctx: &egui::Context) {
     // Kept in English, shown in the interface language (`@msg` rows and templates).
     let text = crate::i18n::message(&toast.text).into_owned();
     let mut close = false;
-    egui::Area::new(egui::Id::new("toast")).anchor(Align2::CENTER_BOTTOM, vec2(0.0, -44.0)).order(egui::Order::Foreground).show(ctx, |ui| {
+    egui::Area::new(crate::wid("toast")).anchor(Align2::CENTER_BOTTOM, vec2(0.0, -44.0)).order(egui::Order::Foreground).show(ctx, |ui| {
         egui::Frame::NONE
             .fill(t.card)
             .stroke(Stroke::new(1.0, t.card_border))

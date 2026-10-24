@@ -25,22 +25,27 @@ mod graphics;
 mod logging;
 #[cfg(not(target_arch = "wasm32"))]
 mod pasteboard;
+#[cfg(target_os = "macos")]
+mod screens;
 
 use deckcraft_engine::Session;
-use deckcraft_ui_egui::{Services, SlideApp};
+use deckcraft_ui_egui::{Services, SlideApp, windows::Host};
 
-struct App(
-    SlideApp,
-    /// Files opened from Finder and quit requests (see `apple_events`).
-    #[cfg(target_os = "macos")]
-    fmv_macos_events::Inbox,
-);
+/// The eframe app: a shim over the window host ([`Host`], one `SlideApp` per presentation window)
+/// and, on macOS, the presentations opened from Finder and quit requests (see `apple_events`).
+struct App(#[cfg(target_os = "macos")] fmv_macos_events::Inbox);
 
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         #[cfg(target_os = "macos")]
-        apple_events::poll(&self.1, &mut self.0, ctx);
-        self.0.logic(ctx);
+        apple_events::poll(&self.0, ctx);
+        Host::with(|h| h.logic(egui::ViewportId::ROOT, ctx));
+        // The last window was allowed to close (the host asked about unsaved changes first,
+        // `SlideApp::close_requested`), or every window has: the app ends. eframe ends it when the
+        // root viewport's close goes uncancelled, which the host leaves be once it is done.
+        if Host::with(|h| h.exit_requested()) == Some(true) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
     }
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
         // macOS: the committed text the input method asked to replace with this frame's
@@ -48,30 +53,29 @@ impl eframe::App for App {
         // It belongs to this frame's events, which winit queues with it: a frame without them
         // drops it, so a range left by one that never reached its commit can't make a later
         // commit elsewhere (a full-width space, the Character Viewer) replace unrelated text.
+        // The input method talks to the focused window, whose input this is.
         #[cfg(target_os = "macos")]
         {
             let named = winit::platform::macos::take_ime_replacement_range();
             let ime = raw.events.iter().any(|e| matches!(e, egui::Event::Ime(egui::ImeEvent::Preedit { .. } | egui::ImeEvent::Commit(_))));
-            self.0.ime.replace = named.filter(|_| ime);
+            let vp = raw.viewport_id;
+            Host::with(|h| {
+                if let Some(w) = h.window_of_viewport_mut(vp) {
+                    w.app.ime.replace = named.filter(|_| ime);
+                }
+            });
         }
-        self.0.raw_input_hook(raw);
+        Host::with(|h| h.raw_input_hook(raw));
     }
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        self.0.ui(ui);
-        // macOS: what the input method may read of the slide's text this frame (the caret's
-        // paragraph and the selection), so it can reconvert committed text and give live
-        // conversion its context, as Office for Mac lets it (observed in Word for Mac).
-        #[cfg(target_os = "macos")]
-        winit::platform::macos::set_ime_surrounding_text(
-            self.0
-                .ime
-                .surrounding
-                .as_ref()
-                .map(|s| winit::platform::macos::ImeSurroundingText { text: s.text.clone(), selected: s.selected.clone() }),
-        );
+        Host::with(|h| h.ui(egui::ViewportId::ROOT, ui));
     }
     fn on_exit(&mut self) {
-        save_prefs(&self.0);
+        Host::with(|h| {
+            if let Some(w) = h.active() {
+                save_prefs(&w.app);
+            }
+        });
         // macOS (#279): end the process here, before eframe tears the window down. AccessKit's
         // macOS adapter subclasses the window's content view and restores its class on teardown;
         // AppKit's Touch Bar support observes that view (KVO), so in the next display cycle
@@ -83,6 +87,21 @@ impl eframe::App for App {
         #[cfg(target_os = "macos")]
         std::process::exit(0);
     }
+}
+
+/// macOS: what the input method may read of the focused window's slide text after its frame (the
+/// caret's paragraph and the selection), so it can reconvert committed text and give live
+/// conversion its context, as Office for Mac lets it (observed in Word for Mac). The store in the
+/// vendored winit is one for the process, so only the focused window writes it: the input method
+/// talks to that window alone.
+#[cfg(target_os = "macos")]
+fn report_ime_surrounding(app: &SlideApp, focused: bool) {
+    if !focused {
+        return;
+    }
+    winit::platform::macos::set_ime_surrounding_text(
+        app.ime.surrounding.as_ref().map(|s| winit::platform::macos::ImeSurroundingText { text: s.text.clone(), selected: s.selected.clone() }),
+    );
 }
 
 /// The per-user settings directory: `ui.json`, `prefs.json` and `logs/` live here.
@@ -290,48 +309,71 @@ fn main() -> eframe::Result {
     let apple_events = apple_events::AppleEvents::install();
     #[cfg(target_os = "macos")]
     let apple_events = &apple_events;
+    // New windows start from the first window's chrome (title, size, icon, hidden title bar).
+    let template = options.viewport.clone();
     eframe::run_native(
         "DeckCraft",
         options,
         Box::new(move |cc| {
-            let mut app = SlideApp::new(Session::new(), services());
             // Japanese editing tags typed Japanese `ja-JP` and draws Han text without a language
             // the Japanese way.
             let east_asian = east_asian_editing();
             log::info!("East Asian editing language: {east_asian:?}");
-            app.session.set_east_asian_editing(east_asian);
             // The system region picks the measurement unit (centimetres in Japan, inches in the
             // United States) and the paper notes pages print on, as PowerPoint takes them.
             let region = deckcraft_ui_egui::units::system_region();
             log::info!("Region: {} ({} on {})", region.tag(), region.units().id(), region.paper_id());
-            app.session.set_region(region);
-            load_prefs(&mut app);
-            // AutoRecover: reopen what a previous run left unsaved, then keep it current.
-            if std::env::var_os("DECKCRAFT_NO_RECOVERY").is_none() {
-                app.session.recovery_dir = deckcraft_engine::recovery::default_dir();
-                if let Ok(v) = app.session.execute("file.recovery.open", &serde_json::json!({}))
-                    && let Some(n) = v.get("opened").and_then(|o| o.as_array()).map(Vec::len).filter(|n| *n > 0)
-                {
-                    app.set_status(format!("Recovered {n} unsaved presentation{} from the last session", if n == 1 { "" } else { "s" }));
+            let recovery = std::env::var_os("DECKCRAFT_NO_RECOVERY").is_none();
+            // One `SlideApp` per presentation window: the first one below, the rest as the host
+            // opens windows, each with the same desktop services and a blank session. AutoRecover
+            // writes every window's unsaved presentations to the one recovery folder.
+            let new_app = move || {
+                let mut app = SlideApp::new(Session::new(), services());
+                app.session.set_east_asian_editing(east_asian);
+                app.session.set_region(region.clone());
+                if recovery {
+                    app.session.recovery_dir = deckcraft_engine::recovery::default_dir();
                 }
-            }
-            app.integrated_titlebar = cfg!(target_os = "macos");
-            if let Some(port) = control_port {
-                let rx = control_server::start(port, cc.egui_ctx.clone());
-                app = app.with_control(rx);
+                app.integrated_titlebar = cfg!(target_os = "macos");
+                app
+            };
+            let mut app = new_app();
+            load_prefs(&mut app);
+            // AutoRecover: reopen what a previous run left unsaved (each in a window of its own,
+            // once the host runs), then keep it current.
+            if recovery
+                && let Ok(v) = app.session.execute("file.recovery.open", &serde_json::json!({}))
+                && let Some(n) = v.get("opened").and_then(|o| o.as_array()).map(Vec::len).filter(|n| *n > 0)
+            {
+                app.set_status(format!("Recovered {n} unsaved presentation{} from the last session", if n == 1 { "" } else { "s" }));
             }
             if sample && let Err(e) = deckcraft_engine::sample::open_sample(&mut app.session) {
                 log::error!("sample: {e}");
             }
-            // A .ppsx opened last starts its slide show (#862).
-            for (f, e) in app.open_from_system(&files) {
-                log::error!("{f}: {e}");
+            let mut host = Host::new(app, template, Box::new(new_app));
+            #[cfg(target_os = "macos")]
+            {
+                host.work_area = Some(Box::new(screens::work_area));
+                host.after_ui = Some(Box::new(report_ime_surrounding));
             }
-            if show {
-                app.start_show(0, false);
+            if let Some(port) = control_port {
+                host = host.with_control(control_server::start(port, cc.egui_ctx.clone()));
             }
+            // Each file in a window of its own, as PowerPoint opens them; the first takes the
+            // blank window (`Host::open_paths`). A .ppsx opened last starts its slide show (#862),
+            // in its window; File › Open opens a .ppsx for editing.
+            let ppsx_last = files.last().is_some_and(|f| f.to_ascii_lowercase().ends_with(".ppsx"));
+            host.open_paths(files, &cc.egui_ctx);
+            if let Some(w) = host.active_mut() {
+                if show {
+                    w.app.start_show(0, false);
+                } else if ppsx_last {
+                    let from = w.app.show_start_index();
+                    w.app.start_show(from, false);
+                }
+            }
+            Host::install(host);
             Ok(Box::new(App(
-                app,
                 #[cfg(target_os = "macos")]
                 apple_events.connect(&cc.egui_ctx),
             )))
@@ -348,8 +390,12 @@ mod tests {
     #[test]
     fn on_exit_ends_the_process_on_macos() {
         if std::env::var_os("DECKCRAFT_TEST_ON_EXIT").is_some() {
-            let mut app = App(
+            Host::install(Host::new(
                 SlideApp::new(Session::new(), Services::default()),
+                egui::ViewportBuilder::default(),
+                Box::new(|| SlideApp::new(Session::new(), Services::default())),
+            ));
+            let mut app = App(
                 #[cfg(target_os = "macos")]
                 fmv_macos_events::Inbox::default(),
             );
