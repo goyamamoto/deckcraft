@@ -65,6 +65,7 @@ fn press(s: &mut Session, key: &str, mods: Mods) {
 #[test]
 fn japanese_typed_into_an_english_run_is_tagged_japanese() {
     let (mut s, id) = editing("Hello ", Some("en-US"));
+    s.east_asian_editing = Some(CjkLocale::Japanese);
     s.execute("text.insert", &json!({"text": "日本語"})).unwrap();
     assert_eq!(runs(&s, id), vec![run("Hello ", Some("en-US"), None), run("日本語", Some("ja-JP"), Some("en-US"))]);
     s.execute("text.insert", &json!({"text": "abc"})).unwrap();
@@ -102,8 +103,42 @@ fn ime_commits_are_tagged_japanese() {
     assert_eq!(runs(&s, id), vec![run("Hello ok", Some("en-US"), None)]);
 }
 
-/// Han text takes the East Asian editing language; kana is always Japanese and Hangul Korean;
-/// text in a run already in an East Asian language stays in it.
+/// Symbols PowerPoint draws with the East Asian font (™ ① ★ ♥ ■) are not East Asian text: typed,
+/// inserted or pasted into an English run they stay in it, and so does the Latin after them. The
+/// same symbol converted by the input method from kana is Japanese input.
+#[test]
+fn symbols_typed_into_an_english_run_stay_english() {
+    for sym in ["™", "★", "①", "♥", "■", "×", "°"] {
+        let (mut s, id) = editing("Hello ", Some("en-US"));
+        s.execute("insert.symbol", &json!({"text": sym})).unwrap();
+        s.execute("text.insert", &json!({"text": sym})).unwrap();
+        s.execute("edit.paste", &json!({"text": format!(" Acme{sym} is a brand")})).unwrap();
+        assert_eq!(runs(&s, id), vec![run(&format!("Hello {sym}{sym} Acme{sym} is a brand"), Some("en-US"), None)], "{sym}");
+    }
+    // Converted from kana by the input method, a symbol is Japanese input.
+    let (mut s, id) = editing("Hello ", Some("en-US"));
+    s.compose_text("ほし", None).unwrap();
+    s.commit_text("★").unwrap();
+    assert_eq!(runs(&s, id)[1], run("★", Some("ja-JP"), Some("en-US")));
+    // An input method's result with no preedit (the emoji picker) is typed as it is.
+    let (mut s, id) = editing("I ", Some("en-US"));
+    s.commit_text("♥").unwrap();
+    s.execute("text.insert", &json!({"text": " NY"})).unwrap();
+    assert_eq!(runs(&s, id), vec![run("I ♥ NY", Some("en-US"), None)]);
+    // With a Japanese editing language the symbols still aren't Japanese text; full-width forms
+    // and CJK punctuation are.
+    let (mut s, id) = editing("A ", Some("en-US"));
+    s.east_asian_editing = Some(CjkLocale::Japanese);
+    s.execute("text.insert", &json!({"text": "™"})).unwrap();
+    assert_eq!(runs(&s, id), vec![run("A ™", Some("en-US"), None)]);
+    s.execute("text.insert", &json!({"text": "ＡＢＣ、"})).unwrap();
+    assert_eq!(runs(&s, id)[1], run("ＡＢＣ、", Some("ja-JP"), Some("en-US")));
+}
+
+/// Han text takes the East Asian editing language, or the one the input method's preedit showed
+/// (kana converted to kanji is Japanese, Bopomofo Traditional Chinese); kana is always Japanese
+/// and Hangul Korean; without any of them Han text is not guessed and stays in the run's language.
+/// Text in a run already in an East Asian language stays in it.
 #[test]
 fn the_east_asian_editing_language_names_han_text() {
     let (mut s, id) = editing("A ", Some("en-US"));
@@ -119,9 +154,33 @@ fn the_east_asian_editing_language_names_han_text() {
     let (mut s, id) = editing("A ", Some("en-US"));
     s.execute("text.insert", &json!({"text": "한국어"})).unwrap();
     assert_eq!(runs(&s, id)[1].1.as_deref(), Some("ko-KR"), "Hangul is Korean");
+    // Without an editing language, Han text typed or pasted stays in the run (it may be Chinese).
+    let (mut s, id) = editing("Title ", Some("en-US"));
+    s.execute("text.insert", &json!({"text": "中文标题"})).unwrap();
+    s.execute("edit.paste", &json!({"text": "漢字。"})).unwrap();
+    assert_eq!(runs(&s, id), vec![run("Title 中文标题漢字。", Some("en-US"), None)]);
+    // A pinyin preedit is Latin: its Han result takes the editing language, else stays untagged.
     let (mut s, id) = editing("A ", Some("en-US"));
-    s.execute("text.insert", &json!({"text": "漢字"})).unwrap();
-    assert_eq!(runs(&s, id)[1].1.as_deref(), Some("ja-JP"), "without an editing language Han text is Japanese");
+    s.compose_text("zhongwen", None).unwrap();
+    s.commit_text("中文").unwrap();
+    assert_eq!(runs(&s, id), vec![run("A 中文", Some("en-US"), None)]);
+    let (mut s, id) = editing("A ", Some("en-US"));
+    s.east_asian_editing = Some(CjkLocale::SimplifiedChinese);
+    s.compose_text("zhongwen", None).unwrap();
+    s.commit_text("中文").unwrap();
+    assert_eq!(runs(&s, id)[1], run("中文", Some("zh-CN"), Some("en-US")));
+    // The preedit's kana or Bopomofo names the converted Han text, whatever the editing language.
+    let (mut s, id) = editing("A ", Some("en-US"));
+    s.east_asian_editing = Some(CjkLocale::SimplifiedChinese);
+    for pre in ["k", "か", "かん", "かんじ"] {
+        s.compose_text(pre, None).unwrap();
+    }
+    s.commit_text("漢字").unwrap();
+    assert_eq!(runs(&s, id)[1], run("漢字", Some("ja-JP"), Some("en-US")));
+    let (mut s, id) = editing("A ", Some("en-US"));
+    s.compose_text("ㄓㄨㄥ", None).unwrap();
+    s.commit_text("中").unwrap();
+    assert_eq!(runs(&s, id)[1], run("中", Some("zh-TW"), Some("en-US")));
     // A Japanese deck's Latin run (lang en-US, altLang ja-JP) gives its Japanese the English back.
     let (mut s, id) = editing("ok", Some("de-DE"));
     s.east_asian_editing = Some(CjkLocale::Japanese);
@@ -129,26 +188,42 @@ fn the_east_asian_editing_language_names_han_text() {
     assert_eq!(runs(&s, id)[1], run("。", Some("ja-JP"), Some("de-DE")));
 }
 
+/// Give `s`'s deck the default language `lang` (`a:defPPr`).
+fn deck_default(s: &mut Session, lang: &str) {
+    let lang = lang.to_string();
+    s.edit(|doc, _| {
+        let run = deckcraft_model::text::RunProps { lang: Some(lang), ..Default::default() };
+        doc.default_text_style.default = Some(deckcraft_model::text::LevelStyle { run, ..Default::default() });
+        Ok(())
+    })
+    .unwrap();
+}
+
+/// Change Case with a bare caret converts the word it is in, the East Asian word of untagged text
+/// in a Japanese deck (the word double-click selects) too.
+#[test]
+fn change_case_at_a_caret_converts_the_japanese_word() {
+    let (mut s, id) = editing("", None);
+    deck_default(&mut s, "ja-JP");
+    s.execute("text.insert", &json!({"text": "カタカナです"})).unwrap();
+    s.execute("text.select", &json!({"anchor": [0, 1], "caret": [0, 1]})).unwrap();
+    s.execute("format.case", &json!({"mode": "halfWidth"})).unwrap();
+    assert_eq!(runs(&s, id), vec![run("ｶﾀｶﾅです", None, None)]);
+    assert_eq!(sel(&s), ((0, 0), (0, 0)), "the caret goes to the word's start");
+}
+
 /// Runs without a language of their own are in the deck's default language (`a:defPPr`): Han
 /// text typed into a Chinese deck's text stays in it, and Japanese typed into a German deck's
 /// text takes German as its alternative.
 #[test]
 fn typed_text_inherits_the_decks_default_language() {
-    let deck_default = |s: &mut Session, lang: &str| {
-        let lang = lang.to_string();
-        s.edit(|doc, _| {
-            let run = deckcraft_model::text::RunProps { lang: Some(lang), ..Default::default() };
-            doc.default_text_style.default = Some(deckcraft_model::text::LevelStyle { run, ..Default::default() });
-            Ok(())
-        })
-        .unwrap();
-    };
     let (mut s, id) = editing("x", None);
     deck_default(&mut s, "zh-CN");
     s.execute("text.insert", &json!({"text": "汉字"})).unwrap();
     assert_eq!(runs(&s, id), vec![run("x汉字", None, None)]);
     let (mut s, id) = editing("x", None);
     deck_default(&mut s, "de-DE");
+    s.east_asian_editing = Some(CjkLocale::Japanese);
     s.execute("text.insert", &json!({"text": "日本語"})).unwrap();
     assert_eq!(runs(&s, id)[1], run("日本語", Some("ja-JP"), Some("de-DE")));
     // In a Japanese deck the untagged text is Japanese: it stays one run and moves by words.
@@ -183,6 +258,21 @@ fn pasted_japanese_is_tagged_and_saved_with_its_alternative_language() {
         .cloned()
         .unwrap();
     assert_eq!((found.props.lang.as_deref(), found.props.alt_lang.as_deref()), (Some("ja-JP"), Some("en-US")));
+}
+
+/// Latin typed after Japanese stays in the Japanese run; spelling checks its words in the run's
+/// alternative language, as Office proofs Latin typed with the Japanese input method.
+#[test]
+fn latin_typed_after_japanese_is_still_spell_checked() {
+    crate::spell::install("xx-JAALT", crate::spell::Dictionary::parse(crate::spell::tests::AFF.as_bytes(), crate::spell::tests::DIC.as_bytes()));
+    let (mut s, id) = editing("slide ", Some("xx-JAALT"));
+    s.east_asian_editing = Some(CjkLocale::Japanese);
+    s.execute("text.insert", &json!({"text": "日本語"})).unwrap();
+    s.execute("text.insert", &json!({"text": " thsi slidez slides"})).unwrap();
+    assert_eq!(runs(&s, id)[1], run("日本語 thsi slidez slides", Some("ja-JP"), Some("xx-JAALT")));
+    let v = s.execute("review.spelling", &json!({})).unwrap();
+    let words: Vec<(&str, &str)> = v.as_array().unwrap().iter().map(|w| (w["word"].as_str().unwrap(), w["lang"].as_str().unwrap())).collect();
+    assert_eq!(words, vec![("thsi", "xx-JAALT"), ("slidez", "xx-JAALT")]);
 }
 
 /// Japanese text moves and selects by runs of kanji, kana and katakana.
@@ -251,9 +341,18 @@ fn text_outlines_are_read_in_japanese_encodings() {
     assert_eq!(decode_text_in(&shift_jis(t), ja), t);
     assert_eq!(decode_text_in(&shift_jis(t), None), t, "Shift_JIS without Japanese editing");
     assert_eq!(decode_text_in(&shift_jis("ｶﾀｶﾅ\r\nテスト"), None), "ｶﾀｶﾅ\r\nテスト");
-    // Western text in Windows-1252 whose capitals would read as half-width katakana stays Western.
-    let western = encoding_rs::WINDOWS_1252.encode("Ärger Über Öl").0.into_owned();
-    assert_eq!(decode_text_in(&western, None), "Ärger Über Öl");
+    // Kanji alone (slide titles) read as Japanese too.
+    let kanji = "事業計画\r\n\t売上目標\r\n\t人員計画";
+    assert_eq!(decode_text_in(&shift_jis(kanji), None), kanji);
+    assert_eq!(decode_text_in(&shift_jis("2026年度Q3売上報告"), None), "2026年度Q3売上報告");
+    // Western text in Windows-1252 stays Western: its capitals would read as half-width katakana,
+    // a small accented letter (é à ç ê) and the letter after it as a kanji, ñ ö as user-defined
+    // characters.
+    for w in ["Ärger Über Öl", "Présentation\r\nRéunion\r\nStratégie\r\n", "Données clés\r\nDéveloppement", "año señor niño", "Rêve", "ça va"]
+    {
+        let western = encoding_rs::WINDOWS_1252.encode(w).0.into_owned();
+        assert_eq!(decode_text_in(&western, None), w);
+    }
     assert_eq!(decode_text_in(&encoding_rs::EUC_KR.encode("한국어 제목").0, Some(CjkLocale::Korean)), "한국어 제목");
     assert_eq!(decode_text_in(&[], None), "");
     assert_eq!(decode_text_in(&[0xFF, 0xFE, 0x41], None), "\u{FFFD}", "an odd byte is never a crash");

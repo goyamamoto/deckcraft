@@ -194,7 +194,7 @@ fn open_other(name: &str, bytes: &[u8]) -> Result<(Presentation, Vec<String>)> {
 /// told by its zero bytes; bytes that are valid UTF-8 are UTF-8; anything else is in a legacy
 /// code page — the one of the East Asian editing language ([`deckcraft_fonts::default_cjk_locale`]:
 /// Shift_JIS for Japanese, the ANSI code page Notepad and Excel on Japanese Windows save), else
-/// Shift_JIS when the bytes read as it, else Windows-1252.
+/// Shift_JIS when the bytes read as Japanese in it, else Windows-1252.
 pub fn decode_text(bytes: &[u8]) -> String {
     decode_text_in(bytes, deckcraft_fonts::default_cjk_locale())
 }
@@ -227,15 +227,34 @@ pub fn decode_text_in(bytes: &[u8], east_asian: Option<deckcraft_fonts::CjkLocal
     if let Some(s) = own.and_then(|enc| enc.decode_without_bom_handling_and_without_replacement(bytes)) {
         return s.into_owned();
     }
-    // Shift_JIS without Japanese editing only when it reads as Japanese: Western text in
-    // Windows-1252 whose capitals (Ä Ö Ü É) would read as half-width katakana stays Western.
+    // Shift_JIS without Japanese editing only when it reads as Japanese.
     if east_asian != Some(CjkLocale::Japanese)
         && let Some(s) = SHIFT_JIS.decode_without_bom_handling_and_without_replacement(bytes)
-        && (!s.chars().any(|c| ('\u{FF61}'..='\u{FF9F}').contains(&c)) || s.chars().any(|c| ('\u{3041}'..='\u{30FF}').contains(&c)))
+        && reads_as_japanese(&s)
     {
         return s.into_owned();
     }
     WINDOWS_1252.decode_without_bom_handling(bytes).0.into_owned()
+}
+
+/// Whether `s`, bytes decoded as Shift_JIS, reads as Japanese when nothing says the text is: it
+/// holds no user-defined character (the rows a Western ñ ö ò ÷ falls in), and it has kana or CJK
+/// punctuation (、 。 「 」), or at least two kanji and no more Latin letters than kanji (slide
+/// titles in kanji alone). Western text in Windows-1252 reads as half-width katakana where it has
+/// capitals (Ä Ö Ü É), and as a kanji for each small accented letter (é à ç ê) with the letter
+/// after it: a few kanji among many more Latin letters.
+fn reads_as_japanese(s: &str) -> bool {
+    let (mut kana_or_punctuation, mut kanji, mut latin) = (false, 0usize, 0usize);
+    for c in s.chars() {
+        match c {
+            '\u{E000}'..='\u{F8FF}' => return false,
+            '\u{3000}'..='\u{303F}' | '\u{3041}'..='\u{30FF}' => kana_or_punctuation = true,
+            _ if c.is_ascii_alphabetic() => latin += 1,
+            _ if deckcraft_fonts::script::script_of(c) == Some(*b"Hani") => kanji += 1,
+            _ => {}
+        }
+    }
+    kana_or_punctuation || (kanji >= 2 && kanji >= latin)
 }
 
 /// UTF-16 without a byte order mark, told by its zero bytes: `Some(true)` little-endian,

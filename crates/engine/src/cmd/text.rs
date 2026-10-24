@@ -482,11 +482,12 @@ pub(crate) fn insert_text(s: &mut Session, text: &str, props: Option<RunProps>) 
             None => text.to_string(),
         }
     };
+    let east_asian = east_asian_lang_of(&text, editing);
     let pos = edit_text(s, |body, t| {
         let (a, b) = t.ordered();
         let at = ed::delete(body, a, b);
         let props = props.clone().or_else(|| if a != b { Some(ed::props_at(body, at)) } else { unlinked_at_link_end(body, at) });
-        let props = tagged_props(body, at, props, &text, (lang.as_deref(), editing));
+        let props = tagged_props(body, at, props, east_asian, lang.as_deref());
         let c = ed::insert(body, at, &text, props);
         t.anchor = c;
         t.caret = c;
@@ -552,19 +553,23 @@ fn unlinked_at_link_end(body: &TextBody, at: Pos) -> Option<RunProps> {
 }
 
 /// The East Asian language `text` is written in: Japanese when it has kana, Korean when it has
-/// Hangul, else (Han, CJK punctuation, full-width forms) the East Asian editing language,
-/// Japanese without one. `None` when `text` has no character of the East Asian font slot.
+/// Hangul, Traditional Chinese when it has Bopomofo, else (Han, CJK punctuation, full-width forms)
+/// the East Asian editing language `editing`. `None` when `text` has no East Asian character
+/// ([`deckcraft_model::words::is_east_asian`]; the symbols PowerPoint draws with the East Asian
+/// font, ™ ① ★ ■ ×, are not East Asian text), and for Han text without an editing language: the
+/// characters don't tell Chinese from Japanese, so it is not guessed.
 pub(crate) fn east_asian_lang_of(text: &str, editing: Option<deckcraft_fonts::CjkLocale>) -> Option<deckcraft_fonts::CjkLocale> {
-    use deckcraft_fonts::{CjkLocale, FontSlot, script};
+    use deckcraft_fonts::{CjkLocale, script};
     let mut east_asian = false;
-    let mut hangul = false;
+    let (mut hangul, mut bopomofo) = (false, false);
     for c in text.chars() {
-        if script::slot_of(c) != Some(FontSlot::EastAsian) {
+        if !deckcraft_model::words::is_east_asian(c) {
             continue;
         }
         match script::script_of(c).as_ref() {
             Some(b"Hira" | b"Kana") => return Some(CjkLocale::Japanese),
             Some(b"Hang") => hangul = true,
+            Some(b"Bopo") => bopomofo = true,
             _ => {}
         }
         east_asian = true;
@@ -572,24 +577,35 @@ pub(crate) fn east_asian_lang_of(text: &str, editing: Option<deckcraft_fonts::Cj
     if hangul {
         return Some(CjkLocale::Korean);
     }
-    east_asian.then(|| editing.unwrap_or(CjkLocale::Japanese))
+    if bopomofo {
+        return Some(CjkLocale::TraditionalChinese);
+    }
+    editing.filter(|_| east_asian)
 }
 
-/// The formatting East Asian `text` is typed with at a run formatted `props` (in language
-/// `inherited` where it names none: its paragraph's, its list style's or the deck's default).
-/// PowerPoint tags typed text with the input language: Japanese typed, committed by the input
-/// method or pasted as plain text into a run whose language isn't East Asian (`en-US`, or none)
-/// becomes a run of its own in Japanese, with the run's language as its alternative
+/// The East Asian language of `text` an input method composes or commits, its preedits having
+/// shown `shown` (kana on its way to kanji: Japanese; a pinyin preedit shows none):
+/// [`east_asian_lang_of`], with `shown` naming Han text before the editing language does. A
+/// symbol PowerPoint draws with the East Asian font that such a preedit is converted to (★ from
+/// ほし) is in that language too: PowerPoint tags typed text with the input language.
+fn composed_lang_of(
+    text: &str,
+    shown: Option<deckcraft_fonts::CjkLocale>,
+    editing: Option<deckcraft_fonts::CjkLocale>,
+) -> Option<deckcraft_fonts::CjkLocale> {
+    use deckcraft_fonts::{FontSlot, script};
+    east_asian_lang_of(text, shown.or(editing)).or_else(|| shown.filter(|_| text.chars().any(|c| script::slot_of(c) == Some(FontSlot::EastAsian))))
+}
+
+/// The formatting text in East Asian language `lang` is typed with at a run formatted `props` (in
+/// language `inherited` where it names none: its paragraph's, its list style's or the deck's
+/// default). PowerPoint tags typed text with the input language: Japanese typed, committed by the
+/// input method or pasted as plain text into a run whose language isn't East Asian (`en-US`, or
+/// none) becomes a run of its own in Japanese, with the run's language as its alternative
 /// (`lang="ja-JP" altLang="en-US"`). Text typed into a run already in an East Asian language
 /// stays in it, so Latin typed with the Japanese input method stays in the `ja-JP` run, as in
 /// PowerPoint. `None` when the formatting stays as it is.
-pub(crate) fn east_asian_props(
-    props: &RunProps,
-    inherited: Option<&str>,
-    text: &str,
-    editing: Option<deckcraft_fonts::CjkLocale>,
-) -> Option<RunProps> {
-    let lang = east_asian_lang_of(text, editing)?;
+pub(crate) fn east_asian_props(props: &RunProps, inherited: Option<&str>, lang: deckcraft_fonts::CjkLocale) -> Option<RunProps> {
     let current = props.lang.as_deref().or(inherited).map(str::trim).filter(|l| !l.is_empty());
     if current.and_then(deckcraft_fonts::CjkLocale::from_lang).is_some() {
         return None;
@@ -603,7 +619,7 @@ pub(crate) fn east_asian_props(
 /// The language the text being edited inherits where its runs name none: from its paragraph,
 /// its list styles or the deck's default (`a:defPPr`). `None` for notes and where nothing names
 /// one.
-fn inherited_lang(s: &Session) -> Option<String> {
+pub(crate) fn inherited_lang(s: &Session) -> Option<String> {
     let st = s.doc().ok()?;
     let t = st.selection.text.as_ref().filter(|t| !t.notes)?;
     let sh = st.shape(t.shape)?;
@@ -614,17 +630,18 @@ fn inherited_lang(s: &Session) -> Option<String> {
 }
 
 /// The formatting text is inserted with at `at` (`props`, as [`deckcraft_model::edit::insert`]
-/// takes it: `None` for the run at `at`), tagged with its East Asian language
-/// ([`east_asian_props`]).
+/// takes it: `None` for the run at `at`), tagged with its East Asian language `lang`
+/// ([`east_asian_props`]; `inherited` is the language of runs that name none).
 fn tagged_props(
     body: &TextBody,
     at: Pos,
     props: Option<RunProps>,
-    text: &str,
-    (inherited, editing): (Option<&str>, Option<deckcraft_fonts::CjkLocale>),
+    lang: Option<deckcraft_fonts::CjkLocale>,
+    inherited: Option<&str>,
 ) -> Option<RunProps> {
+    let Some(lang) = lang else { return props };
     let base = props.clone().unwrap_or_else(|| ed::props_at(body, at));
-    east_asian_props(&base, inherited, text, editing).or(props)
+    east_asian_props(&base, inherited, lang).or(props)
 }
 
 /// Built-in AutoCorrect replacements (common slips and symbols).
@@ -999,7 +1016,8 @@ fn compose(s: &mut Session, p: &Value) -> Result<Value> {
     let after_caret = selected.map_or(0, |(_, y)| n.saturating_sub(y));
     let current = s.doc()?.composition.clone();
     let (lang, editing) = (inherited_lang(s), s.east_asian_editing);
-    let tagging = (lang.as_deref(), editing);
+    // The language the preedits show (kana: Japanese) names the Han text they are converted to.
+    let shown = east_asian_lang_of(&text, None);
     // A composition whose text was changed under it is kept as it is; a new one starts.
     let current = match current {
         Some(c) if !composition_fits(s.doc()?, &c) => {
@@ -1013,18 +1031,19 @@ fn compose(s: &mut Session, p: &Value) -> Result<Value> {
         None => {
             let st = s.doc()?;
             let (before, before_selection) = (st.doc.clone(), st.selection.clone());
+            let east_asian = composed_lang_of(&text, shown, editing);
             let (start, props) = edit_text(s, |body, t| {
                 let (a, b) = t.ordered();
                 let at = ed::delete(body, a, b);
                 let props = if a != b { Some(ed::props_at(body, at)) } else { unlinked_at_link_end(body, at) };
                 // The composition keeps the untagged formatting: each preedit is tagged afresh.
-                let c = ed::insert(body, at, &text, tagged_props(body, at, props.clone(), &text, tagging));
+                let c = ed::insert(body, at, &text, tagged_props(body, at, props.clone(), east_asian, lang.as_deref()));
                 let c = (c.0, c.1.saturating_sub(after_caret));
                 t.anchor = c;
                 t.caret = c;
                 (at, props)
             })?;
-            s.doc_mut()?.composition = Some(crate::Composition { start, len: n, active, props, before, before_selection });
+            s.doc_mut()?.composition = Some(crate::Composition { start, len: n, active, props, shown, before, before_selection });
             Ok(json!({"composing": true, "start": [start.0, start.1], "len": n}))
         }
         Some(c) if text.is_empty() => {
@@ -1037,15 +1056,17 @@ fn compose(s: &mut Session, p: &Value) -> Result<Value> {
         }
         Some(c) => {
             let (start, len, props) = (c.start, c.len, c.props.clone());
+            let shown = shown.or(c.shown);
+            let east_asian = composed_lang_of(&text, shown, editing);
             edit_text(s, |body, t| {
                 ed::delete(body, start, (start.0, start.1 + len));
-                let props = tagged_props(body, start, props, &text, tagging);
+                let props = tagged_props(body, start, props, east_asian, lang.as_deref());
                 let e = ed::insert(body, start, &text, props);
                 let e = (e.0, e.1.saturating_sub(after_caret));
                 t.anchor = e;
                 t.caret = e;
             })?;
-            s.doc_mut()?.composition = Some(crate::Composition { len: n, active, ..c });
+            s.doc_mut()?.composition = Some(crate::Composition { len: n, active, shown, ..c });
             Ok(json!({"composing": true, "start": [start.0, start.1], "len": n}))
         }
     }
