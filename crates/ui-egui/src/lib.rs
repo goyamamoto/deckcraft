@@ -1732,8 +1732,9 @@ impl SlideApp {
     /// ([`ime::ImeState::replace`]); that text is selected and the composition takes its place.
     /// Named while a composition shows (live conversion marks the words before its marked text
     /// again), the range counts that composition, which goes first ([`ime::committed_range`]). A
-    /// dismissal naming a range is a commit's first half: the range, mapped, waits for the commit,
-    /// which then replaces that text.
+    /// dismissal naming a range is a commit's first half: the range, mapped, waits for the commit
+    /// in the same frame (the platform queues both together), which then replaces that text; a
+    /// commit naming a range with no composition replaces that text too.
     fn ime_event(&mut self, e: &egui::ImeEvent) {
         let r = match e {
             egui::ImeEvent::Preedit { text, active_range_chars } => {
@@ -1935,6 +1936,11 @@ impl SlideApp {
         }
         self.sync_backstage();
         self.keyboard(&ctx);
+        // The range the input method named belongs to this frame's composition or commit
+        // ([`ime::ImeState::replace`]): one no commit took (a dismissal with nothing committed
+        // after it, or events the slide never saw while a text field or dialog had the keyboard)
+        // must not make a later commit replace text the user never selected.
+        self.ime.replace = None;
         self.sync_backstage();
         ribbon::title_bar(self, ui);
         if self.backstage.is_none() && self.session.active().is_some() {
