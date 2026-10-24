@@ -17,7 +17,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "New Presentation",
             ["File"],
             Some("Cmd+N"),
-            "{theme?: name, template?: starter name, size?: [w,h] pt, blank?: bool}",
+            "{theme?: name, template?: starter name, size?: [w,h] pt, blank?: bool, eastAsian?: ja-JP|zh-CN|zh-TW|ko-KR|\"\" (the East Asian editing language: the deck's default text language, and for Japanese a Jpan theme font)}",
             always,
             new
         ),
@@ -109,7 +109,8 @@ fn new(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad("file.new", "a template is not a blank presentation"));
     }
     let size = slide_size(p);
-    let (doc, template_name) = if let Some(name) = template {
+    let east_asian = super::design::east_asian_param(p, "file.new")?;
+    let (mut doc, template_name) = if let Some(name) = template {
         let doc = crate::templates::build(name, size)?;
         let chosen = crate::templates::find(name).map(|t| t.name);
         (doc, chosen)
@@ -117,6 +118,9 @@ fn new(s: &mut Session, p: &Value) -> Result<Value> {
         let theme = theme_name.and_then(theme_named).unwrap_or_default();
         (defaults::blank_presentation(size, theme, !bool_or(p, "blank", false)), None)
     };
+    if let Some(l) = east_asian.flatten() {
+        super::design::east_asian_deck(&mut doc, l);
+    }
     let slides = doc.slides.len();
     let title = s.next_untitled();
     let i = s.add_document(DocState::new(doc, None, title));

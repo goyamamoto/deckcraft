@@ -4,7 +4,7 @@ use deckcraft_color::SchemeSlot;
 use deckcraft_geom::Xfrm;
 use deckcraft_model::chart::ChartType;
 use deckcraft_model::style::PictureFill;
-use deckcraft_model::text::{AutoFit, RunKind, TextBody};
+use deckcraft_model::text::{AutoFit, RunKind, TextBody, TextDir};
 use deckcraft_model::{Chart, ColorRef, Fill, Geom, Line, MediaClip, Shape, ShapeId, ShapeKind, ShapeStyle, Table};
 use serde_json::{Value, json};
 
@@ -33,7 +33,24 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         cmd!(query "insert.icons", "Icon Gallery", [], None, "{} → [{name, label, category}]", always, list_icons),
         cmd!(query "shape.presets", "Shape Gallery", [], None, "{} → [{name, label, category}]", always, presets),
-        cmd!("insert.textBox", "Text Box", ["Insert", "Text"], None, "{rect?: [x,y,w,h], text?: string}", has_slide, text_box),
+        cmd!(
+            "insert.textBox",
+            "Text Box",
+            ["Insert", "Text"],
+            None,
+            "{rect?: [x,y,w,h], text?: string, vertical?: bool} — vertical: an East Asian vertical text box (as insert.verticalTextBox)",
+            has_slide,
+            text_box
+        ),
+        cmd!(
+            "insert.verticalTextBox",
+            "Vertical Text Box",
+            ["Insert", "Text", "Text Box"],
+            None,
+            "{rect?: [x,y,w,h], text?: string} — East Asian vertical text (bodyPr vert=eaVert, columns right to left) in a box that grows with its text; a rect with no height (a click) makes a single column that grows downward",
+            has_slide,
+            vertical_text_box
+        ),
         cmd!(
             "insert.picture",
             "Picture from File…",
@@ -279,7 +296,29 @@ pub(crate) fn new_text_box(rect: Xfrm, text: &str) -> Shape {
     Shape { xfrm: Some(rect), text_box: true, fill: None, text: Some(body), geom: Geom::preset("rect"), ..Default::default() }
 }
 
+/// An East Asian vertical text box, as Insert ▸ Text Box ▸ Vertical Text Box makes one in
+/// PowerPoint: `bodyPr vert="eaVert"` (kana and kanji upright, columns from right to left), text
+/// wrapping in the box and the box resized to fit its text. A click (no width or no height)
+/// makes a single column that grows downward without wrapping, the vertical counterpart of a
+/// clicked horizontal box.
+pub(crate) fn new_vertical_text_box(rect: Xfrm, text: &str) -> Shape {
+    let mut shape = new_text_box(rect, text);
+    if let Some(t) = shape.text.as_mut() {
+        t.body.vert = Some(TextDir::EaVertical);
+    }
+    if rect.w < 1.0 || rect.h < 1.0 {
+        shape.xfrm = Some(Xfrm { w: if rect.w < 1.0 { 36.0 } else { rect.w }, h: 100.0, ..rect });
+        if let Some(t) = shape.text.as_mut() {
+            t.body.wrap = Some(false);
+        }
+    }
+    shape
+}
+
 fn text_box(s: &mut Session, p: &Value) -> Result<Value> {
+    if bool_or(p, "vertical", false) {
+        return vertical_text_box(s, p);
+    }
     let text = str_param(p, "text").unwrap_or("");
     let rect = rect_param(p, "rect").unwrap_or_else(|| default_rect(s, 216.0, 36.0));
     let mut shape = new_text_box(rect, text);
@@ -290,9 +329,20 @@ fn text_box(s: &mut Session, p: &Value) -> Result<Value> {
             t.body.wrap = Some(false);
         }
     }
-    let id = add_shape(s, "insert.textBox", shape, true)?;
+    place_text_box(s, "insert.textBox", shape, text.is_empty())
+}
+
+fn vertical_text_box(s: &mut Session, p: &Value) -> Result<Value> {
+    let text = str_param(p, "text").unwrap_or("");
+    let rect = rect_param(p, "rect").unwrap_or_else(|| default_rect(s, 36.0, 216.0));
+    place_text_box(s, "insert.verticalTextBox", new_vertical_text_box(rect, text), text.is_empty())
+}
+
+/// Add a new text box, fit it to its text, and with no text put the caret in it.
+fn place_text_box(s: &mut Session, cmd: &str, shape: Shape, empty: bool) -> Result<Value> {
+    let id = add_shape(s, cmd, shape, true)?;
     super::text::fit_text_box(s, id)?;
-    if text.is_empty() {
+    if empty {
         // Start typing immediately.
         s.select(|_, sel| {
             sel.shapes = vec![id];
@@ -2319,5 +2369,56 @@ mod icon_and_picture_tests {
         assert_eq!(pictures(&s, 1).len(), 2);
         let mark = s.active().unwrap().doc.slides[1].raw_ext.clone().unwrap_or_default();
         assert!(mark.starts_with("deckcraft-album:"), "{mark}");
+    }
+}
+
+#[cfg(test)]
+mod vertical_text_box_tests {
+    use deckcraft_model::text::{AutoFit, TextDir};
+    use deckcraft_model::{Shape, ShapeId};
+    use serde_json::json;
+
+    use crate::Session;
+
+    fn inserted(s: &mut Session, cmd: &str, p: serde_json::Value) -> Shape {
+        let r = s.execute(cmd, &p).unwrap();
+        let id = ShapeId(r["id"].as_u64().unwrap() as u32);
+        s.doc().unwrap().shape(id).cloned().unwrap()
+    }
+
+    #[test]
+    fn a_vertical_text_box_is_east_asian_vertical_and_grows_with_its_text() {
+        let mut s = Session::with_new();
+        let n = s.doc().unwrap().history.undo.len();
+        let sh = inserted(&mut s, "insert.verticalTextBox", json!({"rect": [600.0, 60.0, 60.0, 300.0], "text": "縦書きの文章"}));
+        let body = sh.text.clone().unwrap().body;
+        assert!(sh.text_box);
+        assert_eq!(body.vert, Some(TextDir::EaVertical));
+        assert_eq!(body.wrap, Some(true), "a drawn box wraps its columns");
+        assert_eq!(body.autofit, Some(AutoFit::Shape), "and is resized to fit its text");
+        assert_eq!(sh.text.unwrap().text(), "縦書きの文章");
+        assert_eq!(s.doc().unwrap().history.undo.len(), n + 1);
+        assert_eq!(s.doc().unwrap().history.undo.last().unwrap().label, "Vertical Text Box");
+
+        // A click: one column without wrapping, ready for typing.
+        let sh = inserted(&mut s, "insert.verticalTextBox", json!({"rect": [300.0, 60.0, 0.0, 0.0]}));
+        assert_eq!(sh.text.as_ref().unwrap().body.wrap, Some(false));
+        assert_eq!(sh.text.as_ref().unwrap().body.vert, Some(TextDir::EaVertical));
+        assert_eq!(s.doc().unwrap().selection.text.as_ref().map(|t| t.shape), Some(sh.id), "the caret is in the new box");
+
+        // The ribbon's call (no rect), and insert.textBox's vertical flag.
+        let sh = inserted(&mut s, "insert.verticalTextBox", json!({}));
+        assert_eq!(sh.text.as_ref().unwrap().body.vert, Some(TextDir::EaVertical));
+        let sh = inserted(&mut s, "insert.textBox", json!({"rect": [100.0, 100.0, 50.0, 200.0], "text": "縦", "vertical": true}));
+        assert_eq!(sh.text.as_ref().unwrap().body.vert, Some(TextDir::EaVertical));
+        let sh = inserted(&mut s, "insert.textBox", json!({"rect": [100.0, 100.0, 200.0, 50.0], "text": "横"}));
+        assert_eq!(sh.text.as_ref().unwrap().body.vert, None, "a plain text box stays horizontal");
+
+        // PowerPoint gets bodyPr vert="eaVert" with spAutoFit.
+        let bytes = deckcraft_pptx::export(&s.doc().unwrap().doc).unwrap();
+        let back = deckcraft_pptx::import(&bytes).unwrap();
+        let v = back.slides[0].shapes.iter().find(|x| x.text.as_ref().is_some_and(|t| t.text() == "縦書きの文章")).unwrap();
+        let body = &v.text.as_ref().unwrap().body;
+        assert_eq!((body.vert, body.wrap, body.autofit), (Some(TextDir::EaVertical), Some(true), Some(AutoFit::Shape)));
     }
 }

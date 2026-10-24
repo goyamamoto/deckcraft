@@ -37,7 +37,15 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         cmd!("format.superscript", "Superscript", ["Home", "Font"], Some("Cmd+Shift+="), "{on?: bool}", has_text_or_shapes, superscript),
         cmd!("format.subscript", "Subscript", ["Home", "Font"], Some("Cmd+="), "{on?: bool}", has_text_or_shapes, subscript),
-        cmd!("format.font", "Font", ["Home", "Font"], None, "{family}", has_text_or_shapes, font),
+        cmd!(
+            "format.font",
+            "Font",
+            ["Home", "Font"],
+            None,
+            "{family?, eastAsian? (alias ea)} — family sets the Latin font, and an East Asian family (Japanese, Chinese or Korean: a CJK name, or an installed face with kana, ideographs or Hangul) the East Asian font too; eastAsian sets only the East Asian font (+mn-ea/+mj-ea or a family). At least one is required",
+            has_text_or_shapes,
+            font
+        ),
         cmd!("format.size", "Font Size", ["Home", "Font"], None, "{size: pt}", has_text_or_shapes, size),
         cmd!("format.grow", "Increase Font Size", ["Home", "Font"], Some("Cmd+Shift+."), "{}", has_text_or_shapes, grow),
         cmd!("format.shrink", "Decrease Font Size", ["Home", "Font"], Some("Cmd+Shift+,"), "{}", has_text_or_shapes, shrink),
@@ -66,7 +74,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Change Case",
             ["Home", "Font"],
             Some("Shift+F3"),
-            "{mode?: cycle|sentence|lower|upper|title|toggle} — cycle (Shift+F3, the default) goes lowercase → Capitalize Each Word → UPPERCASE; a caret in a word changes that word",
+            "{mode?: cycle|sentence|lower|upper|title|toggle|halfWidth|fullWidth} — cycle (Shift+F3, the default) goes lowercase → Capitalize Each Word → UPPERCASE; halfWidth/fullWidth (East Asian editing's 半角/全角) convert ASCII, spaces and katakana between half- and full-width forms (sound marks composed); a caret in a word changes that word; any other mode is an error",
             has_text_or_shapes,
             case
         ),
@@ -86,7 +94,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Font…",
             ["Home", "Font"],
             Some("Cmd+T"),
-            "{family?, size?: pt, bold?: bool, italic?: bool, underline?: none|sng|dbl|heavy|dotted|dash|wavy, color?, strike?: none|sng|dbl, baseline?: none|super|sub|<fraction>, caps?: none|small|all, spacing?: pt} — with none of these, opens the Font dialog",
+            "{family?, eastAsian?, size?: pt, bold?: bool, italic?: bool, underline?: none|sng|dbl|heavy|dotted|dash|wavy, color?, strike?: none|sng|dbl, baseline?: none|super|sub|<fraction>, caps?: none|small|all, spacing?: pt} — family is the Latin text font only, eastAsian the Asian text font only (the dialog's two boxes); with none of these, opens the Font dialog (params: the current values, family = Latin font, eastAsian = Asian font or \"\")",
             has_text_or_shapes,
             font_dialog
         ),
@@ -145,9 +153,18 @@ pub fn specs() -> Vec<CommandSpec> {
             "Numbering",
             ["Home", "Paragraph"],
             None,
-            "{on?: bool, scheme?: arabicPeriod|arabicParenR|romanUcPeriod|romanLcPeriod|alphaUcPeriod|alphaLcParenR|alphaLcPeriod, start?: n, color?, size?: % of text}",
+            "{on?: bool, scheme?: an ST_TextAutonumberScheme name (arabicPeriod, the default; arabicParenR, romanUcPeriod, alphaLcParenR, circleNumDbPlain, arabicDbPeriod, ea1JpnChsDbPeriod… — see format.numberingSchemes), start?: n, color?, size?: % of text} — an unknown scheme is an error",
             has_text_or_shapes,
             numbering
+        ),
+        cmd!(
+            query "format.numberingSchemes",
+            "Numbering Gallery",
+            [],
+            None,
+            "{} → {schemes: [{scheme, sample, eastAsian}]}: the Numbering gallery in order (eastAsian: shown with East Asian editing), each with its first three labels",
+            always,
+            numbering_schemes
         ),
         cmd!("format.indent", "Increase List Level", ["Home", "Paragraph"], Some("Tab"), "{}", has_text_or_shapes, |s, _| level(s, 1)),
         cmd!("format.outdent", "Decrease List Level", ["Home", "Paragraph"], Some("Shift+Tab"), "{}", has_text_or_shapes, |s, _| level(s, -1)),
@@ -165,7 +182,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Paragraph…",
             ["Format"],
             None,
-            "{align?, indentLeft?: pt, indentFirst?: pt (negative = hanging), spaceBefore?: pt, spaceAfter?: pt, lineSpacing?: lines}",
+            "{align?, indentLeft?: pt, indentFirst?: pt (negative = hanging), spaceBefore?: pt, spaceAfter?: pt, lineSpacing?: lines, eaLnBrk?: bool, latinLnBrk?: bool, hangingPunct?: bool, fontAlgn?: auto|t|ctr|base|b} — the last four are Asian Typography: East Asian line breaking (kinsoku), Latin words may break anywhere, hanging punctuation, and text alignment of mixed sizes",
             has_text_or_shapes,
             paragraph
         ),
@@ -175,7 +192,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Paragraph…",
             ["Home", "Paragraph"],
             None,
-            "{align?: left|center|right|justify|justLow|distributed, indentLeft?: pt, indentRight?: pt, special?: none|first|hanging, specialBy?: pt, indentFirst?: pt, spaceBefore?: pt, spaceAfter?: pt, spaceBeforeKind?: pts|pct, spaceAfterKind?: pts|pct, lineSpacing?: lines, lineSpacingPt?: pt} — with none of these, opens the Paragraph dialog",
+            "{align?: left|center|right|justify|justLow|distributed, indentLeft?: pt, indentRight?: pt, special?: none|first|hanging, specialBy?: pt, indentFirst?: pt, spaceBefore?: pt, spaceAfter?: pt, spaceBeforeKind?: pts|pct, spaceAfterKind?: pts|pct, lineSpacing?: lines, lineSpacingPt?: pt, eaLnBrk?: bool, latinLnBrk?: bool, hangingPunct?: bool, fontAlgn?: auto|t|ctr|base|b} — with none of these, opens the Paragraph dialog (its params include the four Asian Typography values)",
             has_text_or_shapes,
             paragraph_dialog
         ),
@@ -194,7 +211,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Text Direction",
             ["Home", "Paragraph"],
             None,
-            "{dir: horizontal|rotate90|rotate270|stacked}",
+            "{dir: horizontal (horz) | vertical (eaVert: East Asian vertical, characters upright, columns right to left) | rotate90 (vert) | rotate270 (vert270) | stacked (wordArtVert) | stackedRtl (wordArtVertRtl: every character upright, columns right to left) | mongolianVert} — any other value is an error",
             has_text_or_shapes,
             direction
         ),
@@ -212,7 +229,7 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         cmd!(noundo "format.painter", "Format Painter", ["Home", "Clipboard"], Some("Cmd+Shift+C"), "{sticky?: bool}", has_text_or_shapes, painter_pick),
         cmd!("format.painterApply", "Paste Formatting", [], Some("Cmd+Shift+V"), "{ids?}", has_text_or_shapes, painter_apply),
-        cmd!(query "format.state", "Formatting State", [], None, "{} → the effective formatting at the selection (font, size, bold, …)", has_doc, state),
+        cmd!(query "format.state", "Formatting State", [], None, "{} → the effective formatting at the selection (font, size, bold, …); font is the East Asian font when the character described (the first selected, else the one before the caret) is East Asian, fontLatin and fontEa are both fonts (fontEa null when none applies), dir the text direction", has_doc, state),
     ]
 }
 
@@ -301,9 +318,73 @@ fn subscript(s: &mut Session, p: &Value) -> Result<Value> {
     let v = on_param(p, Some(current_run(s).baseline.unwrap_or(0.0) < 0.0));
     format_run(s, &move |r| r.baseline = Some(if v { -0.25 } else { 0.0 }))
 }
+/// A font name parameter: absent, or a non-blank string of at most 200 characters (trimmed).
+fn font_name(p: &Value, cmd: &str, key: &str) -> Result<Option<String>> {
+    match p.get(key) {
+        None => Ok(None),
+        Some(Value::String(s)) => {
+            let t = s.trim();
+            if t.is_empty() || t.chars().count() > 200 {
+                return Err(bad(cmd, format!("`{key}` must be 1–200 characters")));
+            }
+            Ok(Some(t.to_string()))
+        }
+        Some(_) => Err(bad(cmd, format!("`{key}` must be a string"))),
+    }
+}
+
+/// The East Asian font parameter (`eastAsian`, or its alias `ea`).
+fn east_asian_param(p: &Value, cmd: &str) -> Result<Option<String>> {
+    match font_name(p, cmd, "eastAsian")? {
+        Some(f) => Ok(Some(f)),
+        None => font_name(p, cmd, "ea"),
+    }
+}
+
+/// Is `family` an East Asian (Japanese, Chinese or Korean) font, which PowerPoint applies to East
+/// Asian text too when it is picked in the font box? Its name is written in those scripts
+/// (メイリオ, 游ゴシック, 맑은 고딕), or its installed face maps kana, common ideographs or
+/// Hangul. Theme references (`+mn-lt`) and fonts that aren't installed under a Latin name aren't.
+pub(crate) fn is_east_asian_family(family: &str) -> bool {
+    use deckcraft_fonts::{FontDb, FontSlot};
+    let name = family.trim();
+    if name.is_empty() || name.starts_with('+') {
+        return false;
+    }
+    if name.chars().any(|c| deckcraft_fonts::script::slot_of(c) == Some(FontSlot::EastAsian)) {
+        return true;
+    }
+    let db = FontDb::global();
+    if !db.has_family(name) {
+        return false;
+    }
+    let face = db.face(name, "Regular");
+    // `face` falls back to another family when this one has no usable face: only its own counts.
+    let own = face.family.eq_ignore_ascii_case(name) || face.legacy.as_ref().is_some_and(|(f, _)| f.eq_ignore_ascii_case(name));
+    let maps = |cs: &[char]| cs.iter().all(|c| face.covers(*c));
+    own && (maps(&['あ', 'ア']) || maps(&['中', '国', '日']) || maps(&['가', '한']))
+}
+
+/// Home ▸ Font: as in PowerPoint, picking an East Asian font sets both the Latin and the East
+/// Asian font (`a:latin`, `a:ea`), so Japanese text takes it too, while picking a Latin font
+/// leaves the East Asian text's font alone. `eastAsian` sets only the East Asian font, as the
+/// Font dialog's Asian text font box does.
 fn font(s: &mut Session, p: &Value) -> Result<Value> {
-    let f = str_param(p, "family").ok_or_else(|| bad("format.font", "missing `family`"))?.to_string();
-    format_run(s, &move |r| r.font = Some(f.clone()))
+    const CMD: &str = "format.font";
+    let family = font_name(p, CMD, "family")?;
+    let east_asian = east_asian_param(p, CMD)?;
+    if family.is_none() && east_asian.is_none() {
+        return Err(bad(CMD, "missing `family` (or `eastAsian`)"));
+    }
+    let ea = east_asian.or_else(|| family.clone().filter(|f| is_east_asian_family(f)));
+    format_run(s, &move |r| {
+        if let Some(f) = &family {
+            r.font = Some(f.clone());
+        }
+        if let Some(f) = &ea {
+            r.font_ea = Some(f.clone());
+        }
+    })
 }
 fn size(s: &mut Session, p: &Value) -> Result<Value> {
     let v = f64_param(p, "size").ok_or_else(|| bad("format.size", "missing `size`"))?.clamp(1.0, 4000.0);
@@ -415,6 +496,8 @@ fn spacing(s: &mut Session, p: &Value) -> Result<Value> {
 /// Character formatting applied together, so the Font dialog is one undo step.
 struct FontEdits {
     family: Option<String>,
+    /// The Asian text font (`a:ea`); `family` is the Latin text font only.
+    east_asian: Option<String>,
     size: Option<f64>,
     bold: Option<bool>,
     italic: Option<bool>,
@@ -429,6 +512,7 @@ struct FontEdits {
 impl FontEdits {
     fn is_empty(&self) -> bool {
         self.family.is_none()
+            && self.east_asian.is_none()
             && self.size.is_none()
             && self.bold.is_none()
             && self.italic.is_none()
@@ -443,6 +527,9 @@ impl FontEdits {
     fn write(&self, r: &mut RunProps) {
         if let Some(f) = &self.family {
             r.font = Some(f.clone());
+        }
+        if let Some(f) = &self.east_asian {
+            r.font_ea = Some(f.clone());
         }
         if let Some(v) = self.size {
             r.size = Some(v);
@@ -491,16 +578,10 @@ fn font_str<'a>(p: &'a Value, key: &str) -> Result<Option<&'a str>> {
 }
 
 fn font_edits(p: &Value) -> Result<FontEdits> {
-    let family = match font_str(p, "family")? {
-        None => None,
-        Some(s) => {
-            let t = s.trim();
-            if t.is_empty() || t.chars().count() > 200 {
-                return Err(bad("format.fontDialog", "`family` must be 1–200 characters"));
-            }
-            Some(t.to_string())
-        }
-    };
+    // The dialog's two boxes set one font each, as PowerPoint's Latin text font and Asian text
+    // font boxes do (only the ribbon's font box applies an East Asian family to both).
+    let family = font_name(p, "format.fontDialog", "family")?;
+    let east_asian = east_asian_param(p, "format.fontDialog")?;
     let size = match p.get("size") {
         None => None,
         Some(v) => {
@@ -554,7 +635,19 @@ fn font_edits(p: &Value) -> Result<FontEdits> {
             Some(n.clamp(-100.0, 400.0))
         }
     };
-    Ok(FontEdits { family, size, bold: font_bool(p, "bold")?, italic: font_bool(p, "italic")?, underline, color, strike, baseline, caps, spacing })
+    Ok(FontEdits {
+        family,
+        east_asian,
+        size,
+        bold: font_bool(p, "bold")?,
+        italic: font_bool(p, "italic")?,
+        underline,
+        color,
+        strike,
+        baseline,
+        caps,
+        spacing,
+    })
 }
 
 /// A colour as a `format.fontDialog` / `format.color` parameter, including transforms.
@@ -581,12 +674,62 @@ fn color_command_value(c: &deckcraft_model::ColorRef) -> Value {
     }
 }
 
+/// The East Asian font text with resolved props `r` is drawn in, as the text layout picks it: the
+/// run's own `a:ea` (theme references resolved), else the theme's East Asian heading or body
+/// font, else the theme's font for the run's East Asian language (`Jpan` for Japanese: its
+/// `lang`, then `altLang`, then the system's East Asian language). `None` when none applies and
+/// East Asian text falls back past the Latin font.
+pub(crate) fn east_asian_family(ctx: &resolve::Ctx, r: &RunProps) -> Option<String> {
+    let theme = &ctx.master.theme;
+    let major = r.font.as_deref().is_some_and(|f| f.starts_with("+mj"));
+    let named = theme.font(r.font_ea.as_deref().unwrap_or(if major { "+mj-ea" } else { "+mn-ea" }));
+    if !named.trim().is_empty() {
+        return Some(named);
+    }
+    let cjk = [r.lang.as_deref(), r.alt_lang.as_deref()]
+        .into_iter()
+        .flatten()
+        .find_map(deckcraft_fonts::CjkLocale::from_lang)
+        .or_else(deckcraft_fonts::default_cjk_locale)?;
+    let set = if major { &theme.fonts.major } else { &theme.fonts.minor };
+    set.script(cjk.theme_script()).map(str::to_string)
+}
+
+/// The Latin and East Asian fonts of the run props at the selection.
+fn current_fonts(s: &Session, r: &RunProps) -> (String, Option<String>) {
+    let Ok(st) = s.doc() else { return (String::new(), None) };
+    match super::text::ctx_for(&st.doc, &st.selection) {
+        Some(c) => (resolve::font_family(&c, r), east_asian_family(&c, r)),
+        None => (r.font.clone().unwrap_or_default(), r.font_ea.clone()),
+    }
+}
+
+/// The character the font box describes: the first selected one, else the one before the caret
+/// (what typing there continues), else the one after it; with shapes selected, their text's
+/// first character.
+fn described_char(s: &Session) -> Option<char> {
+    let st = s.doc().ok()?;
+    let Some(t) = &st.selection.text else {
+        let sh = st.selected_shapes().into_iter().next()?;
+        return sh.text.as_ref()?.paragraphs.iter().find_map(|p| p.text().chars().next());
+    };
+    let body = super::text::body_of(st, t)?;
+    let (a, b) = t.ordered();
+    let line: Vec<char> = body.paragraphs.get(a.0)?.text().chars().collect();
+    let after = line.get(a.1).copied();
+    if a != b {
+        return after;
+    }
+    a.1.checked_sub(1).and_then(|i| line.get(i).copied()).or(after)
+}
+
 fn font_dialog_params(s: &Session) -> Value {
     let r = current_run(s);
-    let family = s.doc().ok().and_then(|st| super::text::ctx_for(&st.doc, &st.selection).map(|c| resolve::font_family(&c, &r))).unwrap_or_default();
+    let (family, east_asian) = current_fonts(s, &r);
     let baseline = r.baseline.unwrap_or(0.0);
     let mut v = json!({
         "family": family,
+        "eastAsian": east_asian.unwrap_or_default(),
         "size": r.size.unwrap_or(18.0),
         "bold": r.bold.unwrap_or(false),
         "italic": r.italic.unwrap_or(false),
@@ -674,8 +817,14 @@ fn text_warp(s: &mut Session, p: &Value) -> Result<Value> {
     })
 }
 
+/// Home ▸ Font ▸ Change Case. With East Asian editing PowerPoint adds Half-width and Full-width
+/// (半角 / 全角) after the five Latin cases; it has no Hiragana or Katakana kinds.
 fn case(s: &mut Session, p: &Value) -> Result<Value> {
-    let mode = str_param(p, "mode").unwrap_or("cycle").to_string();
+    let mode = match p.get("mode") {
+        None => "cycle".to_string(),
+        Some(Value::String(m)) if m == "cycle" || ed::CASE_MODES.contains(&m.as_str()) => m.clone(),
+        Some(_) => return Err(bad("format.case", format!("`mode` must be cycle or one of {}", ed::CASE_MODES.join(", ")))),
+    };
     let st = s.doc()?;
     if let Some(t) = st.selection.text.clone() {
         let (mut a, mut b) = t.ordered();
@@ -692,6 +841,10 @@ fn case(s: &mut Session, p: &Value) -> Result<Value> {
         }
         let m = if mode == "cycle" { ed::next_case(&ed::text_range(&body, a, b)).to_string() } else { mode.clone() };
         super::text::edit_text(s, move |body, t| {
+            // A width change can change the selection's length (ｶﾞ → ガ): it keeps covering the
+            // converted text.
+            let forward = t.caret >= t.anchor;
+            let mut end = b;
             for pi in a.0..=b.0 {
                 let Some(para) = body.paragraphs.get_mut(pi) else { continue };
                 let n = para.char_len();
@@ -720,10 +873,16 @@ fn case(s: &mut Session, p: &Value) -> Result<Value> {
                     let post: String = r.text.chars().skip(re).collect();
                     r.text = format!("{pre}{new}{post}");
                 }
+                if pi == b.0 {
+                    // The end moves by the change in the paragraph's length.
+                    end.1 = b.1.saturating_add(para.char_len()).saturating_sub(n);
+                }
             }
             if collapsed {
                 t.anchor = a;
                 t.caret = a;
+            } else if end != b {
+                (t.anchor, t.caret) = if forward { (a, end) } else { (end, a) };
             }
         })?;
         return ok();
@@ -815,10 +974,90 @@ fn bullets(s: &mut Session, p: &Value) -> Result<Value> {
     })
 }
 
+/// Every automatic numbering scheme DrawingML defines (ECMA-376 `ST_TextAutonumberScheme`).
+pub const AUTONUM_SCHEMES: &[&str] = &[
+    "alphaLcParenBoth",
+    "alphaUcParenBoth",
+    "alphaLcParenR",
+    "alphaUcParenR",
+    "alphaLcPeriod",
+    "alphaUcPeriod",
+    "arabicParenBoth",
+    "arabicParenR",
+    "arabicPeriod",
+    "arabicPlain",
+    "romanLcParenBoth",
+    "romanUcParenBoth",
+    "romanLcParenR",
+    "romanUcParenR",
+    "romanLcPeriod",
+    "romanUcPeriod",
+    "circleNumDbPlain",
+    "circleNumWdBlackPlain",
+    "circleNumWdWhitePlain",
+    "arabicDbPeriod",
+    "arabicDbPlain",
+    "ea1ChsPeriod",
+    "ea1ChsPlain",
+    "ea1ChtPeriod",
+    "ea1ChtPlain",
+    "ea1JpnChsDbPeriod",
+    "ea1JpnKorPlain",
+    "ea1JpnKorPeriod",
+    "arabic1Minus",
+    "arabic2Minus",
+    "hebrew2Minus",
+    "thaiAlphaPeriod",
+    "thaiAlphaParenR",
+    "thaiAlphaParenBoth",
+    "thaiNumPeriod",
+    "thaiNumParenR",
+    "thaiNumParenBoth",
+    "hindiAlphaPeriod",
+    "hindiNumPeriod",
+    "hindiNumParenR",
+    "hindiAlpha1Period",
+];
+
+/// Home ▸ Paragraph ▸ Numbering's gallery, in order: the seven Latin schemes, then the East
+/// Asian ones PowerPoint adds with East Asian editing (circled ①②③, full-width １．２．３． and
+/// kanji 一．二．三．). `true` marks the East Asian entries.
+pub const NUMBERING_GALLERY: &[(&str, bool)] = &[
+    ("arabicPeriod", false),
+    ("arabicParenR", false),
+    ("romanUcPeriod", false),
+    ("romanLcPeriod", false),
+    ("alphaUcPeriod", false),
+    ("alphaLcParenR", false),
+    ("alphaLcPeriod", false),
+    ("circleNumDbPlain", true),
+    ("arabicDbPeriod", true),
+    ("ea1JpnChsDbPeriod", true),
+];
+
+fn numbering_schemes(_s: &mut Session, _p: &Value) -> Result<Value> {
+    let schemes: Vec<Value> = NUMBERING_GALLERY
+        .iter()
+        .map(|&(scheme, east_asian)| {
+            let sample = (1..=3).map(|n| deckcraft_text::autonum(scheme, n)).collect::<Vec<_>>().join(" ");
+            json!({"scheme": scheme, "sample": sample, "eastAsian": east_asian})
+        })
+        .collect();
+    Ok(json!({ "schemes": schemes }))
+}
+
 fn numbering(s: &mut Session, p: &Value) -> Result<Value> {
     let cur = matches!(current_para(s).bullet, Some(Bullet::AutoNum { .. }));
     let on = on_param(p, Some(cur));
-    let scheme = str_param(p, "scheme").unwrap_or("arabicPeriod").to_string();
+    let scheme = match p.get("scheme") {
+        None => "arabicPeriod".to_string(),
+        Some(Value::String(name)) => AUTONUM_SCHEMES
+            .iter()
+            .find(|k| k.eq_ignore_ascii_case(name.trim()))
+            .map(|k| (*k).to_string())
+            .ok_or_else(|| bad("format.numbering", format!("unknown numbering `scheme` `{name}` (see format.numberingSchemes)")))?,
+        Some(_) => return Err(bad("format.numbering", "`scheme` must be a string")),
+    };
     let start = p.get("start").and_then(Value::as_u64).map(|v| v.clamp(1, 32767) as u32).unwrap_or(1);
     let col = color_param(p, "color");
     let size = f64_param(p, "size").map(|v| (v / 100.0).clamp(0.25, 4.0));
@@ -860,7 +1099,77 @@ fn line_spacing(s: &mut Session, p: &Value) -> Result<Value> {
     format_para(s, &move |para| para.props.line_spacing = Some(sp))
 }
 
+/// Home ▸ Paragraph ▸ Paragraph… ▸ Asian Typography, as PowerPoint offers it with East Asian
+/// editing: East Asian line-breaking rules for the first and last characters of a line (kinsoku,
+/// `eaLnBrk`), Latin words that may break anywhere (`latinLnBrk`), closing punctuation that may
+/// hang past the margin (`hangingPunct`), and how runs of different sizes line up (`fontAlgn`).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct AsianTypography {
+    east_asian_line_break: Option<bool>,
+    latin_line_break: Option<bool>,
+    hanging_punct: Option<bool>,
+    font_align: Option<&'static str>,
+}
+
+const ASIAN_TYPOGRAPHY_KEYS: &[&str] = &["eaLnBrk", "latinLnBrk", "hangingPunct", "fontAlgn"];
+
+impl AsianTypography {
+    fn parse(p: &Value, cmd: &str) -> Result<Self> {
+        let flag = |key: &str| match p.get(key) {
+            None => Ok(None),
+            Some(Value::Bool(b)) => Ok(Some(*b)),
+            Some(_) => Err(bad(cmd, format!("`{key}` must be a bool"))),
+        };
+        let font_align = match p.get("fontAlgn") {
+            None => None,
+            Some(Value::String(a)) => Some(match a.as_str() {
+                "auto" => "auto",
+                "t" | "top" => "t",
+                "ctr" | "center" | "middle" => "ctr",
+                "base" | "baseline" => "base",
+                "b" | "bottom" => "b",
+                _ => return Err(bad(cmd, "`fontAlgn` must be auto, t, ctr, base or b")),
+            }),
+            Some(_) => return Err(bad(cmd, "`fontAlgn` must be a string")),
+        };
+        Ok(AsianTypography {
+            east_asian_line_break: flag("eaLnBrk")?,
+            latin_line_break: flag("latinLnBrk")?,
+            hanging_punct: flag("hangingPunct")?,
+            font_align,
+        })
+    }
+
+    fn write(&self, pp: &mut ParaProps) {
+        if self.east_asian_line_break.is_some() {
+            pp.east_asian_line_break = self.east_asian_line_break;
+        }
+        if self.latin_line_break.is_some() {
+            pp.latin_line_break = self.latin_line_break;
+        }
+        if self.hanging_punct.is_some() {
+            pp.hanging_punct = self.hanging_punct;
+        }
+        if let Some(a) = self.font_align {
+            pp.font_align = Some(a.to_string());
+        }
+    }
+}
+
+/// The Asian Typography values a paragraph shows (resolved): PowerPoint's defaults where nothing
+/// says otherwise — kinsoku and hanging punctuation on, Latin words kept whole, automatic
+/// alignment.
+fn asian_typography_params(pp: &ParaProps) -> Value {
+    json!({
+        "eaLnBrk": pp.east_asian_line_break.unwrap_or(true),
+        "latinLnBrk": pp.latin_line_break.unwrap_or(false),
+        "hangingPunct": pp.hanging_punct.unwrap_or(true),
+        "fontAlgn": pp.font_align.as_deref().filter(|a| matches!(*a, "auto" | "t" | "ctr" | "base" | "b")).unwrap_or("auto"),
+    })
+}
+
 fn paragraph(s: &mut Session, p: &Value) -> Result<Value> {
+    let asian = AsianTypography::parse(p, "format.paragraph")?;
     let a = str_param(p, "align").map(|a| match a {
         "center" => Align::Center,
         "right" => Align::Right,
@@ -896,6 +1205,7 @@ fn paragraph(s: &mut Session, p: &Value) -> Result<Value> {
         if let Some(v) = lsp {
             para.props.line_spacing = Some(Spacing::Pts(v.max(0.0)));
         }
+        asian.write(&mut para.props);
     })
 }
 
@@ -903,7 +1213,7 @@ const PARA_DIALOG_KEYS: &[&str] =
     &["align", "indentLeft", "indentRight", "indentFirst", "special", "specialBy", "spaceBefore", "spaceAfter", "lineSpacing", "lineSpacingPt"];
 
 fn para_dialog_has_fields(p: &Value) -> bool {
-    PARA_DIALOG_KEYS.iter().any(|k| p.get(*k).is_some())
+    PARA_DIALOG_KEYS.iter().chain(ASIAN_TYPOGRAPHY_KEYS).any(|k| p.get(*k).is_some())
 }
 
 fn finite_key(p: &Value, cmd: &str, key: &str) -> Result<Option<f64>> {
@@ -968,8 +1278,8 @@ fn paragraph_dialog_params(s: &Session) -> Value {
     };
     let (before_kind, before) = spacing_parts(pp.space_before);
     let (after_kind, after) = spacing_parts(pp.space_after);
-    let tabs: Vec<Value> = pp.tabs.unwrap_or_default().iter().map(|t| json!({"pos": t.pos, "align": t.align})).collect();
-    json!({
+    let tabs: Vec<Value> = pp.tabs.clone().unwrap_or_default().iter().map(|t| json!({"pos": t.pos, "align": t.align})).collect();
+    let mut v = json!({
         "align": align_name(pp.align.unwrap_or(Align::Left)),
         "indentLeft": pp.margin_left.unwrap_or(0.0),
         "indentRight": pp.margin_right.unwrap_or(0.0),
@@ -983,7 +1293,11 @@ fn paragraph_dialog_params(s: &Session) -> Value {
         "lineValue": line_value,
         "tabs": tabs,
         "defaultTab": pp.default_tab.unwrap_or(72.0),
-    })
+    });
+    if let (Some(o), Value::Object(asian)) = (v.as_object_mut(), asian_typography_params(&pp)) {
+        o.extend(asian);
+    }
+    v
 }
 
 fn write_spacing(kind: Option<&str>, value: f64) -> Spacing {
@@ -1028,7 +1342,9 @@ fn paragraph_dialog(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let line_mult = finite_key(p, CMD, "lineSpacing")?.map(|v| v.clamp(0.0, 9.99));
     let line_pt = finite_key(p, CMD, "lineSpacingPt")?.map(clamp_pt);
+    let asian = AsianTypography::parse(p, CMD)?;
     format_para(s, &move |para| {
+        asian.write(&mut para.props);
         if align.is_some() {
             para.props.align = align;
         }
@@ -1080,13 +1396,45 @@ fn anchor(s: &mut Session, p: &Value) -> Result<Value> {
     };
     format_body(s, &move |b| b.anchor = Some(a))
 }
-fn direction(s: &mut Session, p: &Value) -> Result<Value> {
-    let d = match str_param(p, "dir").unwrap_or("horizontal") {
-        "rotate90" | "vert" => TextDir::Vertical,
-        "rotate270" | "vert270" => TextDir::Vertical270,
+/// A Text Direction name: PowerPoint's choices by the names `format.direction` documents, or
+/// the `bodyPr vert` value itself.
+fn parse_dir(s: &str) -> Option<TextDir> {
+    Some(match s {
+        "horizontal" => TextDir::Horizontal,
+        "vertical" => TextDir::EaVertical,
+        "rotate90" => TextDir::Vertical,
+        "rotate270" => TextDir::Vertical270,
         "stacked" => TextDir::Stacked,
-        _ => TextDir::Horizontal,
+        "stackedRtl" => TextDir::StackedRtl,
+        other => return TextDir::from_xml(other),
+    })
+}
+
+/// The `format.direction` name of a text direction.
+fn dir_name(d: TextDir) -> &'static str {
+    match d {
+        TextDir::Horizontal => "horizontal",
+        TextDir::EaVertical => "vertical",
+        TextDir::Vertical => "rotate90",
+        TextDir::Vertical270 => "rotate270",
+        TextDir::Stacked => "stacked",
+        TextDir::StackedRtl => "stackedRtl",
+        TextDir::MongolianVertical => "mongolianVert",
+    }
+}
+
+/// Home ▸ Paragraph ▸ Text Direction. With East Asian editing PowerPoint adds Vertical (`eaVert`:
+/// kana and kanji upright, Latin text turned, columns from right to left) and the stacked form
+/// that keeps every character upright with columns from right to left (`wordArtVertRtl`).
+fn direction(s: &mut Session, p: &Value) -> Result<Value> {
+    let name = match p.get("dir") {
+        None => "horizontal",
+        Some(Value::String(d)) => d.as_str(),
+        Some(_) => return Err(bad("format.direction", "`dir` must be a string")),
     };
+    let d = parse_dir(name).ok_or_else(|| {
+        bad("format.direction", format!("unknown `dir` `{name}`: horizontal, vertical, rotate90, rotate270, stacked, stackedRtl or mongolianVert"))
+    })?;
     format_body(s, &move |b| b.vert = Some(d))
 }
 fn columns(s: &mut Session, p: &Value) -> Result<Value> {
@@ -1227,11 +1575,26 @@ fn painter_apply(s: &mut Session, p: &Value) -> Result<Value> {
 fn state(s: &mut Session, _p: &Value) -> Result<Value> {
     let r = current_run(s);
     let pp = current_para(s);
-    let st = s.doc()?;
-    let family = super::text::ctx_for(&st.doc, &st.selection).map(|c| resolve::font_family(&c, &r)).unwrap_or_default();
+    let (family, east_asian) = current_fonts(s, &r);
+    // On East Asian text the font box names the East Asian font, as PowerPoint's does.
+    let on_east_asian = described_char(s).is_some_and(|c| deckcraft_fonts::script::slot_of(c) == Some(deckcraft_fonts::FontSlot::EastAsian));
+    let shown = match (&east_asian, on_east_asian) {
+        (Some(ea), true) => ea.clone(),
+        _ => family.clone(),
+    };
+    let dir = s.doc().ok().and_then(|st| {
+        let id = st.selection.text.as_ref().filter(|t| !t.notes).map(|t| t.shape).or_else(|| st.selection.shapes.first().copied())?;
+        let sh = st.shape(id)?;
+        let ctx = super::text::ctx_for(&st.doc, &st.selection)?;
+        resolve::body(&ctx, sh).vert
+    });
     Ok(json!({
-        "font": family,
+        "font": shown,
+        "fontLatin": family,
+        "fontEa": east_asian,
         "fontRef": r.font,
+        "fontEaRef": r.font_ea,
+        "dir": dir_name(dir.unwrap_or(TextDir::Horizontal)),
         "size": r.size,
         "bold": r.bold.unwrap_or(false),
         "italic": r.italic.unwrap_or(false),
@@ -1624,5 +1987,294 @@ mod tests {
         assert!(s.execute("format.tabs", &json!({"set": [{"pos": 10.0, "align": "sparkle"}]})).is_err());
         assert!(s.execute("format.tabs", &json!({"set": "nope"})).is_err());
         assert_eq!(s.doc().unwrap().history.undo.len(), n);
+    }
+
+    fn text_shape(s: &mut Session, text: &str) -> deckcraft_model::ShapeId {
+        let r = s.execute("shape.insert", &json!({"preset": "rect", "rect": [40.0, 40.0, 400.0, 80.0], "text": text})).unwrap();
+        deckcraft_model::ShapeId(r["id"].as_u64().unwrap() as u32)
+    }
+
+    fn runs_of(s: &Session, id: deckcraft_model::ShapeId) -> Vec<deckcraft_model::text::Run> {
+        s.doc().unwrap().shape(id).unwrap().text.clone().unwrap().paragraphs[0].runs.clone()
+    }
+
+    fn undo_len(s: &Session) -> usize {
+        s.doc().unwrap().history.undo.len()
+    }
+
+    #[test]
+    fn an_east_asian_font_sets_both_fonts_and_a_latin_font_only_the_latin_one() {
+        let mut s = Session::with_new();
+        let id = text_shape(&mut s, "日本語abc");
+        s.execute("format.font", &json!({"family": "テスト明朝"})).unwrap();
+        let r = runs_of(&s, id)[0].props.clone();
+        assert_eq!(r.font.as_deref(), Some("テスト明朝"));
+        assert_eq!(r.font_ea.as_deref(), Some("テスト明朝"), "a Japanese font is the Japanese text's font too");
+        s.execute("format.font", &json!({"family": "Liberation Serif"})).unwrap();
+        let r = runs_of(&s, id)[0].props.clone();
+        assert_eq!(r.font.as_deref(), Some("Liberation Serif"));
+        assert_eq!(r.font_ea.as_deref(), Some("テスト明朝"), "a Latin font leaves the Japanese text's font");
+        s.execute("format.font", &json!({"eastAsian": "BIZ UDPGothic"})).unwrap();
+        let r = runs_of(&s, id)[0].props.clone();
+        assert_eq!((r.font.as_deref(), r.font_ea.as_deref()), (Some("Liberation Serif"), Some("BIZ UDPGothic")));
+        s.execute("format.font", &json!({"ea": "+mj-ea"})).unwrap();
+        assert_eq!(runs_of(&s, id)[0].props.font_ea.as_deref(), Some("+mj-ea"));
+        s.execute("format.font", &json!({"family": "テスト明朝", "eastAsian": "BIZ UDMincho"})).unwrap();
+        let r = runs_of(&s, id)[0].props.clone();
+        assert_eq!((r.font.as_deref(), r.font_ea.as_deref()), (Some("テスト明朝"), Some("BIZ UDMincho")), "an explicit Asian font wins");
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(runs_of(&s, id)[0].props.font_ea.as_deref(), Some("+mj-ea"), "one undo step");
+
+        let n = undo_len(&s);
+        for bad in [json!({}), json!({"family": 3}), json!({"family": "  "}), json!({"eastAsian": ""}), json!({"family": "Inter", "ea": false})] {
+            assert!(s.execute("format.font", &bad).is_err(), "{bad}");
+        }
+        assert_eq!(undo_len(&s), n);
+    }
+
+    #[test]
+    fn east_asian_families_are_told_by_name_or_by_their_faces() {
+        assert!(is_east_asian_family("テスト明朝"));
+        assert!(is_east_asian_family("맑은 테스트"));
+        assert!(!is_east_asian_family("Inter"));
+        assert!(!is_east_asian_family("Liberation Serif"));
+        assert!(!is_east_asian_family("+mn-lt"));
+        assert!(!is_east_asian_family("  "));
+        assert!(!is_east_asian_family("Qqq Not Installed Sans"));
+        // An East Asian face installed under a Latin name (craft-fonts' BIZ UDPGothic, a Mac's
+        // Hiragino or Apple SD Gothic Neo) is East Asian by what it maps.
+        let db = deckcraft_fonts::FontDb::global();
+        for fam in ["BIZ UDPGothic", "Hiragino Sans", "Hiragino Sans GB", "Apple SD Gothic Neo"] {
+            if db.has_family(fam) {
+                assert!(is_east_asian_family(fam), "{fam}");
+                let mut s = Session::with_new();
+                let id = text_shape(&mut s, "日本語");
+                s.execute("format.font", &json!({"family": fam})).unwrap();
+                assert_eq!(runs_of(&s, id)[0].props.font_ea.as_deref(), Some(fam));
+            }
+        }
+    }
+
+    #[test]
+    fn the_font_box_names_the_east_asian_font_on_east_asian_text() {
+        let mut s = Session::with_new();
+        s.edit(|doc, _| {
+            std::sync::Arc::make_mut(&mut doc.masters[0]).theme.fonts.minor.ea = "Theme EA".into();
+            Ok(())
+        })
+        .unwrap();
+        let id = text_shape(&mut s, "日本語abc");
+        let st = s.execute("format.state", &json!({})).unwrap();
+        assert_eq!(st["font"], "Theme EA", "a selected shape: its first character, 日");
+        s.execute("text.edit", &json!({"id": id.0, "at": [0, 3]})).unwrap();
+        let st = s.execute("format.state", &json!({})).unwrap();
+        assert_eq!(st["font"], "Theme EA", "after 語");
+        assert_eq!(st["fontLatin"], "Inter");
+        assert_eq!(st["fontEa"], "Theme EA");
+        s.execute("text.edit", &json!({"id": id.0, "at": [0, 6]})).unwrap();
+        let st = s.execute("format.state", &json!({})).unwrap();
+        assert_eq!(st["font"], "Inter", "after c");
+        assert_eq!(st["fontEa"], "Theme EA");
+        s.execute("text.select", &json!({"anchor": [0, 3], "caret": [0, 1]})).unwrap();
+        assert_eq!(s.execute("format.state", &json!({})).unwrap()["font"], "Theme EA", "the first selected character, 本");
+
+        // The Font dialog shows both.
+        s.ui_requests.clear();
+        s.execute("format.fontDialog", &json!({})).unwrap();
+        let Some(UiRequest::Dialog { params, .. }) = s.ui_requests.last() else { panic!("dialog request") };
+        assert_eq!(params["family"], "Inter");
+        assert_eq!(params["eastAsian"], "Theme EA");
+
+        // Without any East Asian font the box keeps the Latin font.
+        let mut s = Session::with_new();
+        let id = text_shape(&mut s, "日本語");
+        s.execute("text.edit", &json!({"id": id.0, "at": [0, 2]})).unwrap();
+        let st = s.execute("format.state", &json!({})).unwrap();
+        assert_eq!(st["font"], "Inter");
+        assert!(st["fontEa"].is_null());
+    }
+
+    #[test]
+    fn japanese_text_in_a_japanese_deck_shows_the_themes_jpan_font() {
+        let mut s = Session::new();
+        s.execute("file.new", &json!({"eastAsian": "ja-JP"})).unwrap();
+        let id = text_shape(&mut s, "日本語abc");
+        s.execute("text.edit", &json!({"id": id.0, "at": [0, 1]})).unwrap();
+        let st = s.execute("format.state", &json!({})).unwrap();
+        assert_eq!(st["lang"], "ja-JP", "the deck's default language");
+        assert_eq!(st["font"], "BIZ UDPGothic");
+        assert_eq!(st["fontLatin"], "Inter");
+    }
+
+    #[test]
+    fn font_dialog_sets_the_latin_and_asian_text_fonts() {
+        let mut s = Session::with_new();
+        let id = text_shape(&mut s, "日本語abc");
+        let n = undo_len(&s);
+        s.execute("format.fontDialog", &json!({"family": "Liberation Serif", "eastAsian": "テスト明朝", "bold": true})).unwrap();
+        let r = runs_of(&s, id)[0].props.clone();
+        assert_eq!((r.font.as_deref(), r.font_ea.as_deref(), r.bold), (Some("Liberation Serif"), Some("テスト明朝"), Some(true)));
+        assert_eq!(undo_len(&s), n + 1);
+        // The Latin text font box sets only the Latin font, even to an East Asian family (OK
+        // sends it unchanged too, so it must not overwrite the Asian text font).
+        s.execute("format.fontDialog", &json!({"family": "BIZ UDMincho 風", "italic": true})).unwrap();
+        let r = runs_of(&s, id)[0].props.clone();
+        assert_eq!((r.font.as_deref(), r.font_ea.as_deref(), r.italic), (Some("BIZ UDMincho 風"), Some("テスト明朝"), Some(true)));
+        s.execute("format.fontDialog", &json!({"eastAsian": "BIZ UDPGothic"})).unwrap();
+        let r = runs_of(&s, id)[0].props.clone();
+        assert_eq!((r.font.as_deref(), r.font_ea.as_deref()), (Some("BIZ UDMincho 風"), Some("BIZ UDPGothic")));
+        assert!(s.execute("format.fontDialog", &json!({"eastAsian": 7})).is_err());
+        assert!(s.execute("format.fontDialog", &json!({"eastAsian": " "})).is_err());
+        assert_eq!(undo_len(&s), n + 3);
+    }
+
+    #[test]
+    fn text_direction_takes_east_asian_vertical_and_rejects_unknown_values() {
+        let mut s = shape();
+        let vert = |s: &Session| s.doc().unwrap().selected_shapes().first().and_then(|sh| sh.text.as_ref()).unwrap().body.vert;
+        for (dir, want) in [
+            ("vertical", TextDir::EaVertical),
+            ("eaVert", TextDir::EaVertical),
+            ("stackedRtl", TextDir::StackedRtl),
+            ("wordArtVertRtl", TextDir::StackedRtl),
+            ("mongolianVert", TextDir::MongolianVertical),
+            ("rotate90", TextDir::Vertical),
+            ("vert270", TextDir::Vertical270),
+            ("wordArtVert", TextDir::Stacked),
+            ("stacked", TextDir::Stacked),
+            ("horz", TextDir::Horizontal),
+        ] {
+            s.execute("format.direction", &json!({"dir": dir})).unwrap();
+            assert_eq!(vert(&s), Some(want), "{dir}");
+        }
+        s.execute("format.direction", &json!({"dir": "vertical"})).unwrap();
+        assert_eq!(s.execute("format.state", &json!({})).unwrap()["dir"], "vertical");
+        let n = undo_len(&s);
+        let err = s.execute("format.direction", &json!({"dir": "sideways"})).unwrap_err().to_string();
+        assert!(err.contains("sideways"), "{err}");
+        assert!(s.execute("format.direction", &json!({"dir": 90})).is_err());
+        assert_eq!(undo_len(&s), n);
+        assert_eq!(vert(&s), Some(TextDir::EaVertical), "an unknown direction changes nothing");
+        // PowerPoint gets vert="eaVert".
+        let bytes = deckcraft_pptx::export(&s.doc().unwrap().doc).unwrap();
+        let back = deckcraft_pptx::import(&bytes).unwrap();
+        let sh = back.slides[0].shapes.iter().find(|sh| sh.ph.is_none()).unwrap();
+        assert_eq!(sh.text.as_ref().unwrap().body.vert, Some(TextDir::EaVertical));
+    }
+
+    #[test]
+    fn change_case_converts_half_and_full_width_across_runs() {
+        let mut s = Session::with_new();
+        let id = text_shape(&mut s, "ＡＢＣ１２３　ｶﾞ");
+        s.execute("text.edit", &json!({"id": id.0})).unwrap();
+        // ｶ and its sound mark ﾞ in two runs.
+        s.execute("text.select", &json!({"anchor": [0, 0], "caret": [0, 8]})).unwrap();
+        s.execute("format.bold", &json!({"on": true})).unwrap();
+        s.execute("text.select", &json!({"anchor": [0, 0], "caret": [0, 9]})).unwrap();
+        let n = undo_len(&s);
+        s.execute("format.case", &json!({"mode": "halfWidth"})).unwrap();
+        let text = |s: &Session| runs_of(s, id).iter().map(|r| r.text.clone()).collect::<String>();
+        assert_eq!(text(&s), "ABC123 ｶﾞ");
+        assert_eq!(runs_of(&s, id)[0].text, "ABC123 ｶ");
+        assert_eq!(runs_of(&s, id)[0].props.bold, Some(true));
+        assert_eq!(undo_len(&s), n + 1);
+        s.execute("format.case", &json!({"mode": "fullWidth"})).unwrap();
+        assert_eq!(text(&s), "ＡＢＣ１２３　ガ");
+        assert_eq!(runs_of(&s, id)[0].text, "ＡＢＣ１２３　ガ", "the sound mark composes into the kana's run");
+        let sel = s.doc().unwrap().selection.text.clone().unwrap();
+        assert_eq!(sel.ordered(), ((0, 0), (0, 8)), "the selection still covers the converted text");
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(text(&s), "ABC123 ｶﾞ");
+
+        // Unknown modes are errors, not sentence case.
+        let n = undo_len(&s);
+        for bad in [json!({"mode": "hiragana"}), json!({"mode": "katakana"}), json!({"mode": "Sentence"}), json!({"mode": 2})] {
+            assert!(s.execute("format.case", &bad).is_err(), "{bad}");
+        }
+        assert_eq!(undo_len(&s), n);
+        assert_eq!(text(&s), "ABC123 ｶﾞ");
+
+        // A selected shape converts all its text.
+        s.execute("text.exit", &json!({})).unwrap();
+        s.execute("format.case", &json!({"mode": "fullWidth"})).unwrap();
+        assert_eq!(text(&s), "ＡＢＣ１２３　ガ");
+    }
+
+    #[test]
+    fn numbering_takes_east_asian_schemes_and_rejects_unknown_ones() {
+        let mut s = shape();
+        let scheme = |s: &Session| match para(s).bullet {
+            Some(Bullet::AutoNum { scheme, .. }) => scheme,
+            other => panic!("numbered, got {other:?}"),
+        };
+        s.execute("format.numbering", &json!({"on": true, "scheme": "circleNumDbPlain"})).unwrap();
+        assert_eq!(scheme(&s), "circleNumDbPlain");
+        s.execute("format.numbering", &json!({"on": true, "scheme": "ARABICDBPERIOD"})).unwrap();
+        assert_eq!(scheme(&s), "arabicDbPeriod", "names are matched without case and stored as the schema spells them");
+        let n = undo_len(&s);
+        assert!(s.execute("format.numbering", &json!({"on": true, "scheme": "kanjiPeriod"})).unwrap_err().to_string().contains("kanjiPeriod"));
+        assert!(s.execute("format.numbering", &json!({"on": true, "scheme": 5})).is_err());
+        assert_eq!(undo_len(&s), n);
+        assert_eq!(scheme(&s), "arabicDbPeriod");
+        s.execute("format.numbering", &json!({"on": true})).unwrap();
+        assert_eq!(scheme(&s), "arabicPeriod");
+
+        let g = s.execute("format.numberingSchemes", &json!({})).unwrap();
+        let list = g["schemes"].as_array().unwrap();
+        assert_eq!(list.len(), NUMBERING_GALLERY.len());
+        assert_eq!(list[0], json!({"scheme": "arabicPeriod", "sample": "1. 2. 3.", "eastAsian": false}));
+        let sample = |name: &str| list.iter().find(|e| e["scheme"] == name).map(|e| (e["sample"].clone(), e["eastAsian"].clone())).unwrap();
+        assert_eq!(sample("circleNumDbPlain"), (json!("① ② ③"), json!(true)));
+        assert_eq!(sample("arabicDbPeriod"), (json!("１． ２． ３．"), json!(true)));
+        assert_eq!(sample("ea1JpnChsDbPeriod"), (json!("一． 二． 三．"), json!(true)));
+        assert!(NUMBERING_GALLERY.iter().all(|(g, _)| AUTONUM_SCHEMES.contains(g)));
+        assert_eq!(AUTONUM_SCHEMES.len(), 41);
+    }
+
+    #[test]
+    fn asian_typography_options_apply_in_one_undo_and_show_in_the_paragraph_dialog() {
+        let mut s = shape();
+        s.ui_requests.clear();
+        s.execute("format.paragraphDialog", &json!({})).unwrap();
+        let Some(UiRequest::Dialog { params, .. }) = s.ui_requests.last().cloned() else { panic!("dialog request") };
+        assert_eq!(
+            (&params["eaLnBrk"], &params["latinLnBrk"], &params["hangingPunct"], &params["fontAlgn"]),
+            (&json!(true), &json!(false), &json!(true), &json!("auto"))
+        );
+        let n = undo_len(&s);
+        s.execute("format.paragraphDialog", &json!({"eaLnBrk": false, "latinLnBrk": true, "hangingPunct": false, "fontAlgn": "baseline"})).unwrap();
+        assert_eq!(undo_len(&s), n + 1);
+        let p = para(&s);
+        assert_eq!(
+            (p.east_asian_line_break, p.latin_line_break, p.hanging_punct, p.font_align.as_deref()),
+            (Some(false), Some(true), Some(false), Some("base"))
+        );
+        s.ui_requests.clear();
+        s.execute("format.paragraphDialog", &json!({})).unwrap();
+        let Some(UiRequest::Dialog { params, .. }) = s.ui_requests.last().cloned() else { panic!("dialog request") };
+        assert_eq!(
+            (&params["eaLnBrk"], &params["latinLnBrk"], &params["hangingPunct"], &params["fontAlgn"]),
+            (&json!(false), &json!(true), &json!(false), &json!("base"))
+        );
+        s.execute("format.paragraph", &json!({"hangingPunct": true, "fontAlgn": "ctr"})).unwrap();
+        let p = para(&s);
+        assert_eq!((p.east_asian_line_break, p.hanging_punct, p.font_align.as_deref()), (Some(false), Some(true), Some("ctr")));
+
+        let n = undo_len(&s);
+        assert!(s.execute("format.paragraph", &json!({"eaLnBrk": "yes"})).is_err());
+        assert!(s.execute("format.paragraph", &json!({"fontAlgn": "justified"})).is_err());
+        assert!(s.execute("format.paragraphDialog", &json!({"hangingPunct": 1})).is_err());
+        assert!(s.execute("format.paragraphDialog", &json!({"fontAlgn": 3})).is_err());
+        assert_eq!(undo_len(&s), n);
+
+        // PowerPoint reads them back.
+        let bytes = deckcraft_pptx::export(&s.doc().unwrap().doc).unwrap();
+        let back = deckcraft_pptx::import(&bytes).unwrap();
+        let sh = back.slides[0].shapes.iter().find(|sh| sh.ph.is_none()).unwrap();
+        let p = &sh.text.as_ref().unwrap().paragraphs[0].props;
+        assert_eq!(
+            (p.east_asian_line_break, p.latin_line_break, p.hanging_punct, p.font_align.as_deref()),
+            (Some(false), Some(true), Some(true), Some("ctr"))
+        );
     }
 }
