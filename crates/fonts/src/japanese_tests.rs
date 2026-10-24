@@ -227,6 +227,56 @@ fn bold_of_a_weight_named_family_does_not_depend_on_earlier_lookups() {
     }
 }
 
+/// The styles of `family` loaded so far.
+#[cfg(not(target_arch = "wasm32"))]
+fn loaded_styles(db: &FontDb, family: &str) -> Vec<String> {
+    let mut v: Vec<String> = db.read_faces().iter().filter(|f| f.family == family).map(|f| f.style.clone()).collect();
+    v.sort();
+    v
+}
+
+/// Bold text in a weight-named family, and a bold fallback drawn by one, load the file holding
+/// the bold face and no other of the family's (Hiragino Sans is ten files, 59 MB); the fallback
+/// takes the bold partner, as the run's own face does (W3 → W6, not the weight nearest Bold). A
+/// lookup of the family by its own name still loads all of it.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn bold_faces_load_only_the_file_they_need() {
+    let dir = crate::test_fonts::temp_dir("bold-file");
+    for (w, n, b) in [("W3", 300, false), ("W4", 400, false), ("W5", 500, true), ("W6", 600, true), ("W7", 700, true), ("W8", 800, true)] {
+        std::fs::write(dir.join(format!("kaku-{w}.ttf")), kaku(w, n, b)).unwrap();
+    }
+    let sans = |style: &'static str, weight: u16| {
+        let names: [Name<'_>; 2] = [(3, 1, 0x409, 1, "DeckCraft Sans"), (3, 1, 0x409, 2, style)];
+        let fs_selection = if weight >= 700 { 0x20 } else { 0x40 };
+        font(&Spec { names: &names, chars: &['漢'], weight, fs_selection, family_class: 8 << 8 })
+    };
+    std::fs::write(dir.join("sans-bold.ttf"), sans("Bold", 700)).unwrap();
+    std::fs::write(dir.join("sans-black.ttf"), sans("Black", 900)).unwrap();
+    let fresh = || FontDb::without_bundled(vec![dir.clone()]);
+    // A run in the W3 and the W4, bold.
+    let db = fresh();
+    assert_eq!(db.face("DeckCraft Kaku W3", "Bold").style, "W6");
+    assert_eq!(loaded_styles(&db, "DeckCraft Kaku"), ["W3", "W6"]);
+    assert_eq!(db.face("デッキ角ゴ W4", "Bold").style, "W7");
+    assert_eq!(loaded_styles(&db, "DeckCraft Kaku"), ["W3", "W4", "W6", "W7"]);
+    // A bold fallback drawn by the W3: its partner.
+    let db = fresh();
+    assert_eq!(db.face("DeckCraft Kaku W3", "Regular").style, "W3");
+    let f = db.fallback_styled('漢', u32::MAX, "Bold", Some(CjkLocale::Japanese)).unwrap();
+    assert_eq!((f.family.as_str(), f.style.as_str()), ("DeckCraft Kaku", "W6"));
+    assert_eq!(loaded_styles(&db, "DeckCraft Kaku"), ["W3", "W6"]);
+    assert_eq!(db.face("DeckCraft Kaku", "W8").style, "W8", "the whole family by its own name");
+    // A bold fallback drawn by a family with a Bold face: the Bold's file only.
+    let db = fresh();
+    assert_eq!(db.add_font(sans("Regular", 400)), 1);
+    let f = db.fallback_styled('漢', u32::MAX, "Bold", None).unwrap();
+    assert_eq!((f.family.as_str(), f.style.as_str()), ("DeckCraft Sans", "Bold"));
+    assert_eq!(loaded_styles(&db, "DeckCraft Sans"), ["Bold", "Regular"]);
+    assert_eq!(db.face("DeckCraft Sans", "Black").style, "Black", "the whole family by its own name");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// The families the stand-in and fallback chains name, built in memory: a gothic, a Mincho and
 /// a fixed-pitch gothic every platform's chain lists, and a Simplified Chinese and a Korean
 /// face. Each draws kana, kanji, hanzi and Hangul alike, so only the choice tells them apart.
