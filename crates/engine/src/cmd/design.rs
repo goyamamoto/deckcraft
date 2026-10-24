@@ -1810,6 +1810,21 @@ mod tests {
     }
 
     #[test]
+    fn a_new_deck_follows_the_sessions_east_asian_editing_language() {
+        // The desktop app sets the editing language from the system; File › New then starts in it.
+        // The field, not set_east_asian_editing: that also sets the process-wide default font
+        // tradition, which tests running in parallel would see.
+        let mut s = Session::new();
+        s.east_asian_editing = Some(deckcraft_fonts::CjkLocale::Japanese);
+        s.execute("file.new", &json!({})).unwrap();
+        let lang = s.doc().unwrap().doc.default_text_style.default.clone().and_then(|d| d.run.lang);
+        assert_eq!(lang.as_deref(), Some("ja-JP"));
+        // An explicit "" still makes a deck without one.
+        s.execute("file.new", &json!({"eastAsian": ""})).unwrap();
+        assert!(s.doc().unwrap().doc.default_text_style.default.is_none());
+    }
+
+    #[test]
     fn a_new_deck_carries_powerpoints_asian_typography_and_japanese_editing_makes_it_japanese() {
         // Every new deck: eaLnBrk/latinLnBrk/hangingPunct on its default and master text styles.
         let s = Session::with_new();

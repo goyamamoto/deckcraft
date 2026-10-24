@@ -1794,9 +1794,14 @@ impl BreakRules<'_> {
 /// The line-breaking rules of paragraph `p`: its `eaLnBrk` (absent everywhere means on, as
 /// PowerPoint for Mac breaks) and `latinLnBrk` (absent means off), and the deck's `p:kinsoku`
 /// lists when their language (Japanese when they name none) is the paragraph's East Asian one
-/// (its runs' `lang` or `altLang`, else the system's East Asian language).
+/// (its runs' `lang`, else the system's East Asian language or its kana; a run in a Western
+/// language is not East Asian, whatever its characters).
 fn break_rules<'a>(p: &ParaShaped, kinsoku: Option<&'a KinsokuLists>) -> BreakRules<'a> {
-    let custom = kinsoku.filter(|k| k.locale.is_some() && p.styles.iter().find_map(|st| st.cjk) == k.locale);
+    let tradition = |st: &Style| match st.lang.as_deref() {
+        Some(l) => deckcraft_fonts::CjkLocale::from_lang(l),
+        None => st.cjk,
+    };
+    let custom = kinsoku.filter(|k| k.locale.is_some() && p.styles.iter().find_map(tradition) == k.locale);
     BreakRules { latin: p.props.latin_line_break.unwrap_or(false), kinsoku: p.props.east_asian_line_break.unwrap_or(true), custom }
 }
 
