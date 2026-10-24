@@ -7,7 +7,7 @@ use crate::bytes::Bytes;
 use crate::canvas::{BS_HATCHED, Brush, Canvas, LogFont, Obj, Pen, colorref};
 use crate::dib;
 use crate::geom::{self, ArcKind, P};
-use crate::text::{ETO_CLIPPED, ETO_OPAQUE, Font, MAX_CHARS, decode_bytes};
+use crate::text::{ETO_CLIPPED, ETO_OPAQUE, Font, MAX_CHARS, SYMBOL_CHARSET, decode_bytes, face_name};
 use crate::{Error, Frame, MAX_PATH_OPS};
 
 const PLACEABLE_KEY: u32 = 0x9AC6_CDD7;
@@ -232,11 +232,13 @@ fn font(r: Bytes) -> Option<LogFont> {
     let name = r.0.get(24..).unwrap_or(&[]);
     let name = name.get(..32).unwrap_or(name);
     let name = name.split(|b| *b == 0).next().unwrap_or(&[]);
-    // Face names are plain ASCII in practice; other bytes go through the Western code page.
-    let (family, _) = decode_bytes(name, 0, &[]);
+    // The name is in the font's own code page: a WMF made on Japanese Windows names its fonts in
+    // Shift_JIS ("ＭＳ ゴシック"). A symbol font's name is plain text, not symbol codes.
+    let (family, _) = decode_bytes(name, if charset == SYMBOL_CHARSET { 0 } else { charset }, &[]);
+    let (family, vertical) = face_name(&family);
     Some(LogFont {
         font: Font {
-            family: family.trim().to_string(),
+            family,
             height: f32::from(height),
             width: f32::from(width),
             weight: weight.clamp(0, 1000) as u16,
@@ -244,6 +246,7 @@ fn font(r: Bytes) -> Option<LogFont> {
             underline: byte(17) != 0,
             strike: byte(18) != 0,
             charset,
+            vertical,
         },
         escapement: f64::from(escapement),
     })

@@ -1064,7 +1064,7 @@ fn caps_char(ch: char) -> char {
 /// symbols and punctuation, full-width forms, enclosed and compatibility CJK, circled numbers
 /// and emoji (Unicode's Vertical_Orientation U and T, roughly); Latin, digits and the rest of the
 /// half-width text lie on their side as in `vert`.
-fn is_upright(c: char) -> bool {
+pub fn is_upright(c: char) -> bool {
     matches!(c as u32,
         0x1100..=0x11FF
             | 0x2460..=0x24FF
