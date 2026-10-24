@@ -182,6 +182,10 @@ impl Session {
             }
         }
         let plain = !mods.cmd && !mods.alt;
+        // In vertical text the arrows turn with it (`text.move` turns the plain ones itself):
+        // Ctrl/Option+Down moves by word down the column, Ctrl/Option+Left to the next paragraph.
+        let turn = if plain { None } else { self.active().and_then(|d| d.selection.text.as_ref().map(|t| crate::cmd::text::text_turn(d, t))) };
+        let k = turn.and_then(|turn| crate::cmd::text::turn_arrow(k, turn)).unwrap_or(k);
         let to = match k {
             "left" if word => "wordLeft",
             "right" if word => "wordRight",

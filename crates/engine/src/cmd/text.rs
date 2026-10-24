@@ -66,7 +66,7 @@ pub fn specs() -> Vec<CommandSpec> {
             has_text,
             delete
         ),
-        cmd!(noundo "text.move", "Move Insertion Point", [], None, "{to: left|right|up|down|wordLeft|wordRight|lineStart|lineEnd|paraStart|paraEnd|paraUp|paraDown|start|end, extend?: bool} — left/right are on screen: in a right-to-left paragraph left goes forward", has_text, move_caret),
+        cmd!(noundo "text.move", "Move Insertion Point", [], None, "{to: left|right|up|down|wordLeft|wordRight|lineStart|lineEnd|paraStart|paraEnd|paraUp|paraDown|start|end, extend?: bool} — left/right/up/down are on screen: in a right-to-left paragraph left goes forward; in vertical text down goes forward and left to the next line (right in vert270, wordArtVert and Mongolian text)", has_text, move_caret),
         cmd!(noundo "text.select", "Select Text", [], None, "{anchor: [p, c], caret: [p, c]}", has_text, select),
         cmd!(noundo "text.selectAll", "Select All Text", [], None, "{}", has_text, select_all),
         cmd!(noundo "text.selectWord", "Select Word", [], None, "{at?: [p, c]}", has_text, select_word),
@@ -400,6 +400,8 @@ fn typed(s: &Session, body: &TextBody, at: Pos, text: &str) -> String {
 
 pub(crate) fn insert_text(s: &mut Session, text: &str, props: Option<RunProps>) -> Result<Value> {
     let inherited = inherited_aligns_for_edit(s);
+    let lang = inherited_lang(s);
+    let editing = s.east_asian_editing;
     let text = {
         let st = s.doc()?;
         match &st.selection.text {
@@ -414,6 +416,7 @@ pub(crate) fn insert_text(s: &mut Session, text: &str, props: Option<RunProps>) 
         let (a, b) = t.ordered();
         let at = ed::delete(body, a, b);
         let props = props.clone().or_else(|| if a != b { Some(ed::props_at(body, at)) } else { unlinked_at_link_end(body, at) });
+        let props = tagged_props(body, at, props, &text, (lang.as_deref(), editing));
         let c = ed::insert(body, at, &text, props);
         t.anchor = c;
         t.caret = c;
@@ -476,6 +479,82 @@ fn unlinked_at_link_end(body: &TextBody, at: Pos) -> Option<RunProps> {
     }
     props.link = None;
     Some(props)
+}
+
+/// The East Asian language `text` is written in: Japanese when it has kana, Korean when it has
+/// Hangul, else (Han, CJK punctuation, full-width forms) the East Asian editing language,
+/// Japanese without one. `None` when `text` has no character of the East Asian font slot.
+pub(crate) fn east_asian_lang_of(text: &str, editing: Option<deckcraft_fonts::CjkLocale>) -> Option<deckcraft_fonts::CjkLocale> {
+    use deckcraft_fonts::{CjkLocale, FontSlot, script};
+    let mut east_asian = false;
+    let mut hangul = false;
+    for c in text.chars() {
+        if script::slot_of(c) != Some(FontSlot::EastAsian) {
+            continue;
+        }
+        match script::script_of(c).as_ref() {
+            Some(b"Hira" | b"Kana") => return Some(CjkLocale::Japanese),
+            Some(b"Hang") => hangul = true,
+            _ => {}
+        }
+        east_asian = true;
+    }
+    if hangul {
+        return Some(CjkLocale::Korean);
+    }
+    east_asian.then(|| editing.unwrap_or(CjkLocale::Japanese))
+}
+
+/// The formatting East Asian `text` is typed with at a run formatted `props` (in language
+/// `inherited` where it names none: its paragraph's, its list style's or the deck's default).
+/// PowerPoint tags typed text with the input language: Japanese typed, committed by the input
+/// method or pasted as plain text into a run whose language isn't East Asian (`en-US`, or none)
+/// becomes a run of its own in Japanese, with the run's language as its alternative
+/// (`lang="ja-JP" altLang="en-US"`). Text typed into a run already in an East Asian language
+/// stays in it, so Latin typed with the Japanese input method stays in the `ja-JP` run, as in
+/// PowerPoint. `None` when the formatting stays as it is.
+pub(crate) fn east_asian_props(
+    props: &RunProps,
+    inherited: Option<&str>,
+    text: &str,
+    editing: Option<deckcraft_fonts::CjkLocale>,
+) -> Option<RunProps> {
+    let lang = east_asian_lang_of(text, editing)?;
+    let current = props.lang.as_deref().or(inherited).map(str::trim).filter(|l| !l.is_empty());
+    if current.and_then(deckcraft_fonts::CjkLocale::from_lang).is_some() {
+        return None;
+    }
+    let mut p = props.clone();
+    p.alt_lang = Some(current.unwrap_or("en-US").to_string());
+    p.lang = Some(lang.lang().to_string());
+    Some(p)
+}
+
+/// The language the text being edited inherits where its runs name none: from its paragraph,
+/// its list styles or the deck's default (`a:defPPr`). `None` for notes and where nothing names
+/// one.
+fn inherited_lang(s: &Session) -> Option<String> {
+    let st = s.doc().ok()?;
+    let t = st.selection.text.as_ref().filter(|t| !t.notes)?;
+    let sh = st.shape(t.shape)?;
+    let ctx = ctx_for(&st.doc, &st.selection)?;
+    let blank = Paragraph::default();
+    let para = body_of(st, t).and_then(|b| b.paragraphs.get(t.ordered().0.0)).unwrap_or(&blank);
+    resolve::run(&ctx, sh, para, &RunProps::default()).lang
+}
+
+/// The formatting text is inserted with at `at` (`props`, as [`deckcraft_model::edit::insert`]
+/// takes it: `None` for the run at `at`), tagged with its East Asian language
+/// ([`east_asian_props`]).
+fn tagged_props(
+    body: &TextBody,
+    at: Pos,
+    props: Option<RunProps>,
+    text: &str,
+    (inherited, editing): (Option<&str>, Option<deckcraft_fonts::CjkLocale>),
+) -> Option<RunProps> {
+    let base = props.clone().unwrap_or_else(|| ed::props_at(body, at));
+    east_asian_props(&base, inherited, text, editing).or(props)
 }
 
 /// Built-in AutoCorrect replacements (common slips and symbols).
@@ -838,6 +917,8 @@ fn compose(s: &mut Session, p: &Value) -> Result<Value> {
         (x < y).then_some((x.min(n), y.min(n)))
     });
     let current = s.doc()?.composition.clone();
+    let (lang, editing) = (inherited_lang(s), s.east_asian_editing);
+    let tagging = (lang.as_deref(), editing);
     // A composition whose text was changed under it is kept as it is; a new one starts.
     let current = match current {
         Some(c) if !composition_fits(s.doc()?, &c) => {
@@ -855,7 +936,8 @@ fn compose(s: &mut Session, p: &Value) -> Result<Value> {
                 let (a, b) = t.ordered();
                 let at = ed::delete(body, a, b);
                 let props = if a != b { Some(ed::props_at(body, at)) } else { unlinked_at_link_end(body, at) };
-                let c = ed::insert(body, at, &text, props.clone());
+                // The composition keeps the untagged formatting: each preedit is tagged afresh.
+                let c = ed::insert(body, at, &text, tagged_props(body, at, props.clone(), &text, tagging));
                 t.anchor = c;
                 t.caret = c;
                 (at, props)
@@ -875,6 +957,7 @@ fn compose(s: &mut Session, p: &Value) -> Result<Value> {
             let (start, len, props) = (c.start, c.len, c.props.clone());
             edit_text(s, |body, t| {
                 ed::delete(body, start, (start.0, start.1 + len));
+                let props = tagged_props(body, start, props, &text, tagging);
                 let e = ed::insert(body, start, &text, props);
                 t.anchor = e;
                 t.caret = e;
@@ -1027,12 +1110,13 @@ fn insert(s: &mut Session, p: &Value) -> Result<Value> {
 
 pub(crate) fn delete_dir(s: &mut Session, dir: &str) -> Result<Value> {
     let dir = dir.to_string();
+    let lang = inherited_lang(s);
     edit_text(s, move |body, t| {
         let (a, b) = t.ordered();
         let at = if dir == "wordBackward" || dir == "wordForward" {
             // Ctrl+Backspace/Delete work from the start of a selection and leave the rest of it
             // (PowerPoint for Windows).
-            ed::delete_word(body, a, dir == "wordForward")
+            ed::delete_word_in(body, a, dir == "wordForward", lang.as_deref())
         } else if a != b {
             ed::delete(body, a, b)
         } else {
@@ -1072,12 +1156,59 @@ fn para_rtl(layout: Option<&deckcraft_text::TextLayout>, body: &TextBody, para: 
     }
 }
 
+/// How the text being edited is turned for the arrow keys: the quarter turns clockwise it is
+/// drawn at (1 for `vert`, `eaVert`, the stacked and Mongolian text, 3 for `vert270`, 0 for
+/// horizontal text) and whether its lines follow each other from left to right (`wordArtVert`
+/// and `mongolianVert`) rather than from right to left.
+pub fn text_turn(st: &DocState, t: &TextSel) -> (u8, bool) {
+    use deckcraft_model::text::TextDir;
+    if t.notes {
+        return (0, false);
+    }
+    let Some(sh) = st.shape(t.shape) else { return (0, false) };
+    let vert = match (t.cell, &sh.kind) {
+        (Some((r, c)), ShapeKind::Table(tb)) => tb.cell(r, c).and_then(|x| x.vertical.or(x.text.body.vert)),
+        (Some(_), _) => None,
+        (None, _) => ctx_for(&st.doc, &st.selection).and_then(|ctx| resolve::body(&ctx, sh).vert),
+    };
+    match vert.unwrap_or(TextDir::Horizontal) {
+        TextDir::Horizontal => (0, false),
+        TextDir::Vertical270 => (3, false),
+        TextDir::Stacked | TextDir::MongolianVertical => (1, true),
+        TextDir::Vertical | TextDir::EaVertical | TextDir::StackedRtl => (1, false),
+    }
+}
+
+/// The direction in the text's own terms (`left`/`right` along a line, `up`/`down` to the
+/// previous/next line) of an arrow pointing `dir` on screen, in text turned as [`text_turn`]
+/// says. In vertical text the arrows follow what is drawn, as in PowerPoint: Down goes to the next
+/// character and Up to the previous one, Left to the next line (column) and Right to the previous
+/// one — the other way round where lines run from left to right, and with Up going forward in
+/// `vert270`. `None` for other directions (word, line and paragraph moves).
+pub fn turn_arrow(dir: &str, (quarters, lines_ltr): (u8, bool)) -> Option<&'static str> {
+    let turned = match (quarters % 4, dir) {
+        (_, d) if !matches!(d, "left" | "right" | "up" | "down") => return None,
+        (1, "down") | (3, "up") | (0, "right") | (2, "left") => "right",
+        (1, "up") | (3, "down") | (0, "left") | (2, "right") => "left",
+        (1, "left") | (3, "right") | (0, "down") | (2, "up") => "down",
+        _ => "up",
+    };
+    Some(match (turned, lines_ltr) {
+        ("down", true) => "up",
+        ("up", true) => "down",
+        (d, _) => d,
+    })
+}
+
 fn move_caret(s: &mut Session, p: &Value) -> Result<Value> {
     use deckcraft_text::Affinity;
     let to = str_param(p, "to").unwrap_or("right").to_string();
     let extend = bool_or(p, "extend", false);
     let st = s.doc()?;
     let t = st.selection.text.clone().ok_or_else(|| bad("text.move", "not editing text"))?;
+    // Arrows are on screen: in vertical text they turn with the text.
+    let to = turn_arrow(&to, text_turn(st, &t)).map(str::to_string).unwrap_or(to);
+    let lang = if to.starts_with("word") { inherited_lang(s) } else { None };
     let body = body_of(st, &t).cloned().unwrap_or_default();
     let layout = layout_for(st, &t);
     let lp = |c: Pos| deckcraft_text::Pos { para: c.0, ch: c.1 };
@@ -1101,8 +1232,8 @@ fn move_caret(s: &mut Session, p: &Value) -> Result<Value> {
         "left" => ed::char_move(&body, caret, false),
         "right" => ed::char_move(&body, caret, true),
         // Ctrl+arrows with a selection go on from its start (left) or end (right).
-        "wordLeft" => ed::word_move(&body, if extend { caret } else { collapse_to(true) }, false),
-        "wordRight" => ed::word_move(&body, if extend { caret } else { collapse_to(false) }, true),
+        "wordLeft" => ed::word_move_in(&body, if extend { caret } else { collapse_to(true) }, false, lang.as_deref()),
+        "wordRight" => ed::word_move_in(&body, if extend { caret } else { collapse_to(false) }, true, lang.as_deref()),
         "paraStart" => (caret.0, 0),
         "paraEnd" => (caret.0, body.paragraphs.get(caret.0).map(|x| x.char_len()).unwrap_or(0)),
         "paraUp" => ed::para_up(&body, caret),
@@ -1174,7 +1305,7 @@ fn select_word(s: &mut Session, p: &Value) -> Result<Value> {
     let t = st.selection.text.clone().ok_or_else(|| bad("text.selectWord", "not editing text"))?;
     let at = pos_param(p, "at").unwrap_or(t.caret);
     let body = body_of(st, &t).cloned().unwrap_or_default();
-    let (a, b) = ed::word_at(&body, at);
+    let (a, b) = ed::word_at_in(&body, at, inherited_lang(s).as_deref());
     s.select(|_, sel| {
         if let Some(t) = sel.text.as_mut() {
             t.anchor = a;
