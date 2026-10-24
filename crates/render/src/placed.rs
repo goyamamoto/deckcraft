@@ -99,6 +99,71 @@ pub fn place_master_texts(pres: &Presentation, master: &deckcraft_model::Master,
     out.texts
 }
 
+/// Slide `index`'s speaker notes laid out as Notes Pages print them (File ▸ Print and Save as PDF
+/// with notes pages): the notes text in the notes master's body placeholder, with its body
+/// properties and list style and the master's notes text styles, so it keeps its formatting,
+/// bullets and theme fonts (the East Asian face for Japanese text, with fallback faces) and wraps
+/// as slide text does (kinsoku for Japanese). `frame` is the notes area on the page in page
+/// points and `scale` the page points per notes-page point (text sizes scale with the page);
+/// the result's transform maps the layout to page points. A deck without a notes master uses
+/// PowerPoint's default notes style (12 pt, the theme's minor font). `None` when the slide has
+/// no notes.
+pub fn place_notes_text(pres: &Presentation, index: usize, frame: Rect, scale: f64) -> Option<PlacedText> {
+    use deckcraft_model::PhType;
+    let slide = pres.slides.get(index)?;
+    if slide.notes.is_empty() || !frame.is_finite() || frame.width() <= 0.0 || frame.height() <= 0.0 {
+        return None;
+    }
+    let scale = if scale.is_finite() && scale > 1e-6 { scale } else { 1.0 };
+    let stand_in;
+    let master = match pres.notes_master.as_deref() {
+        Some(m) if !m.body_style.is_empty() => m,
+        own => {
+            stand_in = default_notes_master(pres, own);
+            &stand_in
+        }
+    };
+    // The notes slide's body placeholder: it inherits from the notes master's body placeholder
+    // and the master's notes styles, as a slide placeholder does from its master.
+    let ctx = Ctx { pres, master, layout: None, owner: resolve::Owner::Slide, scheme: master.scheme(), color_map: master.color_map.clone() };
+    let shape = Shape {
+        ph: Some(deckcraft_model::Placeholder { kind: PhType::Body, idx: 1, ..Default::default() }),
+        text: Some(slide.notes.clone()),
+        ..Default::default()
+    };
+    let fields = SlideFields::new(pres.slide_number(index), pres.header_footer.footer_text.clone(), &crate::RenderOpts::default());
+    let tr = Rect::new(0.0, 0.0, frame.width() / scale, frame.height() / scale);
+    let layout = deckcraft_text::layout(&ctx, &shape, &slide.notes, &Opts { rect: tr, fields: &fields, prompt_color: None, no_shrink: false });
+    let m = Affine::translate((frame.x0, frame.y0)) * Affine::scale(scale);
+    let transform = crate::text_transform(m, tr, layout.rotation);
+    Some(PlacedText { layout, transform, body: slide.notes.clone() })
+}
+
+/// A notes master for a deck that has none, or whose own lacks notes text styles: its shapes,
+/// theme and colours (else the first slide master's) with PowerPoint's default notes styles,
+/// 12 pt text in the theme's minor font and text colour, each level indented half an inch more.
+fn default_notes_master(pres: &Presentation, own: Option<&deckcraft_model::Master>) -> deckcraft_model::Master {
+    use deckcraft_model::text::{Align, LevelStyle, ParaProps, RunProps};
+    let mut m = match (own, pres.masters.first()) {
+        (Some(m), _) => m.clone(),
+        (None, Some(slide_master)) => {
+            deckcraft_model::Master { theme: slide_master.theme.clone(), color_map: slide_master.color_map.clone(), ..Default::default() }
+        }
+        (None, None) => deckcraft_model::Master::default(),
+    };
+    for level in 0..9u8 {
+        let para = ParaProps { margin_left: Some(36.0 * f64::from(level)), align: Some(Align::Left), ..Default::default() };
+        let run = RunProps {
+            size: Some(12.0),
+            font: Some("+mn-lt".into()),
+            fill: Some(deckcraft_model::Fill::solid(deckcraft_model::ColorRef::scheme(deckcraft_color::SchemeSlot::Tx1))),
+            ..Default::default()
+        };
+        m.body_style.set(level, LevelStyle { para, run });
+    }
+    m
+}
+
 /// `group` is the index in `out.shapes` of the enclosing group; `own` is true for the slide's own
 /// shapes (recorded in `out.shapes`), false for the layout's and master's.
 #[allow(clippy::too_many_arguments)]
