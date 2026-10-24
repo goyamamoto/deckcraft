@@ -603,6 +603,9 @@ struct CatalogEntry {
     local: Vec<LocalName>,
     exact: Vec<String>,
     exact_hit: Option<NameHit>,
+    /// On the typographic entry only: the face's Windows style when its Windows family differs
+    /// (the face's `legacy` once loaded).
+    windows_style: Option<String>,
     path: std::path::PathBuf,
 }
 
@@ -674,6 +677,14 @@ pub struct FontDb {
     /// Semibold" loads a face of the family "Segoe UI").
     #[cfg(not(target_arch = "wasm32"))]
     loaded_families: Mutex<std::collections::HashSet<String>>,
+    /// Light faces (by id) of weight-named families whose bold partner's file has been looked for
+    /// and loaded ([`FontDb::load_bold_partner`]).
+    #[cfg(not(target_arch = "wasm32"))]
+    partners_loaded: Mutex<std::collections::HashSet<u32>>,
+    /// Families (folded) and styles whose closest installed face has been loaded
+    /// ([`FontDb::load_closest_style`]).
+    #[cfg(not(target_arch = "wasm32"))]
+    styles_loaded: Mutex<std::collections::HashSet<(String, &'static str)>>,
     /// System fallback state: enabled, and characters no system font covers.
     #[cfg(not(target_arch = "wasm32"))]
     sys: Mutex<SysFallback>,
@@ -851,9 +862,10 @@ fn file_face_names(path: &std::path::Path) -> Vec<CatalogEntry> {
                 local: names.local,
                 exact: names.exact,
                 exact_hit,
+                windows_style: None,
                 path: path.to_path_buf(),
             };
-            let main = entry(family, style, names, Some(exact_hit));
+            let main = CatalogEntry { windows_style: legacy.as_ref().map(|l| l.1.clone()), ..entry(family, style, names, Some(exact_hit)) };
             Some(std::iter::once(main).chain(legacy.map(|(lf, ls)| entry(lf, ls, OtherNames::default(), None))))
         })
         .flatten()
@@ -1215,14 +1227,17 @@ const ALREADY_BOLD: f32 = 550.0;
 /// Gothic Bold is Yu Gothic's, not Yu Gothic Light's), the lightest at least 250 heavier
 /// (Hiragino W3 → W6, Hiragino Mincho ProN W3 → W6).
 fn bold_partner(faces: &[Arc<FontFace>], base: &FontFace) -> Option<Arc<FontFace>> {
-    faces
-        .iter()
-        .filter(|f| {
-            f.keys.family == base.keys.family && f.id != base.id && f.bold_linked && f.italic == base.italic && f.weight >= base.weight + 250.0
-        })
-        .filter(|f| !norm(f.legacy.as_ref().map_or(f.style.as_str(), |l| l.1.as_str())).contains("bold"))
-        .min_by(|a, b| a.weight.total_cmp(&b.weight))
-        .cloned()
+    faces.iter().filter(|f| pairs_as_bold(f, base)).min_by(|a, b| a.weight.total_cmp(&b.weight)).cloned()
+}
+
+/// Can `f` be the bold of `base` ([`bold_partner`])?
+fn pairs_as_bold(f: &FontFace, base: &FontFace) -> bool {
+    f.keys.family == base.keys.family
+        && f.id != base.id
+        && f.bold_linked
+        && f.italic == base.italic
+        && f.weight >= base.weight + 250.0
+        && !norm(f.legacy.as_ref().map_or(f.style.as_str(), |l| l.1.as_str())).contains("bold")
 }
 
 impl FontDb {
@@ -1262,6 +1277,10 @@ impl FontDb {
             cataloged: std::sync::OnceLock::new(),
             #[cfg(not(target_arch = "wasm32"))]
             loaded_families: Mutex::new(std::collections::HashSet::new()),
+            #[cfg(not(target_arch = "wasm32"))]
+            partners_loaded: Mutex::new(std::collections::HashSet::new()),
+            #[cfg(not(target_arch = "wasm32"))]
+            styles_loaded: Mutex::new(std::collections::HashSet::new()),
             #[cfg(not(target_arch = "wasm32"))]
             sys: Mutex::new(SysFallback { enabled: true, ..Default::default() }),
             #[cfg(not(target_arch = "wasm32"))]
@@ -1449,6 +1468,8 @@ impl FontDb {
         // Families load again from the new catalog when next looked up, and East Asian fallbacks
         // are looked up again among them.
         self.loaded_families.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
+        self.partners_loaded.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
+        self.styles_loaded.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
         self.ea_faces.write().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
         // The first scan, or a rescan once it is done (never both at once).
         let mut first = None;
@@ -1515,17 +1536,44 @@ impl FontDb {
     #[cfg(not(target_arch = "wasm32"))]
     fn load_family(&self, family: &str, _loading: &std::sync::MutexGuard<'_, ()>) -> bool {
         // Not skipped when some face of the family is loaded: a lookup by a Windows family name
-        // loads only that style's file, and the family's other files must still load later.
-        let paths: Vec<std::path::PathBuf> = {
+        // loads only that style's file, and the family's other files must still load later. A
+        // file whose every face is loaded already (under another of its names) isn't read again.
+        let files: Vec<(std::path::PathBuf, Vec<(String, String)>)> = {
             let cat = self.read_catalog();
             let key = fold_font_name(family);
             let mut p: Vec<_> = cat.entries.iter().filter(|c| c.key == key).map(|c| c.path.clone()).collect();
             p.sort();
             p.dedup();
-            p
+            p.into_iter()
+                .map(|path| {
+                    let faces = cat.entries.iter().filter(|e| e.path == path).map(|e| (e.family.clone(), e.style.clone())).collect();
+                    (path, faces)
+                })
+                .collect()
         };
+        let paths: Vec<std::path::PathBuf> =
+            files.into_iter().filter(|(_, faces)| !faces.iter().all(|(family, style)| self.has_loaded_face(family, style))).map(|f| f.0).collect();
         self.add_fonts(paths.iter().filter(|p| std::fs::metadata(p).is_ok_and(|m| font_file_ok(&m))).filter_map(|p| std::fs::read(p).ok()).collect());
         self.is_loaded(family)
+    }
+
+    /// Is the face cataloged as `family` and `style` (its typographic or its Windows names) loaded?
+    #[cfg(not(target_arch = "wasm32"))]
+    fn has_loaded_face(&self, family: &str, style: &str) -> bool {
+        self.read_faces().iter().any(|f| {
+            (f.family.eq_ignore_ascii_case(family) && f.style.eq_ignore_ascii_case(style))
+                || f.legacy.as_ref().is_some_and(|(lf, ls)| lf.eq_ignore_ascii_case(family) && ls.eq_ignore_ascii_case(style))
+        })
+    }
+
+    /// Load the faces of the installed font file at `path`.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn load_file(&self, path: &std::path::Path) {
+        if std::fs::metadata(path).is_ok_and(|m| font_file_ok(&m))
+            && let Ok(data) = std::fs::read(path)
+        {
+            self.add_fonts(vec![data]);
+        }
     }
 
     /// Resolve a family + style to a face, falling back to the closest style of the family, then to
@@ -1613,17 +1661,96 @@ impl FontDb {
         self.ensure_loaded(family);
         let found = self.find(family, style)?;
         // Bold of a weight-named Windows family (Hiragino Kaku Gothic ProN W3): the bold face it
-        // pairs with (W6) is in the rest of the typographic family, which loads now. Decided by
-        // the plain face's weight, not by what `find` settled for among the faces loaded so far.
+        // pairs with (W6) is in the rest of the typographic family, and its file loads now.
         #[cfg(not(target_arch = "wasm32"))]
-        if style_weight(style) >= 600.0
-            && found.keys.family != fold_font_name(family)
-            && self.find(family, if style_italic(style) { "Italic" } else { "Regular" }).is_some_and(|plain| plain.weight < ALREADY_BOLD)
-            && self.ensure_loaded(&found.family)
-        {
+        if found.keys.family != fold_font_name(family) && self.load_windows_bold(family, style) {
             return self.find(family, style).or(Some(found));
         }
         Some(found)
+    }
+
+    /// For bold `style`, load the bold partner of the Windows `family`'s plain face (its Regular,
+    /// or its Italic for bold italic) when that face is light (W5 and lighter); true if that was
+    /// done now. Decided by the plain face, not by what [`FontDb::find`] settles for among the
+    /// faces loaded so far.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn load_windows_bold(&self, family: &str, style: &str) -> bool {
+        style_weight(style) >= 600.0
+            && self
+                .find(family, if style_italic(style) { "Italic" } else { "Regular" })
+                .is_some_and(|plain| plain.weight < ALREADY_BOLD && self.load_bold_partner(&plain))
+    }
+
+    /// Load the installed file holding the bold face `base` pairs with ([`bold_partner`]) unless
+    /// that was done; true if it was done now. The family's faces heavy enough are tried lightest
+    /// first, a file at a time, until one pairs with `base`, so bold Hiragino Sans W3 reads the
+    /// W6's file rather than the family's ten (59 MB), and the partner is the same whichever of
+    /// the family's faces were loaded before.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn load_bold_partner(&self, base: &FontFace) -> bool {
+        let done = |db: &FontDb| db.partners_loaded.lock().unwrap_or_else(std::sync::PoisonError::into_inner).contains(&base.id);
+        if done(self) {
+            return false;
+        }
+        let mut candidates: Vec<(f32, String, std::path::PathBuf)> = self
+            .read_catalog()
+            .entries
+            .iter()
+            .filter(|e| e.key == base.keys.family && style_italic(&e.style) == base.italic && style_weight(&e.style) >= base.weight + 250.0)
+            .filter(|e| !norm(e.windows_style.as_deref().unwrap_or(&e.style)).contains("bold"))
+            .map(|e| (style_weight(&e.style), e.style.clone(), e.path.clone()))
+            .collect();
+        candidates.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.2.cmp(&b.2)));
+        let _loading = self.loading.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Another thread may have done it while this one waited.
+        if done(self) {
+            return false;
+        }
+        let loaded = |db: &FontDb, style: &str| {
+            db.read_faces().iter().find(|f| f.keys.family == base.keys.family && f.style.eq_ignore_ascii_case(style)).cloned()
+        };
+        for (_, style, path) in &candidates {
+            let face = loaded(self, style).or_else(|| {
+                self.load_file(path);
+                loaded(self, style)
+            });
+            if face.is_some_and(|f| pairs_as_bold(&f, base)) {
+                break;
+            }
+        }
+        self.partners_loaded.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(base.id);
+        true
+    }
+
+    /// Load the installed file of the typographic `family` holding its face closest to `style`
+    /// (as [`FontDb::find`] picks among loaded faces) unless that was done, rather than every
+    /// file of the family: a bold fallback in Yu Gothic reads Yu Gothic Bold's file.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn load_closest_style(&self, family: &str, style: &'static str) {
+        let key = fold_font_name(family);
+        let done = |db: &FontDb| db.styles_loaded.lock().unwrap_or_else(std::sync::PoisonError::into_inner).contains(&(key.clone(), style));
+        if done(self) {
+            return;
+        }
+        let best = {
+            let cat = self.read_catalog();
+            let mut entries: Vec<&CatalogEntry> = cat.entries.iter().filter(|e| e.key == key).collect();
+            entries.sort_by(|a, b| a.path.cmp(&b.path));
+            let (ns, weight, italic) = (norm(style), style_weight(style), style_italic(style));
+            let score = |e: &CatalogEntry| (style_weight(&e.style) - weight).abs() + if style_italic(&e.style) != italic { 1000.0 } else { 0.0 };
+            entries
+                .iter()
+                .find(|e| norm(&e.style) == ns)
+                .or_else(|| entries.iter().min_by(|a, b| score(a).total_cmp(&score(b))))
+                .map(|e| (e.style.clone(), e.path.clone()))
+        };
+        let _loading = self.loading.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((found, path)) = best
+            && !self.read_faces().iter().any(|f| f.keys.family == key && f.style.eq_ignore_ascii_case(&found))
+        {
+            self.load_file(&path);
+        }
+        self.styles_loaded.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert((key, style));
     }
 
     /// Load every installed file of `family` unless that was done; true if it was done now. The
@@ -1820,10 +1947,23 @@ impl FontDb {
         if style == "Regular" {
             return Some(base);
         }
-        match self.try_family(&base.family, style) {
+        match self.styled_face(&base, style) {
             Some(f) if f.keys.family == base.keys.family && f.id != exclude && f.covers(c) => Some(f),
             _ => Some(base),
         }
+    }
+
+    /// The face of `base`'s family in `style`, reading only the installed files that takes, not
+    /// the whole family (Hiragino Sans is ten files): for a face of a weight-named Windows family
+    /// (Hiragino Sans W3), that Windows family's face, bold being its bold partner (W6) as for a
+    /// run in that family; for another face, the family's face closest to `style`.
+    fn styled_face(&self, base: &FontFace, style: &'static str) -> Option<Arc<FontFace>> {
+        if let Some((windows, _)) = &base.legacy {
+            return self.try_family(windows, style);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        self.load_closest_style(&base.family, style);
+        self.find(&base.family, style)
     }
 
     /// The fallback search: a loaded face, else an installed one loaded for `c`.
