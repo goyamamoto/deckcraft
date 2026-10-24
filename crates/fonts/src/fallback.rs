@@ -134,7 +134,7 @@ pub fn bundled_families(script: ScriptTag) -> Vec<&'static str> {
 
 /// Kana: hiragana, katakana (full and half width, phonetic extensions, small kana and the kana
 /// supplements).
-fn is_kana(c: char) -> bool {
+pub(crate) fn is_kana(c: char) -> bool {
     matches!(u32::from(c), 0x3040..=0x309F | 0x30A0..=0x30FF | 0x31F0..=0x31FF | 0xFF66..=0xFF9F | 0x1AFF0..=0x1B16F)
 }
 

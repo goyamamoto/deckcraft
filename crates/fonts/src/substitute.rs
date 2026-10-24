@@ -81,9 +81,16 @@ fn has_hangul(s: &str) -> bool {
 
 /// The kind of the Chinese, Japanese or Korean font `family` names (English or native name,
 /// full- or half-width letters), `None` for other fonts. Any other name written in CJK
-/// characters counts as a Japanese gothic: Word for Mac, which shares Office's font handling,
-/// draws every missing CJK-named font in 游ゴシック.
+/// characters is taken by the system's East Asian language ([`crate::default_cjk_locale`]): on
+/// a Japanese system, or one with none, a Japanese gothic, as Word for Mac, which shares
+/// Office's font handling, draws every missing CJK-named font in 游ゴシック; on a Chinese or
+/// Korean system, a sans of that tradition. A name with kana is a Japanese gothic everywhere.
 pub(crate) fn cjk_kind(family: &str) -> Option<CjkKind> {
+    cjk_kind_in(family, crate::default_cjk_locale())
+}
+
+/// [`cjk_kind`] on a system whose East Asian language is `system`.
+fn cjk_kind_in(family: &str, system: Option<CjkLocale>) -> Option<CjkKind> {
     let k = fold_compact(family);
     if k.is_empty() {
         return None;
@@ -187,10 +194,18 @@ pub(crate) fn cjk_kind(family: &str) -> Option<CjkKind> {
             "uddigikyokasho",
         ])
         || (k.starts_with("hg") && k.contains("gothic"));
-    if japanese_gothic || family.chars().any(is_cjk_name_char) {
+    if japanese_gothic || family.chars().any(crate::fallback::is_kana) {
         return Some(CjkKind::Gothic);
     }
-    None
+    if !family.chars().any(is_cjk_name_char) {
+        return None;
+    }
+    Some(match system {
+        None | Some(CjkLocale::Japanese) => CjkKind::Gothic,
+        Some(CjkLocale::SimplifiedChinese) => CjkKind::SansSc,
+        Some(CjkLocale::TraditionalChinese) => CjkKind::SansTc,
+        Some(CjkLocale::Korean) => CjkKind::SansKr,
+    })
 }
 
 /// Is `family` a Chinese, Japanese or Korean font by its name (an Office or platform CJK font,
@@ -356,8 +371,12 @@ pub(crate) fn is_serif_name(family: &str) -> bool {
 /// The installed (or craft-fonts) families standing in for a missing CJK `family`, best first;
 /// `None` for a name that isn't a CJK font's.
 pub(crate) fn cjk_substitutes(family: &str) -> Option<&'static [&'static str]> {
+    cjk_kind(family).map(cjk_substitutes_of)
+}
+
+/// The installed (or craft-fonts) families standing in for a missing font of `kind`, best first.
+fn cjk_substitutes_of(kind: CjkKind) -> &'static [&'static str] {
     static CHAINS: OnceLock<Vec<(CjkKind, Vec<&'static str>)>> = OnceLock::new();
-    let kind = cjk_kind(family)?;
     let chains = CHAINS.get_or_init(|| {
         let kinds = [
             CjkKind::Gothic,
@@ -388,7 +407,7 @@ pub(crate) fn cjk_substitutes(family: &str) -> Option<&'static [&'static str]> {
             })
             .collect()
     });
-    chains.iter().find(|(k, _)| *k == kind).map(|(_, v)| v.as_slice())
+    chains.iter().find(|(k, _)| *k == kind).map(|(_, v)| v.as_slice()).unwrap_or(&[])
 }
 
 /// The families East Asian text of tradition `locale` falls back to when the run's fonts lack a
@@ -555,6 +574,34 @@ mod tests {
             assert_eq!(cjk_kind(latin), None, "{latin}");
         }
         assert!(is_cjk_family("ＭＳ Ｐゴシック") && is_cjk_family("Malgun Gothic") && !is_cjk_family("Gill Sans"));
+    }
+
+    /// A CJK-named font no list knows is a Japanese gothic on a Japanese system (or one with no
+    /// East Asian language), as Word for Mac draws it, and a sans of the system's tradition on a
+    /// Chinese or Korean one; a name with kana is Japanese everywhere.
+    #[test]
+    fn other_cjk_named_fonts_follow_the_systems_east_asian_language() {
+        use CjkLocale::*;
+        for (system, kind) in [
+            (None, CjkKind::Gothic),
+            (Some(Japanese), CjkKind::Gothic),
+            (Some(SimplifiedChinese), CjkKind::SansSc),
+            (Some(TraditionalChinese), CjkKind::SansTc),
+            (Some(Korean), CjkKind::SansKr),
+        ] {
+            for name in ["幼圆", "方正兰亭黑简体", "華康儷黑", "ＤＣ　ＡＢＣ"] {
+                assert_eq!(cjk_kind_in(name, system), Some(kind), "{name} on {system:?}");
+            }
+            for japanese in ["HG創英角ﾎﾟｯﾌﾟ体", "デッキ大阪", "ヒラギノ角ゴ ProN W3", "游明朝"] {
+                assert_eq!(cjk_kind_in(japanese, system).map(CjkKind::locale), Some(Japanese), "{japanese} on {system:?}");
+            }
+            // Fonts the lists know keep their kind, and Latin names stay Latin.
+            assert_eq!(cjk_kind_in("宋体", system), Some(CjkKind::SerifSc));
+            assert_eq!(cjk_kind_in("맑은 고딕", system), Some(CjkKind::SansKr));
+            assert_eq!(cjk_kind_in("Century Gothic", system), None);
+        }
+        let stand_ins = cjk_substitutes_of(CjkKind::SansSc);
+        assert!(stand_ins.iter().all(|f| tradition_of_family(f) == Some(SimplifiedChinese)), "{stand_ins:?}");
     }
 
     #[test]

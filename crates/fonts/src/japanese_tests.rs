@@ -253,6 +253,49 @@ fn missing_japanese_fonts_take_a_stand_in_of_their_kind() {
     assert!(bare.available_face("游ゴシック", "Regular").is_none());
 }
 
+/// Held by the tests that set the system's East Asian language or whose results depend on it
+/// being unset, so they never see each other's setting.
+static SYSTEM_LOCALE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// The system's East Asian language for one test: set while it runs, put back to the default
+/// (none) when it ends, failing or not.
+struct SystemLocale {
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+impl SystemLocale {
+    fn set(l: Option<CjkLocale>) -> SystemLocale {
+        let lock = SYSTEM_LOCALE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        set_default_cjk_locale(l);
+        SystemLocale { _lock: lock }
+    }
+}
+
+impl Drop for SystemLocale {
+    fn drop(&mut self) {
+        set_default_cjk_locale(None);
+    }
+}
+
+/// A missing font named in Chinese characters no list knows (幼圆) stands in with a Japanese
+/// gothic on a Japanese system, as Word for Mac draws it, and with a Chinese face on a Chinese
+/// one; a name with kana keeps the Japanese gothic everywhere.
+#[test]
+fn missing_cjk_named_fonts_stand_in_by_the_systems_east_asian_language() {
+    let db = stand_ins();
+    let face = |name: &str| db.available_face(name, "Regular").map(|f| f.family.clone());
+    let _system = SystemLocale::set(Some(CjkLocale::SimplifiedChinese));
+    assert_eq!(face("幼圆").as_deref(), Some("WenQuanYi Micro Hei"));
+    assert_eq!(db.document_face("方正兰亭黑简体", "Regular").family, "WenQuanYi Micro Hei");
+    assert_eq!(face("デッキ創英ﾎﾟｯﾌﾟ体").as_deref(), Some("IPAexGothic"), "kana: Japanese");
+    set_default_cjk_locale(Some(CjkLocale::Korean));
+    assert_eq!(face("幼圆").as_deref(), Some("NanumGothic"));
+    for japanese in [Some(CjkLocale::Japanese), None] {
+        set_default_cjk_locale(japanese);
+        assert_eq!(face("幼圆").as_deref(), Some("IPAexGothic"), "{japanese:?}");
+    }
+}
+
 #[test]
 fn craft_fonts_japanese_faces_stand_in_when_present() {
     if !japanese_fonts().any(|f| f.family == "BIZ UDPGothic") {
@@ -285,6 +328,8 @@ fn latin(db: &FontDb, family: &str, serif: bool) -> Arc<FontFace> {
 /// Mincho; bold text a bold face.
 #[test]
 fn east_asian_fallback_follows_the_texts_tradition_genre_and_style() {
+    // Han text with no tradition of its own falls back in the system's, which must be unset.
+    let _system = SystemLocale::set(None);
     let db = stand_ins();
     let sans = latin(&db, "DeckCraft Latin Sans", false);
     let serif = latin(&db, "DeckCraft Latin Serif", true);
