@@ -17,7 +17,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "New Presentation",
             ["File"],
             Some("Cmd+N"),
-            "{theme?: name, template?: starter name, size?: [w,h] pt, blank?: bool, eastAsian?: ja-JP|zh-CN|zh-TW|ko-KR|\"\" (the East Asian editing language: the deck's default text language, and for Japanese a Jpan theme font)}",
+            "{theme?: name, template?: starter name, size?: [w,h] pt, blank?: bool, eastAsian?: ja-JP|zh-CN|zh-TW|ko-KR|\"\" (the East Asian editing language: the deck's default text language, and for Japanese a Jpan theme font; the session's editing language when left out, \"\" for none)}",
             always,
             new
         ),
@@ -118,7 +118,9 @@ fn new(s: &mut Session, p: &Value) -> Result<Value> {
         let theme = theme_name.and_then(theme_named).unwrap_or_default();
         (defaults::blank_presentation(size, theme, !bool_or(p, "blank", false)), None)
     };
-    if let Some(l) = east_asian.flatten() {
+    // Without the parameter, the session's East Asian editing language (the system's, in the
+    // desktop app), as PowerPoint with Japanese editing starts its blank decks in Japanese.
+    if let Some(l) = east_asian.unwrap_or(s.east_asian_editing) {
         super::design::east_asian_deck(&mut doc, l);
     }
     let slides = doc.slides.len();
