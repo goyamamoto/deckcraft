@@ -43,10 +43,27 @@ impl eframe::App for App {
         self.0.logic(ctx);
     }
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
+        // macOS: the committed text the input method asked to replace with this frame's
+        // composition (再変換), from the vendored winit (`deckcraft_ui_egui::ime`).
+        #[cfg(target_os = "macos")]
+        if raw.events.iter().any(|e| matches!(e, egui::Event::Ime(egui::ImeEvent::Preedit { .. }))) {
+            self.0.ime.replace = winit::platform::macos::take_ime_replacement_range();
+        }
         self.0.raw_input_hook(raw);
     }
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.0.ui(ui);
+        // macOS: what the input method may read of the slide's text this frame (the caret's
+        // paragraph and the selection), so it can reconvert committed text and give live
+        // conversion its context, as Office for Mac lets it (observed in Word for Mac).
+        #[cfg(target_os = "macos")]
+        winit::platform::macos::set_ime_surrounding_text(
+            self.0
+                .ime
+                .surrounding
+                .as_ref()
+                .map(|s| winit::platform::macos::ImeSurroundingText { text: s.text.clone(), selected: s.selected.clone() }),
+        );
     }
     fn on_exit(&mut self) {
         save_prefs(&self.0);
