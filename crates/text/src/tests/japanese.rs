@@ -124,6 +124,28 @@ fn a_mixed_line_stretches_its_space_first_then_spreads_the_rest_after_japanese_c
 }
 
 #[test]
+fn a_justified_line_stretches_to_the_margin_before_its_hanging_comma() {
+    // PowerPoint for Mac: 日本語とEnglish textの混在した段落で on a 432-pt line at 25 pt, its 、
+    // hanging past the margin: the space takes the 2.9 pt to spare and the 、 starts at the margin.
+    let Some(fam) = japanese_family() else {
+        eprintln!("skipped: no Japanese face");
+        return;
+    };
+    let text = "日本語とEnglish textの混在した段落で、続きの文";
+    let runs = || vec![run_in(text, Some("ja-JP"), &fam, 25.0)];
+    let nat = natural(runs());
+    let comma = text.chars().position(|c| c == '、').unwrap();
+    let body: f64 = nat[..comma].iter().sum();
+    let w = body + 2.9;
+    let l = lay_runs(runs(), w, Align::Justify, |_| {});
+    assert_eq!(l.lines[0].end, comma + 1, "the comma hangs on the first line");
+    let got = widths(&l, 0);
+    let space = text.chars().position(|c| c == ' ').unwrap();
+    assert!(close(got[space], nat[space] + 2.9), "{} vs {}", got[space], nat[space]);
+    assert!(close(l.lines[0].edges[comma].0, w), "the 、 starts at the margin: {:?}", l.lines[0].edges[comma]);
+}
+
+#[test]
 fn latin_letters_in_a_japanese_run_spread_too_after_the_spaces_stretch() {
     let Some(fam) = japanese_family() else {
         eprintln!("skipped: no Japanese face");
