@@ -1938,11 +1938,17 @@ fn break_lines(
                 last_break = Some(i);
             }
             // Closing East Asian punctuation hangs past the end instead of wrapping
-            // (`hangingPunct`); the line breaks after it.
+            // (`hangingPunct`); the line breaks after it, and after the spaces and the line break
+            // that follow it. It hangs only where the next line may start after it: "。」"
+            // doesn't, it moves with the character before it as an overflowing "」" would.
             if wrap && hang && x + adv > avail + 0.01 && x <= avail + 0.01 && is_hanging_punct(c) && i > start {
-                end = i + 1;
-                next = i + 1;
-                break;
+                let after = (i + 1..n).find(|&j| !p.cells.get(j).is_some_and(|c| is_trailing_space(c.ch))).unwrap_or(n);
+                let line_break = p.cells.get(after).is_some_and(|c| matches!(c.ch, '\u{b}' | '\n'));
+                if after >= n || line_break || (allowed.get(after).copied().unwrap_or(false) && breakable(after)) {
+                    end = i + 1;
+                    next = if line_break { after + 1 } else { after };
+                    break;
+                }
             }
             // A tab that would run past the end moves to the next line (and to its first stop there).
             if wrap && c == '\t' && x + adv > avail + 0.01 && i > start {
@@ -2337,7 +2343,8 @@ fn layout_scaled(ctx: &Ctx, shape: &Shape, body: &TextBody, bp: &BodyProps, opts
             // A full stop or comma hanging past the margin (`hangingPunct`) is left out of the
             // justified width: PowerPoint stretches the rest of the line to the margin and lets
             // the mark hang after it ("日本語とEnglish textの…で" + "、": its space +2.92 pt).
-            let hanging = width > avail + 0.01 && n > 1 && line_cells.last().is_some_and(|c| is_hanging_punct(c.ch));
+            // Right-aligned and centred lines are placed by the width before it too.
+            let hanging = wrap && width > avail + 0.01 && n > 1 && line_cells.last().is_some_and(|c| is_hanging_punct(c.ch));
             let body_n = if hanging { n - 1 } else { n };
             let slack = (avail - adv.iter().take(body_n).sum::<f64>()).max(0.0);
             // Justification: kashida (justLow, Arabic), spaces, or every character.
@@ -2375,6 +2382,8 @@ fn layout_scaled(ctx: &Ctx, shape: &Shape, body: &TextBody, bp: &BodyProps, opts
                 filled = true;
             }
             let line_w: f64 = adv.iter().sum();
+            // The width the line is aligned by: without a mark hanging past the end margin.
+            let body_w = if hanging && !p.rtl { adv.iter().take(body_n).sum() } else { line_w };
             // The line box, in column coordinates: the start edge is the left one for LTR and the
             // right one (S = W - rIns) for RTL paragraphs.
             let (box_l, box_r) = if p.rtl { (mr, col_w - x0) } else { (x0, col_w - mr) };
@@ -2383,8 +2392,8 @@ fn layout_scaled(ctx: &Ctx, shape: &Shape, body: &TextBody, bp: &BodyProps, opts
             } else {
                 match align {
                     Align::Left => box_l,
-                    Align::Right => box_r - line_w,
-                    Align::Center => box_l + (box_r - box_l - line_w) / 2.0,
+                    Align::Right => box_r - body_w,
+                    Align::Center => box_l + (box_r - box_l - body_w) / 2.0,
                     Align::Distributed if one_char => box_l + slack / 2.0,
                     // Justified lines that aren't stretched (the last one) sit at the start edge.
                     Align::Justify | Align::JustLow | Align::Distributed if p.rtl => box_r - line_w,
