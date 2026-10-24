@@ -39,8 +39,9 @@ pub struct ImeState {
     /// while the slide's text has the keyboard; the desktop app reports it to the platform.
     pub surrounding: Option<ImeSurrounding>,
     /// The range of `surrounding` (UTF-16 code units) the input method asked to replace with the
-    /// composition arriving in this frame's `Preedit` (reconversion of committed text); the
-    /// desktop app sets it from the platform.
+    /// composition arriving in this frame's `Preedit`, or the text of its `Commit` (reconversion
+    /// of committed text); the desktop app sets it from the platform. It lasts the frame: one
+    /// no commit took is dropped once the frame's keyboard input is handled.
     pub replace: Option<Range<usize>>,
     /// The IME position last reported. While the slide's text has the keyboard the position is
     /// reported every frame — this one when the caret can't be placed in a frame — since a frame
