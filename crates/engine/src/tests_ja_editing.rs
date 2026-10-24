@@ -245,6 +245,21 @@ fn pasted_japanese_is_tagged_and_saved_with_its_alternative_language() {
     assert_eq!((found.props.lang.as_deref(), found.props.alt_lang.as_deref()), (Some("ja-JP"), Some("en-US")));
 }
 
+/// Latin typed after Japanese stays in the Japanese run; spelling checks its words in the run's
+/// alternative language, as Office proofs Latin typed with the Japanese input method.
+#[test]
+fn latin_typed_after_japanese_is_still_spell_checked() {
+    crate::spell::install("xx-JAALT", crate::spell::Dictionary::parse(crate::spell::tests::AFF.as_bytes(), crate::spell::tests::DIC.as_bytes()));
+    let (mut s, id) = editing("slide ", Some("xx-JAALT"));
+    s.east_asian_editing = Some(CjkLocale::Japanese);
+    s.execute("text.insert", &json!({"text": "日本語"})).unwrap();
+    s.execute("text.insert", &json!({"text": " thsi slidez slides"})).unwrap();
+    assert_eq!(runs(&s, id)[1], run("日本語 thsi slidez slides", Some("ja-JP"), Some("xx-JAALT")));
+    let v = s.execute("review.spelling", &json!({})).unwrap();
+    let words: Vec<(&str, &str)> = v.as_array().unwrap().iter().map(|w| (w["word"].as_str().unwrap(), w["lang"].as_str().unwrap())).collect();
+    assert_eq!(words, vec![("thsi", "xx-JAALT"), ("slidez", "xx-JAALT")]);
+}
+
 /// Japanese text moves and selects by runs of kanji, kana and katakana.
 #[test]
 fn ctrl_arrows_and_double_click_group_typed_japanese() {
