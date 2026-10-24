@@ -111,6 +111,9 @@ pub fn inspect(app: &SlideApp, ctx: &egui::Context) -> Value {
         // among the windows on its presentation (View › New Window).
         "windowId": app.session.windows.this,
         "viewNumber": app.view_number,
+        // The interface's font chain (the proportional family's faces, first drawn first): tells
+        // which face draws the interface in a language, such as the platform's Japanese face.
+        "interfaceFonts": ctx.fonts(|f| f.definitions().families.get(&egui::FontFamily::Proportional).cloned()).unwrap_or_default(),
         "status": app.status.as_ref().map(|s| s.0.clone()),
         "perf": {"frameMs": app.perf.frame_ms, "renderMs": app.perf.render_ms, "fps": app.perf.fps},
     })

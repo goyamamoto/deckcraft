@@ -1,6 +1,6 @@
 # DeckCraft vs Microsoft PowerPoint: parity assessment
 
-> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-25 · **Change:** trivial (Views: presentation windows done, the row's shortfall is window chrome; previous: minor, Localization ~8% → ~20%: catalog infrastructure and a Japanese interface; East Asian text done in the checklist; previous: trivial, Animations shortfall: preview from the selected effect is in; previous: major, community PR wave 2026-10-14: breadth 84% over 191 features (P0 92%, P1 82%, P2 55%) after `cargo xtask parity`; area table and What works today folded to one row or bullet each; 320 engine commands; ready ~55% and stage alpha unchanged; previous: minor, hours to ~95% per audience added) · **Target:** Microsoft PowerPoint for Mac 16.113 (Microsoft 365)
+> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-25 · **Change:** minor (Application shell: the native macOS menu bar; previous: trivial, Views: presentation windows done, the row's shortfall is window chrome; previous: minor, Localization ~8% → ~20%: catalog infrastructure and a Japanese interface; East Asian text done in the checklist; previous: trivial, Animations shortfall: preview from the selected effect is in; previous: major, community PR wave 2026-10-14: breadth 84% over 191 features (P0 92%, P1 82%, P2 55%) after `cargo xtask parity`; area table and What works today folded to one row or bullet each; 320 engine commands; ready ~55% and stage alpha unchanged; previous: minor, hours to ~95% per audience added) · **Target:** Microsoft PowerPoint for Mac 16.113 (Microsoft 365)
 
 The authoritative answer to "how close is DeckCraft to PowerPoint, and how much work is left?".
 [ROADMAP.md](../ROADMAP.md) summarizes it; [gaps.md](gaps.md) itemizes every shortfall;
@@ -11,7 +11,7 @@ number.
 
 | Number | Value | Kind |
 |---|---|---|
-| **Feature breadth** (weighted checklist) | **84%** over 191 features (P0 92%, P1 82%, P2 56%) | **measured**: `cargo xtask parity` formula over [parity-checklist.md](parity-checklist.md); rows re-scored by the 2026-10-14 community PR wave |
+| **Feature breadth** (weighted checklist) | **85%** over 191 features (P0 92%, P1 84%, P2 56%) | **measured**: `cargo xtask parity` formula over [parity-checklist.md](parity-checklist.md); rows re-scored by the 2026-10-14 community PR wave |
 | Menu-bar coverage | **59%** (128 of 217 app-specific PowerPoint menu items have a DeckCraft command or UI label of the same name) | **measured** (heuristic lower bound): script matching the 2026-10-07 PowerPoint menu dump against the 226 engine command labels of the d556ff9 snapshot (not re-measured since; the registry is 320 now) and the UI's strings; excludes the app, Window and Help menus and the subtitle language lists |
 | **Ready for real work** | **~55%** | **estimated**: weighted dimension table below (was ~56% until the features row was recomputed from written area weights) |
 | **Mainstream practitioner** | **~53%** | **estimated**: [method below](#mainstream-practitioner-and-essentials-user) |
@@ -64,9 +64,9 @@ The weights are what those users actually depend on, written down so the total c
 
 | Dimension | Weight | Ready | Hours to full | Doc | Evidence |
 |---|---:|---:|---|---|---|
-| Features (breadth × depth) | 30% | ~62% | 140–240 | [parity-checklist.md](parity-checklist.md), [animation-parity.md](animation-parity.md), [slideshow-parity.md](slideshow-parity.md) | Breadth 84% measured. Depth lags: partial rows remain, and users found depth bugs in rows scored done within two days (#53, #60, #69, #70, #74, #77, #78) |
+| Features (breadth × depth) | 30% | ~62% | 140–240 | [parity-checklist.md](parity-checklist.md), [animation-parity.md](animation-parity.md), [slideshow-parity.md](slideshow-parity.md) | Breadth 85% measured. Depth lags: partial rows remain, and users found depth bugs in rows scored done within two days (#53, #60, #69, #70, #74, #77, #78) |
 | File formats | 20% | ~58% | 60–110 | [file-format-parity.md](file-format-parity.md) | PPTX reads and writes every main part and keeps unknown objects; files open in PowerPoint without repair. But it has never met a corpus of real decks, EMF/WMF/SVG pictures don't decode, comments/media/rewind settings are lost on round trip, and there is no `.ppt`, `.pptm`, `.odp`, video or GIF export |
-| UI/UX fidelity | 15% | ~60% | 30–50 | [ui-parity.md](ui-parity.md) | All 10 ribbon tabs and the contextual tabs exist; Format Shape pane, Animation Pane, dialogs and menus are thinner than PowerPoint's; no native macOS menu bar; user reports #17, #71, #73, #76 |
+| UI/UX fidelity | 15% | ~63% | 27–45 | [ui-parity.md](ui-parity.md) | All 10 ribbon tabs and the contextual tabs exist, and the native macOS menu bar; Format Shape pane, Animation Pane, dialogs and menus are thinner than PowerPoint's; user reports #17, #71, #73, #76 |
 | Stability | 10% | ~60% | 10–20 | [gaps.md](gaps.md) | Never-crash rules, a panic guard round every command, PPTX fuzz/malformed tests. But startup crashes on some Windows GPUs (#40, #59) and Close discards edits without asking (#60) |
 | Performance | 5% | ~55% | 10–20 | [hardware-parity.md](hardware-parity.md) | Unmeasured against PowerPoint. Slides rasterize on the CPU (`vello_cpu`); Morph re-aligns outlines every frame (#67) |
 | Hardware | 5% | ~40% | 25–45 | [hardware-parity.md](hardware-parity.md) | GPU-composited window (wgpu), but CPU slide raster, software-only video decode, presenter view not placed on the second display, no pen tilt, no pinch zoom |
@@ -116,7 +116,7 @@ PowerPoint is taken out of the areas and charged once, as a discount.
 
 | Discount | Factor | Evidence |
 |---|---:|---|
-| Interaction fidelity | ×0.92 | No native macOS menu bar, thinner Format Shape pane, Tab ends text entry (#78), font faces (#69), window chrome (#71) |
+| Interaction fidelity | ×0.92 | Thinner Format Shape pane, Tab ends text entry (#78), font faces (#69), window chrome (#71); the native macOS menu bar is in |
 | Stability on real machines | ×0.92 | Startup crashes on some Windows GPUs (#40, #59); Close discards edits (#60, fix in PR #75); video stalls in the editor on Ubuntu (#91); arrows reported dead in the show on Linux Mint (#17) |
 | File exchange with PowerPoint users | ×0.88 | Harsher than VectorCraft's ×0.92 because swapping `.pptx` is daily work for this user: never tested on real decks, EMF pictures blank, icons from PowerPoint don't come through (#56), comment threads, media options and rewind lost on save (#70, #74, #77) |
 
@@ -150,7 +150,7 @@ mainstream number leaves out.
 | Discount | Factor | Evidence |
 |---|---:|---|
 | Launch and stability | ×0.90 | Some Windows PCs can't start the app (#40, #59), and the workaround is an environment variable; Close loses work (#60) |
-| Discoverability and UI clarity | ×0.95 | Familiar ribbon and tabs; no native menu bar, start-screen glitches |
+| Discoverability and UI clarity | ×0.95 | Familiar ribbon and tabs and the native menu bar; start-screen glitches |
 | Opening files people send them | ×0.90 | `.pptx` opens, but real decks are untested and EMF pictures and PowerPoint icons can come in blank (#56) |
 
 80.1 × 0.90 × 0.95 × 0.90 = **61.6 → ~62%**.
@@ -179,7 +179,7 @@ Features row of the dimension table keeps ~62% until the next full re-measure). 
 
 | Area | Weight | Breadth (measured) | Ready (est.) | Hours | Main shortfalls | Doc |
 |---|---:|---:|---:|---|---|---|
-| Application shell | 5 | 81% | ~55% | 8–14 | No native macOS menu bar, contextual tabs and multiple-window handling thinner than PowerPoint's | [ui-parity.md](ui-parity.md) |
+| Application shell | 5 | 88% | ~70% | 5–9 | Contextual tabs thinner than PowerPoint's; the native macOS menu bar and the presentation windows are in | [ui-parity.md](ui-parity.md) |
 | Files (commands) | 4 | 75% | ~50% | see file formats | Print, passwords, legacy and macro formats, video export; reuse slides is partial | [file-format-parity.md](file-format-parity.md) |
 | Slides and sections | 6 | 92% | ~85% | 3–5 | Zoom (summary/section/slide) is partial, copying slides between decks keeps formatting only partly | [parity-checklist.md](parity-checklist.md) |
 | Views | 4 | 100% | ~85% | 2–4 | Window chrome and system appearance (#71, #41); Arrange All, Cascade, New Window and one window per presentation are in | [ui-parity.md](ui-parity.md) |
@@ -201,7 +201,7 @@ Features row of the dimension table keeps ~62% until the next full re-measure). 
 | Undo and clipboard | 3 | 100% | ~75% | 3–5 | Image paste (#53) | [ui-parity.md](ui-parity.md) |
 | Automation ✱ | — | 100% | ahead | 0 | | [mcp.md](mcp.md) |
 | Platforms ✱ | — | 67% | ~80% | see platforms | | [ROADMAP.md](../ROADMAP.md) |
-| **Total (feature areas)** | 110 | **84%** | **~62%** | **~140–240** | | |
+| **Total (feature areas)** | 110 | **85%** | **~62%** | **~140–240** | | |
 
 ## What works today (evidence)
 
@@ -290,6 +290,7 @@ scored done (16 open issues).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-25 | minor | Application shell: the native macOS menu bar landed (checklist row M → D; the area's breadth 81% → 88%, headline 84% → 85%, P1 82% → 84%), depth ~55% → ~70%, 5–9 h left; UI/UX fidelity ~60% → ~63% |
 | 2026-10-25 | trivial | Views: presentation windows landed (one per presentation, New Window, Arrange All, Cascade, Switch Windows); the row's breadth 98% → 100%, depth ~80% → ~85%, 2–4 h left for window chrome. Headline breadth per `cargo xtask parity` |
 | 2026-10-24 | minor | Localization ~8% → ~20% (craft-i18n catalogs, Japanese interface, 45–75 h left); East Asian text scored done after measuring Japanese layout against PowerPoint for Mac. Full ready stays ~55% |
 | 2026-10-22 | trivial | Animations shortfall: preview from the selected effect (Play From) is in. Percentages unchanged |

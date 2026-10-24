@@ -30,6 +30,7 @@ pub mod ime;
 pub mod keylayout;
 pub mod media;
 pub mod menus;
+pub mod native_menu;
 pub mod notes;
 pub mod opening;
 pub mod panes;
@@ -274,6 +275,9 @@ pub struct Services {
     pub clipboard_image: Option<Box<dyn FnMut() -> Option<Vec<u8>>>>,
     /// HTML on the system clipboard (Pages, Keynote, and other apps that write `public.html`).
     pub clipboard_html: Option<Box<dyn FnMut() -> Option<String>>>,
+    /// The system clipboard's plain text, for a paste the native menu bar asked for (egui-winit
+    /// reads it for a real ⌘V; a key equivalent AppKit took never reached winit).
+    pub clipboard_text: Option<Box<dyn FnMut() -> Option<String>>>,
     /// Put HTML and its plain-text alternative on the system clipboard. `true` when it landed.
     pub clipboard_set_html: Option<Box<dyn FnMut(&str, &str) -> bool>>,
     /// Audio output for media playback (cpal on desktop); without one media plays silently.
@@ -605,6 +609,9 @@ pub struct SlideApp {
     /// View › New Window: this window's number among the windows on its presentation (the
     /// title's `:2`); `None` for the only window on it.
     pub view_number: Option<u32>,
+    /// The host installed a native menu bar ([`native_menu`]): its key equivalents reach the
+    /// window through it.
+    pub menu_bar_installed: bool,
 }
 
 fn grid_options_touched(p: &Value) -> bool {
@@ -679,6 +686,7 @@ impl SlideApp {
             window_requests: Vec::new(),
             control_inbox: Vec::new(),
             view_number: None,
+            menu_bar_installed: false,
         }
     }
 
@@ -2155,6 +2163,11 @@ impl SlideApp {
                     }
                 }
                 egui::Event::Key { key, physical_key, pressed: true, modifiers, .. } => {
+                    // A key before this one in the frame may have opened a dialog (two native menu
+                    // key equivalents can arrive together): the dialog has the keyboard now.
+                    if native_menu::blocks_document(self) {
+                        break;
+                    }
                     // `=` and `+` typed with Shift on JIS and other layouts (see `keylayout`).
                     let (key, shift) = keylayout::shortcut_key(key, physical_key, modifiers.shift);
                     if key == egui::Key::Tab {

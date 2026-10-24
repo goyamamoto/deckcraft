@@ -38,6 +38,7 @@ use deckcraft_engine::{DocState, ViewSlot, WindowEntry, Windows};
 use egui::{Pos2, Rect, Vec2, ViewportBuilder, ViewportCommand, ViewportId, pos2, vec2};
 use serde_json::{Value, json};
 
+use crate::native_menu::{self, NativeMenu};
 use crate::{ControlRequest, SlideApp};
 
 /// A window's id: stable while it is open, unique within the run, never 0.
@@ -142,6 +143,9 @@ pub struct Host {
     template: ViewportBuilder,
     pub work_area: Option<WorkArea>,
     pub after_ui: Option<AfterUi>,
+    /// The native menu bar (macOS): one for the process, showing the window in use and running
+    /// its items there.
+    menu: Option<NativeMenu>,
     control_rx: Option<Receiver<ControlRequest>>,
     /// Every window has closed (or the last one may): the eframe app ends the process.
     exit: bool,
@@ -177,6 +181,7 @@ impl Host {
             template,
             work_area: None,
             after_ui: None,
+            menu: None,
             control_rx: None,
             exit: false,
             shared_settings: None,
@@ -188,6 +193,17 @@ impl Host {
     pub fn with_control(mut self, rx: Receiver<ControlRequest>) -> Self {
         self.control_rx = Some(rx);
         self
+    }
+
+    /// The native menu bar the host installed ([`native_menu`]).
+    pub fn with_menu(mut self, menu: NativeMenu) -> Self {
+        self.menu = Some(menu);
+        self
+    }
+
+    /// Whether the window `vp` shows is the one in use: the one the menu bar shows and acts on.
+    fn is_active_viewport(&self, vp: ViewportId) -> bool {
+        self.active().is_some_and(|w| w.viewport == vp)
     }
 
     /// Install the host for this thread (the main thread), replacing any earlier one.
@@ -433,15 +449,29 @@ impl Host {
             crate::set_window_salt(id);
             self.quit_tick(ctx);
             self.pass_wake_ups_on(ctx);
+            // A menu event wakes the root viewport; the window in use takes it in its frame.
+            if let Some(menu) = &mut self.menu
+                && menu.pull()
+                && let Some(w) = self.active()
+                && w.viewport != ViewportId::ROOT
+            {
+                ctx.request_repaint_of(w.viewport);
+            }
         }
         self.pass_screenshots_on(vp, ctx);
         self.pool_fonts();
         self.sync_untitled(i);
         let snapshot = self.snapshot(id);
         let frames = self.frames;
-        let w = &mut self.windows[i];
+        let active = self.is_active_viewport(vp);
+        let Host { menu, windows, .. } = self;
+        let w = &mut windows[i];
         w.app.session.windows = snapshot;
         w.app.view_number = w.view_number;
+        w.app.menu_bar_installed = menu.is_some();
+        if active && let Some(menu) = menu {
+            native_menu::run(menu, &mut w.app, ctx);
+        }
         w.app.logic(ctx);
         // Where the window is, for cascading and tiling.
         let info = ctx.input(|i| i.viewport().clone());
@@ -505,6 +535,12 @@ impl Host {
             crate::set_window_salt(id);
             self.windows[i].app.ui(ui);
             self.sync_group(i, &ctx);
+            if self.is_active_viewport(vp) {
+                let Host { menu, windows, .. } = self;
+                if let Some(menu) = menu {
+                    native_menu::sync(menu, &mut windows[i].app, &ctx);
+                }
+            }
             let focused = ctx.input(|i| i.viewport().focused == Some(true));
             if let Some(after) = &mut self.after_ui {
                 after(&self.windows[i].app, focused);
@@ -557,11 +593,18 @@ impl Host {
         }
     }
 
-    /// eframe's raw input hook, for the viewport the input is for: the window's own hook runs
-    /// with its presentation in hand.
+    /// eframe's raw input hook, for the viewport the input is for: the menu bar's events go to
+    /// the window in use (the one the menu shows), then the window's own hook runs with its
+    /// presentation in hand.
     pub fn raw_input_hook(&mut self, raw: &mut egui::RawInput) {
         let Some(i) = self.index_of_viewport(raw.viewport_id) else { return };
         self.take_turn(i);
+        if self.is_active_viewport(raw.viewport_id) {
+            let Host { menu, windows, .. } = self;
+            if let Some(menu) = menu {
+                native_menu::raw_input(menu, &mut windows[i].app, raw);
+            }
+        }
         self.windows[i].app.raw_input_hook(raw);
     }
 

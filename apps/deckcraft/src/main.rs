@@ -23,6 +23,8 @@ mod display;
 #[cfg(any(target_os = "windows", test))]
 mod graphics;
 mod logging;
+#[cfg(target_os = "macos")]
+mod mac_menu;
 #[cfg(not(target_arch = "wasm32"))]
 mod pasteboard;
 #[cfg(target_os = "macos")]
@@ -141,6 +143,19 @@ fn save_prefs(app: &SlideApp) {
     }
 }
 
+/// A blocking system file dialog has Cocoa text fields: while it is open, the Edit menu's rows are
+/// AppKit's own, so the dialog's fields keep ⌘C and ⌘V (`mac_menu::with_native_editing`).
+fn with_native_editing<R>(f: impl FnOnce() -> R) -> R {
+    #[cfg(target_os = "macos")]
+    {
+        mac_menu::with_native_editing(f)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        f()
+    }
+}
+
 fn services() -> Services {
     Services {
         pick_open: Some(Box::new(|purpose: &str| {
@@ -159,13 +174,16 @@ fn services() -> Services {
                     .add_filter("PowerPoint", &["pptx", "potx", "ppsx"])
                     .add_filter("Outline", &["txt", "md"]),
             };
-            d.pick_file().map(|p| p.to_string_lossy().to_string())
+            with_native_editing(|| d.pick_file()).map(|p| p.to_string_lossy().to_string())
         })),
-        pick_save: Some(Box::new(|name: &str| rfd::FileDialog::new().set_file_name(name).save_file().map(|p| p.to_string_lossy().to_string()))),
+        pick_save: Some(Box::new(|name: &str| {
+            with_native_editing(|| rfd::FileDialog::new().set_file_name(name).save_file()).map(|p| p.to_string_lossy().to_string())
+        })),
         read: Some(Box::new(|p: &str| std::fs::read(p).map_err(|e| e.to_string()))),
         write: Some(Box::new(|p: &str, b: &[u8]| std::fs::write(p, b).map_err(|e| e.to_string()))),
         clipboard_image: Some(Box::new(pasteboard::image_png)),
         clipboard_html: Some(Box::new(pasteboard::html)),
+        clipboard_text: Some(Box::new(pasteboard::text)),
         clipboard_set_html: Some(Box::new(pasteboard::set_html)),
         // Media is mixed and clocked by the output device; `DECKCRAFT_NO_AUDIO` plays silently.
         audio_out: std::env::var_os("DECKCRAFT_NO_AUDIO")
@@ -350,11 +368,18 @@ fn main() -> eframe::Result {
             if sample && let Err(e) = deckcraft_engine::sample::open_sample(&mut app.session) {
                 log::error!("sample: {e}");
             }
+            // The native menu bar (macOS): built from the first window's state, then kept to the
+            // window in use by the host.
+            #[cfg(target_os = "macos")]
+            let menu = mac_menu::install(&cc.egui_ctx, &mut app);
             let mut host = Host::new(app, template, Box::new(new_app));
             #[cfg(target_os = "macos")]
             {
                 host.work_area = Some(Box::new(screens::work_area));
                 host.after_ui = Some(Box::new(report_ime_surrounding));
+                if let Some(menu) = menu {
+                    host = host.with_menu(menu);
+                }
             }
             if let Some(port) = control_port {
                 host = host.with_control(control_server::start(port, cc.egui_ctx.clone()));
