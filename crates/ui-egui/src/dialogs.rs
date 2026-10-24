@@ -80,6 +80,12 @@ pub fn show(app: &mut SlideApp, ctx: &egui::Context) {
     let Some(mut d) = app.dialog.take() else { return };
     let mut open = true;
     let mut close = false;
+    if d.id == "themeFonts" {
+        // Seeded first: its size depends on whether it has the Asian text rows.
+        seed_theme_fonts(app, ctx, &mut d);
+    }
+    // The Asian text rows and samples make Theme Fonts taller and a little wider.
+    let (theme_fonts_w, theme_fonts_h) = if d.fields.get("asian").is_some_and(|v| v == "1") { (60.0, 150.0) } else { (0.0, 0.0) };
     // The window's id is the dialog's, so a translated title never changes it.
     let mut window = egui::Window::new(tl!(title(&d.id)))
         .id(egui::Id::new(("dialog", d.id.clone())))
@@ -92,18 +98,21 @@ pub fn show(app: &mut SlideApp, ctx: &egui::Context) {
     if d.id == "themeColors" {
         window = window.default_size(vec2(760.0, 420.0)).min_width(720.0).min_height(420.0);
     } else if d.id == "themeFonts" {
-        window = window.default_size(vec2(460.0, 320.0)).min_width(420.0).min_height(300.0);
+        window = window
+            .default_size(vec2(460.0 + theme_fonts_w, 320.0 + theme_fonts_h))
+            .min_width(420.0 + theme_fonts_w)
+            .min_height(300.0 + theme_fonts_h);
     }
     window.show(ctx, |ui| {
         ui.set_min_width(match d.id.as_str() {
             "themeColors" => 700.0,
-            "themeFonts" => 400.0,
+            "themeFonts" => 400.0 + theme_fonts_w,
             _ => 340.0,
         });
         if d.id == "themeColors" {
             ui.set_min_height(360.0);
         } else if d.id == "themeFonts" {
-            ui.set_min_height(280.0);
+            ui.set_min_height(280.0 + theme_fonts_h);
         }
         close = body(app, ui, &mut d);
     });
@@ -669,48 +678,77 @@ fn theme_colors_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool 
     cancel
 }
 
-fn seed_theme_fonts(d: &mut Dialog) {
+/// Create New Theme Fonts' fields: the scheme's name, its Latin heading and body fonts and its
+/// Asian text heading and body fonts (`a:ea`; where the theme names none, its font for the
+/// editing language's script, `Jpan` for Japanese, the face Japanese text is drawn in). The Asian
+/// rows show with East Asian editing, an East Asian interface, or a theme that names them.
+fn seed_theme_fonts(app: &mut SlideApp, ctx: &egui::Context, d: &mut Dialog) {
     if d.fields.contains_key("seeded") {
         return;
     }
-    let name = d.params.get("name").and_then(Value::as_str).unwrap_or("Custom");
-    let major = d.params.get("major").and_then(Value::as_str).unwrap_or("Inter");
-    let minor = d.params.get("minor").and_then(Value::as_str).unwrap_or(major);
-    d.fields.insert("schemeName".into(), name.to_string());
-    d.fields.insert("major".into(), major.to_string());
-    d.fields.insert("minor".into(), minor.to_string());
-    d.fields.insert("seeded".into(), "1".into());
+    let text = |k: &str| d.params.get(k).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+    let name = text("name").unwrap_or_else(|| "Custom".into());
+    let major = text("major").unwrap_or_else(|| "Inter".into());
+    let minor = text("minor").unwrap_or_else(|| major.clone());
+    let list = crate::fontpick::font_list(app, ctx);
+    let ea = |key: &str, role: &str| text(key).or_else(|| list.theme_east_asian(role).map(|t| t.name.clone())).unwrap_or_default();
+    let (major_ea, minor_ea) = (ea("majorEa", "headings"), ea("minorEa", "body"));
+    let asian = list.east_asian || text("majorEa").is_some() || text("minorEa").is_some();
+    for (k, v) in [
+        ("schemeName", name),
+        ("major", major),
+        ("minor", minor),
+        ("majorEa", major_ea.clone()),
+        ("majorEaSeed", major_ea),
+        ("minorEa", minor_ea.clone()),
+        ("minorEaSeed", minor_ea),
+        ("asian", if asian { "1" } else { "" }.to_string()),
+        ("seeded", "1".to_string()),
+    ] {
+        d.fields.insert(k.into(), v);
+    }
 }
 
-fn theme_font_choices(app: &SlideApp, selected: &str) -> Vec<String> {
-    let mut v = crate::ribbon::font_families(app);
-    for scheme in deckcraft_model::theme::builtin_font_schemes() {
-        v.push(scheme.major.latin);
-        v.push(scheme.minor.latin);
+/// A labelled font box of a dialog bound to the field `key`: typing edits the field and lists the
+/// matching fonts; picking one sets it. `name` is the box's accessible name (English; shown
+/// translated).
+#[allow(clippy::too_many_arguments)]
+fn font_field(
+    ui: &mut Ui,
+    d: &mut Dialog,
+    list: &crate::fontpick::FontList,
+    label: (&str, f32),
+    name: &str,
+    key: &str,
+    offer: crate::fontpick::Offer,
+    width: f32,
+) {
+    let value = d.get(key, "");
+    let shown = crate::fontpick::shown_value(list, &value);
+    let r = ui
+        .horizontal(|ui| {
+            ui.add_sized(vec2(label.1, 20.0), egui::Label::new(tl!(label.0)));
+            crate::fontpick::font_box(ui, key, width, &shown, true, tl!(name), offer, &mut || list.clone(), None)
+        })
+        .inner;
+    if let Some(p) = r.pick {
+        d.fields.insert(key.into(), p.value());
+    } else if let Some(text) = r.edited {
+        d.fields.insert(key.into(), text);
     }
-    if !selected.is_empty() {
-        v.push(selected.to_string());
-    }
-    let mut seen = std::collections::HashSet::new();
-    v.retain(|face| !face.is_empty() && seen.insert(face.clone()));
-    v
 }
 
-fn font_combo(ui: &mut Ui, label: &str, choices: &[String], selected: &mut String) {
-    let resp = egui::ComboBox::from_id_salt(label).selected_text(selected.as_str()).width(240.0).show_ui(ui, |ui| {
-        for face in choices {
-            if ui.selectable_label(selected == face, face).clicked() {
-                *selected = face.clone();
-            }
-        }
-    });
-    let shown = selected.clone();
-    let access = label.to_string();
-    resp.response.widget_info(move || {
-        let mut info = egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, access.clone());
-        info.current_text_value = Some(shown.clone());
-        info
-    });
+/// A short sample of the East Asian editing language's text, for the Asian text font samples.
+fn east_asian_sample(app: &SlideApp) -> &'static str {
+    use deckcraft_fonts::CjkLocale;
+    let lang =
+        app.session.east_asian_editing.or_else(deckcraft_fonts::default_cjk_locale).or_else(|| CjkLocale::from_lang(crate::i18n::current().code()));
+    match lang {
+        Some(CjkLocale::Korean) => "가나다",
+        Some(CjkLocale::SimplifiedChinese) => "中文字体",
+        Some(CjkLocale::TraditionalChinese) => "中文字體",
+        _ => "あア亜",
+    }
 }
 
 fn theme_font_payload(d: &mut Dialog) -> Result<Value, String> {
@@ -726,47 +764,68 @@ fn theme_font_payload(d: &mut Dialog) -> Result<Value, String> {
     if minor.is_empty() {
         return Err("Choose a body font.".into());
     }
-    Ok(json!({"name": name, "major": major, "minor": minor}))
+    let mut payload = json!({"name": name, "major": major, "minor": minor});
+    // The Asian text fonts only when they changed: opening and saving keeps a theme that names
+    // none (its Japanese text keeps taking the Jpan font).
+    for (key, seed) in [("majorEa", "majorEaSeed"), ("minorEa", "minorEaSeed")] {
+        let v = d.get(key, "").trim().to_string();
+        if !v.is_empty() && v != d.get(seed, "").trim() {
+            payload[key] = json!(v);
+        }
+    }
+    Ok(payload)
 }
 
 /// Create New Theme Fonts. Returns true when the dialog should close.
 fn theme_fonts_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
-    seed_theme_fonts(d);
-    let major = d.get("major", "Inter");
-    let minor = d.get("minor", "Inter");
-    let headings = theme_font_choices(app, &major);
-    let bodies = theme_font_choices(app, &minor);
-    let mut major = major;
-    let mut minor = minor;
-    ui.horizontal(|ui| {
-        ui.add_sized(vec2(110.0, 18.0), egui::Label::new("Heading:"));
-        font_combo(ui, "Heading font", &headings, &mut major);
-    });
-    ui.horizontal(|ui| {
-        ui.add_sized(vec2(110.0, 18.0), egui::Label::new("Body:"));
-        font_combo(ui, "Body font", &bodies, &mut minor);
-    });
-    d.fields.insert("major".into(), major.clone());
-    d.fields.insert("minor".into(), minor.clone());
+    use crate::fontpick::Offer;
+    let ctx = ui.ctx().clone();
+    seed_theme_fonts(app, &ctx, d);
+    let list = crate::fontpick::font_list(app, &ctx);
+    let asian = d.get("asian", "") == "1";
+    let heading = |ui: &mut Ui, s: &str| {
+        ui.label(egui::RichText::new(tl!(s)).font(theme::bold(12.0)));
+    };
+    if asian {
+        heading(ui, "Latin text");
+    }
+    font_field(ui, d, &list, ("Heading:", 130.0), "Heading font", "major", Offer::Families, 240.0);
+    font_field(ui, d, &list, ("Body:", 130.0), "Body font", "minor", Offer::Families, 240.0);
+    if asian {
+        ui.add_space(4.0);
+        heading(ui, "Asian text");
+        font_field(ui, d, &list, ("Heading:", 130.0), "Asian heading font", "majorEa", Offer::EastAsian, 240.0);
+        font_field(ui, d, &list, ("Body:", 130.0), "Asian body font", "minorEa", Offer::EastAsian, 240.0);
+    }
     ui.add_space(4.0);
     // Theme faces are not egui families; naming an unbound family panics. The lines show the
     // chosen names at heading and body sizes.
-    ui.label(egui::RichText::new(format!("Heading sample  {major}")).size(20.0));
-    ui.label(egui::RichText::new(format!("Body sample  {minor}")).size(14.0));
+    let sample = |template: &str, key: &str, size: f32, ui: &mut Ui, d: &mut Dialog| {
+        let text = crate::i18n::fmt(tl!(template), &[(key, &d.get(key, "")), ("sample", east_asian_sample(app))]);
+        ui.label(egui::RichText::new(text).size(size));
+    };
+    sample("Heading sample  {major}", "major", 20.0, ui, d);
+    sample("Body sample  {minor}", "minor", 14.0, ui, d);
+    if asian {
+        sample("Asian heading sample  {sample}  {majorEa}", "majorEa", 17.0, ui, d);
+        sample("Asian body sample  {sample}  {minorEa}", "minorEa", 13.0, ui, d);
+    }
     ui.add_space(4.0);
     let mut name = d.get("schemeName", "");
     ui.horizontal(|ui| {
-        ui.add_sized(vec2(110.0, 18.0), egui::Label::new("Name:"));
+        ui.add_sized(vec2(130.0, 18.0), egui::Label::new(tl!("Name:")));
         let resp = ui.add(egui::TextEdit::singleline(&mut name).desired_width(240.0).id_salt("schemeName"));
         let shown = name.clone();
         resp.widget_info(move || {
-            let mut info = egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, "Scheme name");
+            let mut info = egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, tl!("Scheme name"));
             info.current_text_value = Some(shown.clone());
             info
         });
     });
     d.fields.insert("schemeName".into(), name);
-    ui.label(egui::RichText::new("Heading and body fonts for this presentation.").size(11.0).color(Tokens::get(ui.ctx()).text_dim));
+    let note =
+        if asian { "Heading and body fonts for Latin and Asian text in this presentation." } else { "Heading and body fonts for this presentation." };
+    ui.label(egui::RichText::new(tl!(note)).size(11.0).color(Tokens::get(ui.ctx()).text_dim));
     let (ok, cancel) = buttons(ui, "Save");
     if ok {
         match theme_font_payload(d) {
@@ -1691,42 +1750,50 @@ fn body(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         "replaceFonts" => {
             let used: Vec<String> =
                 app.session.execute("font.used", &json!({})).ok().and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
+            // The deck's fonts, its East Asian ones included (ＭＳ Ｐゴシック beside Calibri), by
+            // the names it uses; the replacement from the installed fonts by their names in the
+            // interface language, found by any of their names.
             let mut from = d.get("from", used.first().map(String::as_str).unwrap_or(""));
-            let mut to = d.get("to", "");
+            let list = crate::fontpick::font_list(app, ui.ctx());
             egui::Grid::new("replace_fonts").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
-                ui.label("Replace:");
+                ui.label(tl!("Replace:"));
                 egui::ComboBox::from_id_salt("rf_from").width(240.0).selected_text(from.clone()).show_ui(ui, |ui| {
                     for f in &used {
                         ui.selectable_value(&mut from, f.clone(), f);
                     }
                 });
                 ui.end_row();
-                ui.label("With:");
-                ui.vertical(|ui| {
-                    ui.add(egui::TextEdit::singleline(&mut to).desired_width(240.0).hint_text("Font name"));
-                    let needle = to.trim().to_lowercase();
-                    egui::ScrollArea::vertical().max_height(140.0).id_salt("rf_list").show(ui, |ui| {
-                        for f in
-                            crate::ribbon::font_families(app).iter().filter(|f| needle.is_empty() || f.to_lowercase().contains(&needle)).take(200)
-                        {
-                            if ui.selectable_label(f.eq_ignore_ascii_case(to.trim()), f).clicked() {
-                                to = f.clone();
-                            }
-                        }
-                    });
-                });
+                ui.label(tl!("With:"));
+                let to = d.get("to", "");
+                let r = crate::fontpick::font_box(
+                    ui,
+                    "rf_to",
+                    240.0,
+                    &to,
+                    true,
+                    tl!("Font name"),
+                    crate::fontpick::Offer::Families,
+                    &mut || list.clone(),
+                    None,
+                );
+                if let Some(text) = r.pick.map(|p| p.value()).or(r.edited) {
+                    d.fields.insert("to".into(), text);
+                }
                 ui.end_row();
             });
             if let Some(msg) = d.fields.get("result") {
                 ui.label(egui::RichText::new(msg.clone()).color(Tokens::get(ui.ctx()).text_dim));
             }
             d.fields.insert("from".into(), from.clone());
-            d.fields.insert("to".into(), to.clone());
+            let to = d.get("to", "");
             let (ok, cancel) = buttons(ui, "Replace");
             if ok && !from.is_empty() && !to.trim().is_empty() {
                 let n = app.run("font.replace", json!({"from": from, "to": to.trim()})).ok().and_then(|v| v["replaced"].as_u64()).unwrap_or(0);
-                let msg =
-                    if n == 0 { format!("“{from}” isn't used explicitly.") } else { format!("Replaced “{from}” with “{}”.", to.trim()) };
+                let msg = if n == 0 {
+                    crate::i18n::fmt(tl!("“{from}” isn't used explicitly."), &[("from", &from)])
+                } else {
+                    crate::i18n::fmt(tl!("Replaced “{from}” with “{to}”."), &[("from", &from), ("to", to.trim())])
+                };
                 d.fields.insert("result".into(), msg);
                 d.fields.remove("from");
                 // Stay open, like PowerPoint, so several fonts can be replaced in a row.
@@ -2766,31 +2833,14 @@ pub fn paint_logo(p: &egui::Painter, r: Rect) {
     ));
 }
 
-/// The selection's proofing language and whether it's marked Do Not Check Spelling: the run at
-/// the caret, else the first run of the first selected shape; US English when none says.
+/// The selection's proofing language and whether it's marked Do Not Check Spelling: the language
+/// of the text at the caret (the first selected character, else the first run of the first
+/// selected shape), inherited from its placeholder, master and the deck's default (`ja-JP` in a
+/// Japanese deck) when the run names none, as the engine resolves it
+/// ([`deckcraft_engine::cmd::format::selection_language`]); US English when nothing says.
 pub fn selected_language(app: &SlideApp) -> (String, bool) {
-    let Some(st) = app.session.active() else { return ("en-US".into(), false) };
-    let run = |sh: &deckcraft_model::Shape, at: Option<(usize, usize)>| -> Option<deckcraft_model::RunProps> {
-        let t = sh.text.as_ref()?;
-        if let Some((p, c)) = at {
-            let para = t.paragraphs.get(p)?;
-            let mut n = 0;
-            for r in &para.runs {
-                n += r.char_len();
-                if c <= n {
-                    return Some(r.props.clone());
-                }
-            }
-            return para.runs.last().map(|r| r.props.clone());
-        }
-        t.paragraphs.iter().flat_map(|p| &p.runs).next().map(|r| r.props.clone())
-    };
-    let props = match &st.selection.text {
-        Some(t) if !t.notes && t.cell.is_none() => st.shape(t.shape).and_then(|sh| run(sh, Some(t.caret))),
-        _ => st.selection.shapes.first().and_then(|id| st.shape(*id)).and_then(|sh| run(sh, None)),
-    };
-    let props = props.unwrap_or_default();
-    (props.lang.unwrap_or_else(|| "en-US".into()), props.no_proof == Some(true))
+    let (lang, no_proof) = deckcraft_engine::cmd::format::selection_language(&app.session);
+    (lang.unwrap_or_else(|| "en-US".into()), no_proof)
 }
 
 fn seed_once(d: &mut Dialog, key: &str, val: String) {
@@ -2817,6 +2867,9 @@ fn color_label(v: &Value) -> String {
 
 fn seed_font_fields(d: &mut Dialog) {
     seed_once(d, "family", json_text(d.params.get("family"), ""));
+    seed_once(d, "familySeed", json_text(d.params.get("family"), ""));
+    seed_once(d, "eastAsian", json_text(d.params.get("eastAsian"), ""));
+    seed_once(d, "eastAsianSeed", json_text(d.params.get("eastAsian"), ""));
     seed_once(d, "size", json_text(d.params.get("size"), "18"));
     seed_once(d, "bold", json_text(d.params.get("bold"), "0"));
     seed_once(d, "italic", json_text(d.params.get("italic"), "0"));
@@ -2856,74 +2909,66 @@ fn finite_pt(text: &str) -> Option<f64> {
 
 /// Home › Font › Font…, the shape menu and Cmd+T. One OK applies every field together.
 fn font_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
+    use crate::fontpick::Offer;
     ui.set_min_width(460.0);
     seed_font_fields(d);
-    let mut fams = crate::ribbon::font_families(app);
-    let family = d.get("family", "");
-    if !family.is_empty() && !fams.iter().any(|f| f == &family) {
-        fams.insert(0, family.clone());
+    let list = crate::fontpick::font_list(app, ui.ctx());
+    // As in PowerPoint with East Asian editing, Latin and Asian text take separate fonts. The
+    // Asian box also shows when the text already has an Asian text font.
+    let asian = list.east_asian || !d.get("eastAsianSeed", "").trim().is_empty();
+    font_field(ui, d, &list, ("Latin text font:", 150.0), "Latin text font", "family", Offer::Latin, 280.0);
+    if asian {
+        font_field(ui, d, &list, ("Asian text font:", 150.0), "Asian text font", "eastAsian", Offer::EastAsian, 280.0);
     }
     ui.horizontal(|ui| {
-        ui.add_sized(vec2(88.0, 20.0), egui::Label::new("Font"));
-        egui::ComboBox::from_id_salt("font_dialog_family").selected_text(if family.is_empty() { " " } else { family.as_str() }).width(300.0).show_ui(
-            ui,
-            |ui| {
-                egui::ScrollArea::vertical().max_height(280.0).show(ui, |ui| {
-                    for f in &fams {
-                        if ui.selectable_label(family == *f, f).clicked() {
-                            d.fields.insert("family".into(), f.clone());
-                        }
-                    }
-                });
-            },
-        );
-    });
-    ui.horizontal(|ui| {
-        let _ = labeled_text(ui, d, "Size", "size", 64.0);
+        let _ = labeled_text(ui, d, tl!("Size"), "size", 64.0);
         ui.add_space(16.0);
-        check(ui, d, "Bold", "bold", false);
-        check(ui, d, "Italic", "italic", false);
+        check(ui, d, tl!("Bold"), "bold", false);
+        check(ui, d, tl!("Italic"), "italic", false);
     });
+    let (none, single, double) = (tl!("None"), tl!("Single"), tl!("Double"));
     ui.horizontal(|ui| {
-        ui.add_sized(vec2(88.0, 20.0), egui::Label::new("Underline"));
+        ui.add_sized(vec2(88.0, 20.0), egui::Label::new(tl!("Underline")));
         choice(
             ui,
             d,
             "font_dialog_underline",
             "underline",
-            &[("none", "None"), ("sng", "Single"), ("dbl", "Double"), ("heavy", "Heavy"), ("dotted", "Dotted"), ("dash", "Dash"), ("wavy", "Wavy")],
+            &[
+                ("none", none),
+                ("sng", single),
+                ("dbl", double),
+                ("heavy", tl!("Heavy")),
+                ("dotted", tl!("Dotted")),
+                ("dash", tl!("Dash")),
+                ("wavy", tl!("Wavy")),
+            ],
         );
         ui.add_space(8.0);
-        let _ = labeled_text(ui, d, "Color", "color", 110.0);
+        let _ = labeled_text(ui, d, tl!("Color"), "color", 110.0);
     });
     ui.horizontal(|ui| {
-        ui.add_sized(vec2(88.0, 20.0), egui::Label::new("Strikethrough"));
-        choice(ui, d, "font_dialog_strike", "strike", &[("none", "None"), ("sng", "Single"), ("dbl", "Double")]);
+        ui.add_sized(vec2(88.0, 20.0), egui::Label::new(tl!("Strikethrough")));
+        choice(ui, d, "font_dialog_strike", "strike", &[("none", none), ("sng", single), ("dbl", double)]);
     });
     ui.horizontal(|ui| {
-        ui.add_sized(vec2(88.0, 20.0), egui::Label::new("Baseline"));
-        choice(ui, d, "font_dialog_baseline", "baseline", &[("none", "None"), ("super", "Superscript"), ("sub", "Subscript")]);
+        ui.add_sized(vec2(88.0, 20.0), egui::Label::new(tl!("Baseline")));
+        choice(ui, d, "font_dialog_baseline", "baseline", &[("none", none), ("super", tl!("Superscript")), ("sub", tl!("Subscript"))]);
         ui.add_space(8.0);
-        ui.label("Caps");
-        choice(ui, d, "font_dialog_caps", "caps", &[("none", "None"), ("small", "Small caps"), ("all", "All caps")]);
+        ui.label(tl!("Caps"));
+        choice(ui, d, "font_dialog_caps", "caps", &[("none", none), ("small", tl!("Small caps")), ("all", tl!("All caps"))]);
     });
     ui.horizontal(|ui| {
-        ui.add_sized(vec2(88.0, 20.0), egui::Label::new("Spacing"));
+        ui.add_sized(vec2(88.0, 20.0), egui::Label::new(tl!("Spacing")));
         let mut spacing = d.get("spacing", "0");
         let edited = ui.add(egui::TextEdit::singleline(&mut spacing).desired_width(64.0).hint_text("pt"));
         let mut picked = None;
+        let presets = [("-3", tl!("Very tight")), ("-1.5", tl!("Tight")), ("0", tl!("Normal")), ("3", tl!("Loose")), ("6", tl!("Very loose"))];
         egui::ComboBox::from_id_salt("font_dialog_spacing")
-            .selected_text(match spacing.as_str() {
-                "-3" => "Very tight",
-                "-1.5" => "Tight",
-                "0" => "Normal",
-                "3" => "Loose",
-                "6" => "Very loose",
-                other => other,
-            })
+            .selected_text(presets.iter().find(|(v, _)| *v == spacing).map_or(spacing.as_str(), |(_, l)| *l))
             .width(120.0)
             .show_ui(ui, |ui| {
-                for (v, l) in [("-3", "Very tight"), ("-1.5", "Tight"), ("0", "Normal"), ("3", "Loose"), ("6", "Very loose")] {
+                for (v, l) in presets {
                     if ui.selectable_label(spacing == v, l).clicked() {
                         picked = Some(v.to_string());
                     }
@@ -2941,7 +2986,8 @@ fn font_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     let underline = d.get("underline", "none");
     let strike = d.get("strike", "none");
     let shown = finite_pt(&d.get("size", "18")).unwrap_or(18.0).clamp(12.0, 28.0) as f32;
-    let mut sample = egui::RichText::new("AaBbCcDd").size(shown);
+    let sample_text = if asian { format!("AaBbCcDd  {}", east_asian_sample(app)) } else { "AaBbCcDd".to_string() };
+    let mut sample = egui::RichText::new(sample_text).size(shown);
     if bold {
         sample = sample.strong();
     }
@@ -2958,12 +3004,16 @@ fn font_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     ui.label(sample);
     let (ok, cancel) = buttons(ui, "OK");
     if ok {
-        let family = d.get("family", "");
-        let family = family.trim();
-        if family.is_empty() {
+        // The fonts only when they changed: OK must not turn theme fonts into fixed names, or set
+        // an Asian text font the user didn't choose. The Latin text font sets only the Latin font.
+        let family = d.get("family", "").trim().to_string();
+        let family_changed = family != d.get("familySeed", "").trim();
+        if family_changed && family.is_empty() {
             app.set_status("Choose a font");
             return false;
         }
+        let east_asian = d.get("eastAsian", "").trim().to_string();
+        let east_asian_changed = !east_asian.is_empty() && east_asian != d.get("eastAsianSeed", "").trim();
         let Some(size) = finite_pt(&d.get("size", "")) else {
             app.set_status("Font size must be a number");
             return false;
@@ -2973,7 +3023,6 @@ fn font_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             return false;
         };
         let mut params = json!({
-            "family": family,
             "size": size,
             "bold": d.get("bold", "0") == "1",
             "italic": d.get("italic", "0") == "1",
@@ -2983,6 +3032,12 @@ fn font_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             "caps": d.get("caps", "none"),
             "spacing": spacing,
         });
+        if family_changed {
+            params["family"] = json!(family);
+        }
+        if east_asian_changed {
+            params["eastAsian"] = json!(east_asian);
+        }
         let color = d.get("color", "");
         let seed = d.get("colorSeed", "");
         if color == seed {
