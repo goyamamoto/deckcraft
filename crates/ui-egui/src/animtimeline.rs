@@ -85,9 +85,10 @@ pub fn dragged_duration(duration_ms: u32, dx: f32, pps: f32, factor: f64) -> u32
     snap(f64::from(duration_ms) + delta_ms(dx, pps) / factor).max(MIN_DURATION_MS)
 }
 
-/// Tooltip text for a bar: `Start: 0.5s, End: 2.5s`.
+/// Tooltip text for a bar, in the interface language: `Start: 0.50s, End: 2.50s`.
 pub fn label(bar: &Bar) -> String {
-    format!("Start: {:.2}s, End: {:.2}s", bar.start, bar.start + bar.span)
+    let (start, end) = (format!("{:.2}", bar.start), format!("{:.2}", bar.start + bar.span));
+    crate::i18n::fmt(tl!("Start: {start}s, End: {end}s"), &[("start", &start), ("end", &end)])
 }
 
 #[cfg(test)]
