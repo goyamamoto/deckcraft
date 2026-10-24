@@ -156,9 +156,8 @@ struct Glyph {
     upright: Option<f64>,
 }
 
-/// The East Asian tradition text in a LOGFONT character set is written in (SHIFTJIS Japanese,
-/// HANGUL and JOHAB Korean, GB2312 Simplified and CHINESEBIG5 Traditional Chinese), else the
-/// system's: the cascade draws Han characters the named face lacks in that tradition's forms.
+/// The East Asian tradition text in a LOGFONT character set is written in: SHIFTJIS Japanese,
+/// HANGUL and JOHAB Korean, GB2312 Simplified and CHINESEBIG5 Traditional Chinese.
 fn charset_cjk(charset: u8) -> Option<deckcraft_fonts::CjkLocale> {
     use deckcraft_fonts::CjkLocale;
     match charset {
@@ -166,7 +165,20 @@ fn charset_cjk(charset: u8) -> Option<deckcraft_fonts::CjkLocale> {
         129 | 130 => Some(CjkLocale::Korean),
         134 => Some(CjkLocale::SimplifiedChinese),
         136 => Some(CjkLocale::TraditionalChinese),
-        _ => deckcraft_fonts::default_cjk_locale(),
+        _ => None,
+    }
+}
+
+/// Shapes `run` with face `f`, in `lang` when the character set names an East Asian language
+/// (`ja-JP` for Shift_JIS text, so a face covering several traditions draws the Japanese forms),
+/// unless the run holds right-to-left text.
+fn shape_run(f: &FontFace, run: &str, features: &[deckcraft_fonts::Feature], lang: Option<&str>) -> Vec<deckcraft_fonts::ShapedGlyph> {
+    match lang {
+        Some(language) if !run.chars().any(deckcraft_fonts::is_rtl) => {
+            let params = deckcraft_fonts::ShapeParams { features, language: Some(language), ..Default::default() };
+            deckcraft_fonts::shape_range(f, run, 0..run.len(), &params, |c| c)
+        }
+        _ => deckcraft_fonts::shape(f, run, features, |c| c),
     }
 }
 
@@ -199,9 +211,12 @@ fn draw_text(ctx: &mut RenderContext, t: &Text, m: Affine) {
         return;
     }
     // Characters as drawn: symbol fonts (Wingdings…) map like bullets; each character takes the
-    // face that has it, Han characters in the forms of the character set's tradition.
+    // face that has it, Han characters in the forms of the character set's tradition (else the
+    // system's).
     let chars: Vec<char> = t.text.chars().map(|c| deckcraft_text::symbol_char(&face, family, c).unwrap_or(c)).collect();
-    let cjk = charset_cjk(font.charset);
+    let charset_lang = charset_cjk(font.charset);
+    let cjk = charset_lang.or_else(deckcraft_fonts::default_cjk_locale);
+    let lang = charset_lang.map(deckcraft_fonts::CjkLocale::lang);
     let faces: Vec<Arc<FontFace>> = chars
         .iter()
         .map(|c| {
@@ -233,7 +248,7 @@ fn draw_text(ctx: &mut RenderContext, t: &Text, m: Affine) {
         let byte_char: Vec<usize> = run.char_indices().map(|(b, _)| b).collect();
         let s = em / f.upem.max(1.0);
         let run_start = pen;
-        for g in deckcraft_fonts::shape(&f, &run, if up { &vert } else { &[] }, |c| c) {
+        for g in shape_run(&f, &run, if up { &vert } else { &[] }, lang) {
             let ci = i + byte_char.partition_point(|b| *b < g.cluster).min(j - i - 1);
             let (dx, dy, adv) = (f64::from(g.x_offset) * s, -f64::from(g.y_offset) * s, f64::from(g.x_advance) * s);
             if up {
