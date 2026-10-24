@@ -18,6 +18,9 @@ deckcraft-render = { workspace = true }
 deckcraft-anim = { workspace = true }
 deckcraft-engine = { workspace = true }
 deckcraft-media = { workspace = true }
+# Interface translations (`src/i18n`): the catalogs come from `CRAFT_I18N_DIR` at build time
+# (`build.rs`); without it the interface is English only.
+craft-i18n = { workspace = true }
 egui = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

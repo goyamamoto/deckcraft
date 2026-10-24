@@ -14,7 +14,9 @@ use crate::SlideApp;
 pub struct DocWindow {
     pub uid: u64,
     pub slide: usize,
-    key: Option<(u64, u64, usize, u32, u32, bool)>,
+    /// What the cached slide picture shows: (document, revision, slide, size, grayscale, the
+    /// interface language of its placeholder prompts).
+    key: Option<(u64, u64, usize, u32, u32, bool, &'static str)>,
     tex: Option<egui::TextureHandle>,
 }
 
@@ -152,7 +154,7 @@ fn ensure_texture(
     h: u32,
     grayscale: bool,
 ) -> Option<egui::TextureHandle> {
-    let key = (uid, revision, slide, w, h, grayscale);
+    let key = (uid, revision, slide, w, h, grayscale, crate::i18n::current().code());
     if let Some(win) = app.doc_window.as_ref()
         && win.key == Some(key)
         && let Some(tex) = win.tex.clone()
@@ -162,7 +164,14 @@ fn ensure_texture(
     let img = deckcraft_render::render_slide(
         doc,
         slide,
-        &RenderOpts { scale: w as f64 / doc.slide_size.width.max(1.0), size: Some((w, h)), edit: true, threads: 0, ..Default::default() },
+        &RenderOpts {
+            scale: w as f64 / doc.slide_size.width.max(1.0),
+            size: Some((w, h)),
+            edit: true,
+            threads: 0,
+            prompt: Some(crate::i18n::placeholder_prompt),
+            ..Default::default()
+        },
     );
     let tex = crate::textures::upload(ctx, "doc-window-slide", crate::textures::to_color_image(&img, grayscale));
     if let Some(win) = app.doc_window.as_mut() {

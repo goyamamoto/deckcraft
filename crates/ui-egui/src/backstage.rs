@@ -405,7 +405,7 @@ pub fn show(app: &mut SlideApp, ui: &mut Ui) {
                 // otherwise vanish: the status bar only draws once the backstage is closed (#172).
                 // A real label, not painted text, so screen readers see it too.
                 if let Some(msg) = app.fresh_status() {
-                    ui.label(RichText::new(&msg).font(theme::font(12.0)).color(t.accent));
+                    ui.label(RichText::new(crate::i18n::message(&msg)).font(theme::font(12.0)).color(t.accent));
                     ui.add_space(8.0);
                     ui.ctx().request_repaint_after(std::time::Duration::from_millis(500));
                 }

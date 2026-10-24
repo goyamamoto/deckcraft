@@ -171,7 +171,7 @@ pub fn font_definitions(extra: &[std::sync::Arc<deckcraft_fonts::FontFace>]) -> 
     let mut names = vec![];
     for (i, f) in deckcraft_fonts::CRAFT_FONTS.iter().enumerate() {
         let wanted = (f.family == "Inter" && (f.style == "Regular" || f.style == "SemiBold" || f.style == "Bold"))
-            || (f.family == "BIZ UDPGothic" && f.style == "Regular")
+            || (f.family == "BIZ UDPGothic" && (f.style == "Regular" || f.style == "Bold"))
             || (f.family == "Noto Sans Arabic");
         if !wanted {
             continue;
@@ -180,14 +180,20 @@ pub fn font_definitions(extra: &[std::sync::Arc<deckcraft_fonts::FontFace>]) -> 
         defs.font_data.insert(name.clone(), std::sync::Arc::new(FontData::from_static(f.bytes)));
         names.push((f.family, f.style, name));
     }
-    let regular: Vec<String> = names.iter().filter(|(fam, st, _)| !(*fam == "Inter" && *st != "Regular")).map(|(_, _, n)| n.clone()).collect();
+    let is_bold_face = |fam: &str, st: &str| matches!((fam, st), ("Inter", "SemiBold" | "Bold") | ("BIZ UDPGothic", "Bold"));
+    let regular: Vec<String> = names.iter().filter(|(fam, st, _)| !is_bold_face(fam, st)).map(|(_, _, n)| n.clone()).collect();
     if let Some(list) = defs.families.get_mut(&FontFamily::Proportional) {
         for (k, n) in regular.iter().enumerate() {
             list.insert(k, n.clone());
         }
     }
-    // A bold family for headings and selected tabs.
-    let mut bold: Vec<String> = names.iter().filter(|(fam, st, _)| *fam == "Inter" && *st == "SemiBold").map(|(_, _, n)| n.clone()).collect();
+    // A bold family for headings and selected tabs: Inter SemiBold, then the Japanese interface
+    // face's bold (a Japanese interface's selected tab and headings stay bold; web builds don't
+    // embed it), then the regular chain for every other script.
+    let face = |family: &'static str, style: &'static str| {
+        names.iter().filter(move |(fam, st, _)| *fam == family && *st == style).map(|(_, _, n)| n.clone())
+    };
+    let mut bold: Vec<String> = face("Inter", "SemiBold").chain(face("BIZ UDPGothic", "Bold")).collect();
     bold.extend(defs.families.get(&FontFamily::Proportional).cloned().unwrap_or_default());
     defs.families.insert(FontFamily::Name("bold".into()), bold);
     add_fallback_faces(&mut defs, extra);

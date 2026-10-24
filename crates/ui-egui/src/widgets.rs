@@ -1,5 +1,9 @@
 //! Ribbon widgets: large and small buttons, split buttons, groups, dropdowns, spinners, the colour
 //! picker and galleries.
+//!
+//! The widgets take English labels and tooltips and draw them in the interface language
+//! ([`crate::i18n`]), measuring the translated text; their accessible names are what is drawn.
+//! Callers keep passing English (and the English goes on to the Quick Access Toolbar and commands).
 
 use deckcraft_color::{ColorScheme, Rgba, SchemeSlot};
 use deckcraft_model::ColorRef;
@@ -32,9 +36,12 @@ pub fn big_button(ui: &mut Ui, icon: Icon, label: &str, enabled: bool) -> Respon
 }
 
 /// Large button; with `split`, the label row is a separate dropdown target (returns its response).
+/// `label` is English, with `\n` where it breaks; the translation is wrapped by [`wrap_label`].
 pub fn big_button_ex(ui: &mut Ui, icon: Icon, label: &str, enabled: bool, split: bool, selected: bool) -> (Response, Option<Response>) {
     let t = Tokens::get(ui.ctx());
     let font = theme::font(11.0);
+    let label = crate::i18n::label(label);
+    let label = label.as_ref();
     let lines: Vec<&str> = wrap_label(label);
     let text_w = lines.iter().map(|l| ui.fonts_mut(|f| f.layout_no_wrap(l.to_string(), font.clone(), t.text).size().x)).fold(0.0f32, f32::max);
     let w = (text_w + 10.0 + if split && lines.len() == 1 { 10.0 } else { 0.0 }).max(40.0);
@@ -77,18 +84,24 @@ pub fn big_button_ex(ui: &mut Ui, icon: Icon, label: &str, enabled: bool, split:
     (if split { main_resp } else { resp }, arrow_resp)
 }
 
+/// A big button's label in one or two lines: at its `\n`, else (when it is long) at the space
+/// nearest the middle, else, for CJK text, which has no spaces, between the characters nearest the
+/// middle that may break ([`cjk_break`]).
 fn wrap_label(label: &str) -> Vec<&str> {
     if let Some((a, b)) = label.split_once('\n') {
         return vec![a, b];
     }
+    if label_width(label) <= 8 {
+        return vec![label];
+    }
     let words: Vec<&str> = label.split(' ').collect();
-    if words.len() >= 2 && label.chars().count() > 8 {
+    if words.len() >= 2 {
         // Break near the middle.
         let mut best = 1;
         let mut best_diff = usize::MAX;
         for k in 1..words.len() {
-            let a: usize = words.iter().take(k).map(|w| w.chars().count() + 1).sum();
-            let b: usize = words.iter().skip(k).map(|w| w.chars().count() + 1).sum();
+            let a: usize = words.iter().take(k).map(|w| label_width(w) + 1).sum();
+            let b: usize = words.iter().skip(k).map(|w| label_width(w) + 1).sum();
             let d = a.abs_diff(b);
             if d < best_diff {
                 best_diff = d;
@@ -100,7 +113,53 @@ fn wrap_label(label: &str) -> Vec<&str> {
             return vec![a, b];
         }
     }
+    if let Some(at) = cjk_break(label)
+        && let (Some(a), Some(b)) = (label.get(..at), label.get(at..))
+    {
+        return vec![a, b];
+    }
     vec![label]
+}
+
+/// A label's width in Latin letters: a CJK character is about two.
+fn label_width(s: &str) -> usize {
+    s.chars().map(|c| if crate::i18n::is_cjk(c) { 2 } else { 1 }).sum()
+}
+
+/// Where to break a CJK label that has no space (a byte index), or `None` for text without CJK.
+/// The break nearest the middle, preferring a change of script (`新しい|スライド`), never before
+/// closing punctuation, small kana or the long-vowel mark, never after an opening bracket and
+/// never inside a Latin word or number.
+fn cjk_break(label: &str) -> Option<usize> {
+    if !label.chars().any(crate::i18n::is_cjk) {
+        return None;
+    }
+    // No line starts with these (kinsoku).
+    const NO_START: &str = "、。，．,.・：；:;？！?!）)」』】〕］]｝}〉》ー…‥ぁぃぅぇぉっゃゅょゎァィゥェォッャュョヮヵヶ々ゝゞヽヾ%％";
+    // No line ends with these.
+    const NO_END: &str = "（(「『【〔［[｛{〈《";
+    let script = |c: char| match c {
+        '\u{3040}'..='\u{309F}' => 1,
+        '\u{30A0}'..='\u{30FF}' | '\u{FF66}'..='\u{FF9F}' => 2,
+        c if crate::i18n::is_cjk(c) => 3,
+        _ => 0,
+    };
+    let total = label_width(label);
+    let mut best: Option<(usize, usize)> = None;
+    let mut before = 0;
+    let mut chars = label.char_indices().peekable();
+    while let Some((_, prev)) = chars.next() {
+        before += label_width(prev.encode_utf8(&mut [0; 4]));
+        let Some(&(at, next)) = chars.peek() else { break };
+        if NO_START.contains(next) || NO_END.contains(prev) || (prev.is_ascii_alphanumeric() && next.is_ascii_alphanumeric()) {
+            continue;
+        }
+        let score = before.abs_diff(total - before) * 2 + usize::from(script(prev) == script(next));
+        if best.is_none_or(|(s, _)| score < s) {
+            best = Some((score, at));
+        }
+    }
+    best.map(|(_, at)| at)
 }
 
 pub fn chevron(p: &egui::Painter, c: egui::Pos2, s: f32, col: Color32) {
@@ -115,6 +174,7 @@ pub fn small_button(ui: &mut Ui, icon: Icon, label: &str, enabled: bool, selecte
 
 pub fn small_button_ex(ui: &mut Ui, icon: Icon, label: &str, enabled: bool, selected: bool, split: bool) -> (Response, Option<Response>) {
     let t = Tokens::get(ui.ctx());
+    let label = tl!(label);
     let font = theme::font(12.0);
     let tw = if label.is_empty() { 0.0 } else { ui.fonts_mut(|f| f.layout_no_wrap(label.to_string(), font.clone(), t.text).size().x) + 5.0 };
     let arrow_w = if split { 12.0 } else { 0.0 };
@@ -156,6 +216,7 @@ pub fn small_button_ex(ui: &mut Ui, icon: Icon, label: &str, enabled: bool, sele
 /// [`small_button`] items around it.
 pub fn check_item(ui: &mut Ui, label: &str, enabled: bool, on: bool) -> Response {
     let t = Tokens::get(ui.ctx());
+    let label = tl!(label);
     let font = theme::font(12.0);
     let tw = ui.fonts_mut(|f| f.layout_no_wrap(label.to_string(), font.clone(), t.text).size().x) + 5.0;
     let (rect, resp) = ui.allocate_exact_size(vec2(24.0 + tw, 22.0), if enabled { Sense::click() } else { Sense::hover() });
@@ -171,9 +232,10 @@ pub fn check_item(ui: &mut Ui, label: &str, enabled: bool, on: bool) -> Response
     resp
 }
 
-/// A square icon toggle (B, I, U, alignment…).
+/// A square icon toggle (B, I, U, alignment…), named by its English `tip`.
 pub fn icon_toggle(ui: &mut Ui, icon: Icon, tip: &str, enabled: bool, on: bool) -> Response {
     let t = Tokens::get(ui.ctx());
+    let tip = tl!(tip);
     let (rect, resp) = ui.allocate_exact_size(vec2(24.0, 22.0), if enabled { Sense::click() } else { Sense::hover() });
     let painter = ui.painter_at(rect);
     if let Some(c) = bg(ui, &resp, on, &t) {
@@ -209,7 +271,7 @@ pub fn color_split(ui: &mut Ui, icon: Icon, tip: &str, color: Color32, enabled: 
         if enabled { color } else { t.text_faint },
     );
     chevron(&painter, pos2(rect.max.x - 5.5, rect.center().y), 2.6, t.text_dim);
-    (main.on_hover_text(tip), arrow)
+    (main.on_hover_text(tl!(tip)), arrow)
 }
 
 /// A ribbon group: contents, then a thin vertical separator.
@@ -292,7 +354,7 @@ pub fn color_grid(ui: &mut Ui, scheme: &ColorScheme, none_label: Option<&str>) -
     let t = Tokens::get(ui.ctx());
     let mut out = None;
     ui.set_min_width(220.0);
-    ui.label(egui::RichText::new("Theme Colors").font(theme::bold(12.0)));
+    ui.label(egui::RichText::new(tl!("Theme Colors")).font(theme::bold(12.0)));
     let slots = [
         SchemeSlot::Lt1,
         SchemeSlot::Dk1,
@@ -315,7 +377,7 @@ pub fn color_grid(ui: &mut Ui, scheme: &ColorScheme, none_label: Option<&str>) -
             Stroke::new(if resp.hovered() { 2.0 } else { 1.0 }, if resp.hovered() { t.accent } else { t.border }),
             egui::StrokeKind::Inside,
         );
-        resp.on_hover_text(tip).clicked()
+        resp.on_hover_text(tl!(tip)).clicked()
     };
     egui::Grid::new("theme_colors").spacing(vec2(3.0, 1.0)).show(ui, |ui| {
         for slot in slots {
@@ -354,7 +416,7 @@ pub fn color_grid(ui: &mut Ui, scheme: &ColorScheme, none_label: Option<&str>) -
         }
     });
     ui.add_space(4.0);
-    ui.label(egui::RichText::new("Standard Colors").font(theme::bold(12.0)));
+    ui.label(egui::RichText::new(tl!("Standard Colors")).font(theme::bold(12.0)));
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 3.0;
         for (c, name) in deckcraft_color::STANDARD_COLORS {
@@ -365,7 +427,7 @@ pub fn color_grid(ui: &mut Ui, scheme: &ColorScheme, none_label: Option<&str>) -
     });
     ui.separator();
     if let Some(n) = none_label
-        && ui.button(n).clicked()
+        && ui.button(tl!(n)).clicked()
     {
         out = Some(None);
     }
@@ -373,7 +435,7 @@ pub fn color_grid(ui: &mut Ui, scheme: &ColorScheme, none_label: Option<&str>) -
     let id = ui.id().with("hex");
     let mut hex: String = ui.data_mut(|d| d.get_temp::<String>(id).unwrap_or_default());
     ui.horizontal(|ui| {
-        ui.label("More Colors… #");
+        ui.label(tl!("More Colors… #"));
         let r = ui.add(egui::TextEdit::singleline(&mut hex).desired_width(70.0).hint_text("RRGGBB"));
         if r.lost_focus()
             && ui.input(|i| i.key_pressed(egui::Key::Enter))
@@ -383,7 +445,7 @@ pub fn color_grid(ui: &mut Ui, scheme: &ColorScheme, none_label: Option<&str>) -
         }
     });
     ui.data_mut(|d| d.insert_temp(id, hex));
-    if ui.button("Eyedropper").on_hover_text("Click the slide to take the colour under the pointer").clicked() {
+    if ui.button(tl!("Eyedropper")).on_hover_text(tl!("Click the slide to take the colour under the pointer")).clicked() {
         crate::eyedropper::request(ui.ctx());
         ui.close();
     }
@@ -393,7 +455,8 @@ pub fn color_grid(ui: &mut Ui, scheme: &ColorScheme, none_label: Option<&str>) -
     out
 }
 
-/// A row of gallery tiles drawn by `paint_tile`; returns the clicked index.
+/// A row of gallery tiles drawn by `paint_tile`, with English tooltips from `tip`; returns the
+/// clicked index.
 pub fn gallery(
     ui: &mut Ui,
     n: usize,
@@ -415,7 +478,7 @@ pub fn gallery(
         if sel {
             painter.rect_stroke(rect.expand(1.0), CornerRadius::same(4), Stroke::new(1.5, t.accent), egui::StrokeKind::Inside);
         }
-        if resp.on_hover_text(tip(i)).clicked() {
+        if resp.on_hover_text(tl!(&tip(i)).to_string()).clicked() {
             clicked = Some(i);
         }
     }
@@ -488,14 +551,14 @@ pub fn section(ui: &mut Ui, title: &str, open: bool) -> bool {
         p.line_segment([pos2(c.x - 2.0, c.y - 4.0), pos2(c.x + 2.0, c.y)], Stroke::new(1.2, t.text));
         p.line_segment([pos2(c.x + 2.0, c.y), pos2(c.x - 2.0, c.y + 4.0)], Stroke::new(1.2, t.text));
     }
-    p.text(pos2(rect.min.x + 18.0, rect.center().y), Align2::LEFT_CENTER, title, theme::bold(13.0), t.text);
+    p.text(pos2(rect.min.x + 18.0, rect.center().y), Align2::LEFT_CENTER, tl!(title), theme::bold(13.0), t.text);
     if resp.clicked() { !open } else { open }
 }
 
 /// A button with an optional label and a painted dropdown chevron (the UI font has no ▾).
 pub fn drop_button(ui: &mut Ui, label: &str, size: egui::Vec2, enabled: bool) -> egui::Response {
     let t = Tokens::get(ui.ctx());
-    let r = ui.add_enabled(enabled, egui::Button::new(if label.is_empty() { String::new() } else { format!("{label}   ") }).min_size(size));
+    let r = ui.add_enabled(enabled, egui::Button::new(if label.is_empty() { String::new() } else { format!("{}   ", tl!(label)) }).min_size(size));
     let col = if enabled { t.text_dim } else { t.text_faint };
     chevron(ui.painter(), egui::pos2(r.rect.max.x - 8.0, r.rect.center().y), 3.0, col);
     r
@@ -569,6 +632,40 @@ mod tests {
         assert!(harness.query_by_label("Eyedropper").is_none(), "the menu closes again");
         harness.run();
         assert_eq!(picked.borrow().iter().count(), 1, "the colour is handed back once");
+    }
+
+    /// English labels wrap as before: at their `\n`, else at the space nearest the middle once
+    /// longer than eight letters.
+    #[test]
+    fn english_labels_wrap_at_spaces() {
+        assert_eq!(wrap_label("New\nSlide"), ["New", "Slide"]);
+        assert_eq!(wrap_label("Paste"), ["Paste"]);
+        assert_eq!(wrap_label("Find All"), ["Find All"], "eight characters stay on one line");
+        assert_eq!(wrap_label("Selection Pane"), ["Selection", "Pane"]);
+        assert_eq!(wrap_label("Reuse Slides from File"), ["Reuse Slides", "from File"]);
+    }
+
+    /// CJK labels have no spaces: a long one breaks between characters near the middle, at a
+    /// change of script when there is one, never before closing punctuation, small kana or the
+    /// long-vowel mark, and never inside a Latin word.
+    #[test]
+    fn cjk_labels_wrap_between_characters() {
+        assert_eq!(wrap_label("貼り付け"), ["貼り付け"], "four characters fit on one line");
+        assert_eq!(wrap_label("新しいスライド"), ["新しい", "スライド"]);
+        assert_eq!(wrap_label("スライド ショー"), ["スライド", "ショー"], "a space still wins");
+        for label in ["スライドショーの設定", "アニメーションウィンドウ", "フォント（詳細）…", "PDFとして書き出し", "図形の書式設定"]
+        {
+            let lines = wrap_label(label);
+            assert_eq!(lines.len(), 2, "{label}");
+            assert_eq!(lines.concat(), label);
+            let second = lines[1].chars().next().unwrap();
+            assert!(!"ーッャュョ）…、。".contains(second), "{label}: a line starts with {second}");
+            assert!(!lines[0].ends_with('（'), "{label}");
+            assert!(!(lines[0].ends_with(|c: char| c.is_ascii_alphabetic()) && lines[1].starts_with(|c: char| c.is_ascii_alphabetic())), "{label}");
+        }
+        // Widths balance: neither line holds most of the label.
+        let lines = wrap_label("アニメーションウィンドウ");
+        assert!(label_width(lines[0]).abs_diff(label_width(lines[1])) <= 4, "{lines:?}");
     }
 
     /// #413: a draft is kept while the stored text is unchanged ...

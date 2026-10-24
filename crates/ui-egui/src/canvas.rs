@@ -153,7 +153,7 @@ pub fn show(app: &mut SlideApp, ui: &mut Ui) {
     });
     if st.doc.slides.is_empty() && st.selection.target == Target::Slides {
         let resp = ui.allocate_rect(avail, Sense::click());
-        ui.painter().text(avail.center(), Align2::CENTER_CENTER, "Click to add first slide", theme::font(22.0), t.text_dim);
+        ui.painter().text(avail.center(), Align2::CENTER_CENTER, tl!("Click to add first slide"), theme::font(22.0), t.text_dim);
         if resp.clicked() {
             let _ = app.run("slide.new", json!({"layout": "title"}));
         }
@@ -581,7 +581,15 @@ fn master_tex(
         doc,
         master,
         layout,
-        &deckcraft_render::RenderOpts { scale, edit: true, editing_text, offset: region.offset(), size: Some(region.size()), ..Default::default() },
+        &deckcraft_render::RenderOpts {
+            scale,
+            edit: true,
+            editing_text,
+            offset: region.offset(),
+            size: Some(region.size()),
+            prompt: Some(crate::i18n::placeholder_prompt),
+            ..Default::default()
+        },
     );
     Some((crate::textures::upload_editor(ctx, "master-canvas", crate::textures::to_color_image(&img, false)), region))
 }

@@ -6,6 +6,14 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+/// `tl!("Slide Sorter")`: interface text in the current language ([`i18n::t`]). The English stays
+/// the key; see [`i18n`] for runtime values (`fmt`), command labels (`tid`) and messages.
+macro_rules! tl {
+    ($s:expr) => {
+        $crate::i18n::t($s)
+    };
+}
+
 pub mod animtimeline;
 pub mod backstage;
 pub mod canvas;
@@ -15,6 +23,7 @@ pub mod dialogs;
 pub mod doc_window;
 pub mod eyedropper;
 pub mod fillui;
+pub mod i18n;
 pub mod icons;
 pub mod ime;
 pub mod media;
@@ -275,6 +284,10 @@ pub struct UiState {
     pub comment_focus: Option<(usize, usize)>,
     /// Quick Access Toolbar buttons, left to right.
     pub qat: Vec<qat::QatItem>,
+    /// Interface language: [`i18n::AUTO`] (follow the system) or a language code (`ja`). A code
+    /// without an embedded catalog (a newer version's, or an English-only build) follows the
+    /// system too, and is kept for when the catalog is there.
+    pub language: String,
 }
 
 impl Default for UiState {
@@ -306,6 +319,7 @@ impl Default for UiState {
             grayscale: false,
             comment_focus: None,
             qat: qat::defaults(),
+            language: i18n::AUTO.into(),
         }
     }
 }
@@ -344,6 +358,9 @@ impl UiState {
         }
         if !short(&self.format_tab) {
             self.format_tab = d.format_tab;
+        }
+        if !short(&self.language) || self.language.is_empty() {
+            self.language = d.language;
         }
         self.pane = self.pane.filter(short);
         self.recent.retain(|p| !p.is_empty() && p.len() <= 4096 && !p.contains('\0'));
@@ -396,6 +413,12 @@ pub const UI_COMMANDS: &[(&str, &str, Option<&str>, &str)] = &[
     ("app.about", "About DeckCraft", None, "{}"),
     ("app.palette", "Command Palette", Some("Cmd+Shift+P"), "{}"),
     ("app.preferences", "Preferences…", Some("Cmd+,"), "{}"),
+    (
+        "app.language",
+        "Interface Language",
+        None,
+        "{value?: auto|<code>}: the language menus and dialogs are shown in (auto follows the system) → {language, effective, available}",
+    ),
     ("app.openDialog", "Open…", None, "{purpose?}"),
     ("app.insertPictureDialog", "Picture from File…", None, "{}"),
     ("app.smartArtPictureDialog", "Insert Picture in SmartArt…", None, "{id?, index}"),
@@ -502,6 +525,8 @@ pub struct SlideApp {
     /// What the input method may read of the slide's text, the range it asked to replace, and the
     /// IME position last reported ([`ime`]).
     pub ime: ime::ImeState,
+    /// The interface language whose catalog text the interface fonts were last checked against.
+    noted_language: Option<&'static str>,
     /// Thumbnail pane drag (slide index, current drop index).
     pub(crate) thumb_drag: Option<(usize, usize)>,
     /// Selection pane: folded groups, renaming, drag and drop.
@@ -585,6 +610,7 @@ impl SlideApp {
             notes_buf: (0, usize::MAX, notes::Draft::default()),
             ui_fonts: uifonts::UiFonts::default(),
             ime: ime::ImeState::default(),
+            noted_language: None,
             thumb_drag: None,
             selpane: selpane::State::default(),
             align_to: None,
@@ -1019,6 +1045,7 @@ impl SlideApp {
             "app.about" => self.dialog = Some(dialogs::Dialog::new("about")),
             "app.palette" => self.palette = Some((String::new(), 0)),
             "app.preferences" => self.dialog = Some(dialogs::Dialog::new("preferences")),
+            "app.language" => return self.language_command(p),
             "app.openDialog" => self.pick_and_open(),
             "app.insertPictureDialog" => self.pick_and_insert("picture", "insert.picture"),
             "app.smartArtPictureDialog" => {
@@ -1074,6 +1101,36 @@ impl SlideApp {
             _ => return Err(format!("unknown UI command `{id}`")),
         }
         Ok(Value::Null)
+    }
+
+    /// `app.language {value?}`: set the interface language ([`i18n::AUTO`] or an offered code, any
+    /// case) and report the setting, the language it resolves to and the languages on offer. An
+    /// unknown code is an error and keeps the setting. The new language shows from the next frame.
+    fn language_command(&mut self, p: &Value) -> Result<Value, String> {
+        if let Some(v) = p.get("value").filter(|v| !v.is_null()) {
+            let v = v.as_str().ok_or("`value` must be a string: auto or a language code")?;
+            let pref = i18n::normalize_pref(v).ok_or_else(|| {
+                let codes: Vec<&str> = i18n::Lang::all().map(i18n::Lang::code).collect();
+                format!("no interface language `{v}`: auto or one of {}", codes.join(", "))
+            })?;
+            self.ui.language = pref.to_string();
+        }
+        let available: Vec<Value> = i18n::Lang::for_picker().into_iter().map(|l| json!({"code": l.code(), "name": l.name()})).collect();
+        Ok(json!({"language": self.ui.language, "effective": i18n::Lang::from_pref(&self.ui.language).code(), "available": available}))
+    }
+
+    /// Borrow faces for the interface language's own text, once per language: its catalogs and the
+    /// languages' names (the Preferences list). A build without the embedded CJK interface face
+    /// borrows an installed one for a Japanese interface; `note_ui_text` installs them.
+    fn note_language_text(&mut self, ctx: &egui::Context) {
+        let lang = i18n::current();
+        if self.noted_language == Some(lang.code()) {
+            return;
+        }
+        self.noted_language = Some(lang.code());
+        let names: Vec<&str> = i18n::Lang::all().map(i18n::Lang::name).collect();
+        self.ui_fonts.note(ctx, &names.join(" "));
+        self.ui_fonts.note(ctx, &lang.catalog_text());
     }
 
     /// Whether ⌘A should act on the slide list: always in the sorter, in Normal view once the
@@ -1575,6 +1632,8 @@ impl SlideApp {
 
     /// Per-frame logic before layout: styles, control requests, screenshots, shortcuts.
     pub fn logic(&mut self, ctx: &egui::Context) {
+        // The interface language for this frame's drawing (the setting may have just changed).
+        i18n::set_current(i18n::Lang::from_pref(&self.ui.language));
         let scale = self.ui.ui_scale.clamp(0.5, 3.0);
         if (ctx.zoom_factor() - scale).abs() > 1e-3 {
             ctx.set_zoom_factor(scale);
@@ -1605,6 +1664,7 @@ impl SlideApp {
             ctx.request_repaint();
         }
         if self.fonts_ready {
+            self.note_language_text(ctx);
             self.note_ui_text(ctx);
         }
         self.collect_screenshots(ctx);

@@ -546,6 +546,22 @@ fn placeholder_prompts_only_in_edit_view() {
     assert_eq!(ink(&show), 0);
 }
 
+/// The interface gives the editor's placeholder prompts in its language (`RenderOpts::prompt`);
+/// without it they are English.
+#[test]
+fn placeholder_prompts_come_from_the_interface_when_given() {
+    let p = Presentation::default();
+    let draw = |prompt: Option<fn(PhType) -> &'static str>| render_slide(&p, 0, &RenderOpts { scale: 0.5, edit: true, prompt, ..Default::default() });
+    let english = draw(None);
+    assert_eq!(draw(Some(PhType::prompt)).pixels, english.pixels, "the English prompts are the default");
+    let blank = draw(Some(|_| ""));
+    let other = draw(Some(|k| if k.is_title() { "Titel hinzufügen" } else { "Text" }));
+    let ink = |i: &Image| i.pixels.as_chunks::<4>().0.iter().filter(|px| px[0] < 200).count();
+    assert!(ink(&blank) < ink(&english), "no prompt text, only the outlines: {} vs {}", ink(&blank), ink(&english));
+    assert_ne!(other.pixels, english.pixels);
+    assert!(ink(&other) > ink(&blank));
+}
+
 #[test]
 fn png_encodes() {
     let p = Presentation::default();
