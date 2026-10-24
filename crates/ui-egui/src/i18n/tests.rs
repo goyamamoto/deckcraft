@@ -95,6 +95,31 @@ fn messages_take_their_row_or_a_matching_template() {
     assert_eq!(message("Saved"), "Saved");
 }
 
+/// Several templates can read the same message; the one with the most literal text gives the
+/// wording, whatever order the catalog lists them in (the missing-fonts toast has one per number
+/// of names).
+#[test]
+fn the_most_specific_template_gives_a_message_its_wording() {
+    set_current(fixture_lang(
+        "x-fixture",
+        "@msg\t{a} and {b} aren't installed.\t2: {a} + {b}\n@msg\t{a}, {b} and {c} aren't installed.\t3: {a} + {b} + {c}\n@msg\t{a} isn't installed.\t1: {a}\n",
+    ));
+    assert_eq!(message("Sora and Inter aren't installed."), "2: Sora + Inter");
+    assert_eq!(message("Sora, Inter and Lato aren't installed."), "3: Sora + Inter + Lato", "not the two-name template");
+    assert_eq!(message("Sora isn't installed."), "1: Sora");
+    set_current(Lang::EN);
+    let fonts: Vec<String> = ["Sora", "Inter", "Lato", "Aptos"].iter().map(|s| s.to_string()).collect();
+    set_current(fixture_lang(
+        "x-fixture",
+        "@msg\t{a} and {b} aren't installed on this computer. Text that uses them is shown in a similar font.\t2-FX\n@msg\t{a}, {b} and {c} aren't installed on this computer. Text that uses them is shown in a similar font.\t3-FX\n@msg\t{a}, {b}, {c} and {n} more aren't installed on this computer. Text that uses them is shown in a similar font.\t{a}/{b}/{c}+{n}-FX\n",
+    ));
+    for (n, want) in [(2, "2-FX"), (3, "3-FX"), (4, "Sora/Inter/Lato+1-FX")] {
+        let text = crate::toast::missing_fonts_message(&fonts[..n]).unwrap();
+        assert_eq!(message(&text), want, "{text}");
+    }
+    set_current(Lang::EN);
+}
+
 #[test]
 fn templates_match_only_whole_messages() {
     let m = |t: &str, s: &str| match_template(t, s).map(|a| a.into_iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join(","));
