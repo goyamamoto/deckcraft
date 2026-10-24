@@ -1839,3 +1839,30 @@ fn an_empty_paragraph_keeps_its_paragraph_mark_height() {
     let h = l.lines[1].bottom - l.lines[1].top;
     assert!((h - h10).abs() < 0.5, "a 10pt empty paragraph should give {h10}, got {h}");
 }
+
+/// A run whose East Asian font (`a:ea`) is a missing Japanese font draws its kanji in an installed
+/// face of the same kind (a Mincho for a 明朝), and one named in Japanese that is installed
+/// (ヒラギノ明朝 ProN) as itself. Skipped where no Japanese Mincho is installed.
+#[test]
+fn a_missing_japanese_east_asian_font_takes_a_stand_in_of_its_kind() {
+    let db = FontDb::global();
+    let missing = "ＤＣ 存在しない明朝";
+    let Some(stand_in) = db.available_face(missing, "Regular").filter(|f| f.covers('漢')) else {
+        eprintln!("skipped: no Japanese Mincho installed");
+        return;
+    };
+    let kanji_face = |ea: &str| {
+        let (p, mut sh) = setup("漢字", 600.0, 300.0);
+        for r in &mut sh.text.as_mut().unwrap().paragraphs[0].runs {
+            r.props.font_ea = Some(ea.into());
+            r.props.lang = Some("ja-JP".into());
+        }
+        let l = lay(&p, &sh, 600.0, 300.0);
+        l.runs.iter().find(|r| r.cells.iter().any(|(_, c)| *c == '漢')).map(|r| r.face.family.clone()).unwrap_or_default()
+    };
+    assert!(!db.has_family(missing));
+    assert_eq!(kanji_face(missing), stand_in.family);
+    if db.has_family("Hiragino Mincho ProN") {
+        assert_eq!(kanji_face("ヒラギノ明朝 ProN"), "Hiragino Mincho ProN");
+    }
+}

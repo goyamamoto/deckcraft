@@ -16,3 +16,8 @@ unicode-bidi = { workspace = true }
 log = { workspace = true }
 # Last-resort face only (Ubuntu Light); no UI code.
 epaint_default_fonts = "0.36"
+
+# Mac `name` records in Japanese, Chinese and Korean encodings (installed Mac fonts such as Osaka
+# carry their Japanese names only there). Native only: the web build has no installed fonts.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+encoding_rs = "0.8"
