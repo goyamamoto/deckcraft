@@ -1296,7 +1296,8 @@ pub fn effects_menu(app: &mut SlideApp, ui: &mut Ui) {
     });
     ui.menu_button(tl!("Bevel"), |ui| {
         for (b, label) in BEVELS {
-            if ui.button(tl!(label)).clicked() {
+            // Worded as a bevel where the plain word means something else (Angle).
+            if ui.button(crate::i18n::tc("bevel", label)).clicked() {
                 run(app, "shape.effects", json!({"bevel": b}));
             }
         }
