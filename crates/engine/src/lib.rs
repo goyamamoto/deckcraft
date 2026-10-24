@@ -201,6 +201,9 @@ pub struct Composition {
     pub active: Option<(usize, usize)>,
     /// The formatting the composed text is typed with (as `text.insert` would choose).
     pub props: Option<deckcraft_model::text::RunProps>,
+    /// The East Asian language its preedits have shown (kana: Japanese, Hangul: Korean, Bopomofo:
+    /// Traditional Chinese), which the Han text they are converted to is tagged with.
+    pub shown: Option<CjkLocale>,
     /// The presentation and selection before the composition began.
     pub before: Arc<Presentation>,
     pub before_selection: Selection,

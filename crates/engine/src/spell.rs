@@ -672,7 +672,7 @@ pub fn is_correct(d: &Dictionary, word: &str) -> bool {
 }
 
 /// A word of a paragraph: its characters `start..end` (paragraph character offsets, as text
-/// positions count them) and the language of the run it starts in.
+/// positions count them) and the Latin language of the run it starts in ([`latin_lang_of`]).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Word {
     pub start: usize,
@@ -684,27 +684,30 @@ pub struct Word {
     pub repeated: Option<usize>,
 }
 
-/// The language a run suggests for text that names none, when spelling picks a deck's default:
-/// its `lang`, or for a run in an East Asian language (whose own text is never checked) the
-/// language it was typed alongside (`altLang`, `en-US` for Japanese typed in an English deck).
+/// The language a run's Latin words are checked in, which spelling also takes as a deck's default
+/// for text that names none: its `lang`, or for a run in an East Asian language (whose own text
+/// is never checked) the language it was typed alongside (`altLang`, `en-US` for Japanese typed in
+/// an English deck).
 pub fn latin_lang_of(props: &deckcraft_model::RunProps) -> Option<String> {
     let latin = |l: &Option<String>| l.clone().filter(|l| !l.trim().is_empty() && deckcraft_fonts::CjkLocale::from_lang(l).is_none());
     latin(&props.lang).or_else(|| latin(&props.alt_lang))
 }
 
-/// The words of `p`, each with its run's language (`lang` on the run, else `default`). Words
-/// with digits are skipped; apostrophes inside a word belong to it; hyphenated words are checked
-/// part by part. East Asian text — kana, kanji, Hangul, their punctuation and the full-width
-/// forms ([`is_east_asian`]) — is never a word to check, and it ends a Latin word as a space
-/// does: Office's proofing checks only `abc` in `テストabc`, only `thsi` in `を使うthsi文章`, and
-/// never the full-width `ａｂｃ` of `ａｂｃdef` (observed in Word for Mac by WordCraft; PowerPoint
-/// shares Office's proofing).
+/// The words of `p`, each with its run's Latin language ([`latin_lang_of`]: its `lang`, for a
+/// run in an East Asian language its `altLang`, else `default`). Words with digits are skipped;
+/// apostrophes inside a word belong to it; hyphenated words are checked part by part. East Asian
+/// text — kana, kanji, Hangul, their punctuation and the full-width forms ([`is_east_asian`]) —
+/// is never a word to check, and it ends a Latin word as a space does: Office's proofing checks
+/// only `abc` in `テストabc`, only `thsi` in `を使うthsi文章`, and never the full-width `ａｂｃ` of
+/// `ａｂｃdef` (observed in Word for Mac by WordCraft; PowerPoint shares Office's proofing). Latin
+/// typed with the Japanese input method stays in its `ja-JP` run and is checked in the run's
+/// Latin language, as Office does.
 pub fn paragraph_words(p: &deckcraft_model::Paragraph, default: &str) -> Vec<Word> {
     let mut chars: Vec<(char, usize)> = vec![];
     for (ri, r) in p.runs.iter().enumerate() {
         chars.extend(r.content().chars().map(|c| (c, ri)));
     }
-    let lang_of = |ri: usize| p.runs.get(ri).and_then(|r| r.props.lang.clone()).filter(|l| !l.is_empty()).unwrap_or_else(|| default.to_string());
+    let lang_of = |ri: usize| p.runs.get(ri).and_then(|r| latin_lang_of(&r.props)).unwrap_or_else(|| default.to_string());
     let inside = |c: char| (c.is_alphanumeric() && !is_east_asian(c)) || c == '\'' || c == '’' || c == '-';
     let mut out = vec![];
     let mut i = 0;
@@ -913,6 +916,28 @@ SFX D Y 1\nSFX D 0 ed/S .\n";
         assert!(d.check("ａｂｃ"));
         assert!(d.check("テストthsi"));
         assert!(!d.check("thsi"));
+    }
+
+    /// Latin typed with the Japanese input method stays in the Japanese run (`lang="ja-JP"
+    /// altLang="en-US"`): its words are checked in the run's Latin language, its `altLang`, else
+    /// the deck's (the default).
+    #[test]
+    fn latin_words_in_an_east_asian_run_are_checked_in_its_latin_language() {
+        use deckcraft_model::{Paragraph, Run, RunProps};
+        install("x-ea-alt", d());
+        let ja = |alt: Option<&str>| RunProps { lang: Some("ja-JP".into()), alt_lang: alt.map(String::from), ..Default::default() };
+        let p = Paragraph {
+            runs: vec![
+                Run::with("slide ", RunProps { lang: Some("x-ea-alt".into()), ..Default::default() }),
+                Run::with("日本語 thsi slidez slides", ja(Some("x-ea-alt"))),
+            ],
+            ..Default::default()
+        };
+        let bad: Vec<(String, String)> = misspelt(&p, "x-none", &[]).into_iter().map(|w| (w.text, w.lang)).collect();
+        assert_eq!(bad, vec![("thsi".into(), "x-ea-alt".into()), ("slidez".into(), "x-ea-alt".into())]);
+        let p = Paragraph { runs: vec![Run::with("を使うthsi文章", ja(None))], ..Default::default() };
+        let w: Vec<(String, String)> = paragraph_words(&p, "x-ea-alt").into_iter().map(|w| (w.text, w.lang)).collect();
+        assert_eq!(w, vec![("thsi".into(), "x-ea-alt".into())]);
     }
 
     #[test]
