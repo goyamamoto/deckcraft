@@ -831,8 +831,9 @@ fn case(s: &mut Session, p: &Value) -> Result<Value> {
         let body = super::text::body_of(st, &t).cloned().unwrap_or_default();
         let collapsed = a == b;
         if collapsed {
-            // Shift+F3 with a bare caret changes the word it is in and puts the caret at its start.
-            let (wa, wb) = ed::word_at(&body, a);
+            // Shift+F3 with a bare caret changes the word it is in (the word double-click selects:
+            // East Asian words in Japanese text) and puts the caret at its start.
+            let (wa, wb) = ed::word_at_in(&body, a, super::text::inherited_lang(s).as_deref());
             let is_word = ed::text_range(&body, wa, wb).chars().any(char::is_alphanumeric);
             if !(is_word && wa.1 <= a.1 && a.1 < wb.1) {
                 return ok();
