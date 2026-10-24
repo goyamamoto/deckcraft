@@ -279,9 +279,9 @@ const SANS_KR: Segments = Segments {
 };
 const SERIF_KR: Segments = Segments { mac: &["AppleMyungjo"], windows: &["Batang", "Gungsuh"], linux: &["NanumMyeongjo", "UnBatang"], bundled: &[] };
 /// The interface's own faces, for text the interface fonts can't draw: Yu Gothic UI and Meiryo UI
-/// as Japanese Windows shows its menus, Hiragino as macOS does.
+/// as Japanese Windows shows its menus, Hiragino Sans as macOS does.
 const UI_JA: Segments = Segments {
-    mac: &["Hiragino Kaku Gothic ProN", "Hiragino Sans"],
+    mac: &["Hiragino Sans", "Hiragino Kaku Gothic ProN"],
     windows: &["Yu Gothic UI", "Meiryo UI", "Meiryo", "Yu Gothic", "MS UI Gothic"],
     linux: &["IPAexGothic", "IPAPGothic", "VL PGothic", "TakaoPGothic"],
     bundled: &["BIZ UDPGothic"],
@@ -469,6 +469,25 @@ pub(crate) fn interface_families(locale: CjkLocale) -> &'static [&'static str] {
             .collect()
     });
     chains.iter().find(|(l, _)| *l == locale).map(|(_, v)| v.as_slice()).unwrap_or(&[])
+}
+
+/// The platform's own interface families for East Asian text of tradition `locale`, best first:
+/// Hiragino on macOS and Yu Gothic UI on Windows for Japanese. None elsewhere: on Linux and the web
+/// the bundled face draws the interface.
+pub(crate) fn platform_interface_families(locale: CjkLocale) -> &'static [&'static str] {
+    let s = match locale {
+        CjkLocale::Japanese => &UI_JA,
+        CjkLocale::SimplifiedChinese => &UI_SC,
+        CjkLocale::TraditionalChinese => &UI_TC,
+        CjkLocale::Korean => &UI_KR,
+    };
+    if cfg!(target_os = "macos") {
+        s.mac
+    } else if cfg!(windows) {
+        s.windows
+    } else {
+        &[]
+    }
 }
 
 /// The tradition a family is a font for, by its name: one of the stand-in or fallback families
@@ -673,13 +692,23 @@ mod tests {
         assert_eq!(
             ui.first(),
             Some(&if cfg!(target_os = "macos") {
-                "Hiragino Kaku Gothic ProN"
+                "Hiragino Sans"
             } else if cfg!(windows) {
                 "Yu Gothic UI"
             } else {
                 "IPAexGothic"
             })
         );
+        // The interface's own face: the platform's, never the bundled one or another platform's.
+        let own = platform_interface_families(CjkLocale::Japanese);
+        assert!(!own.contains(&"BIZ UDPGothic"));
+        if cfg!(target_os = "macos") {
+            assert_eq!(own, ["Hiragino Sans", "Hiragino Kaku Gothic ProN"]);
+        } else if cfg!(windows) {
+            assert_eq!(own.first(), Some(&"Yu Gothic UI"));
+        } else {
+            assert!(own.is_empty(), "Linux and the web draw the interface in the bundled face");
+        }
         assert!(is_serif_name("Hiragino Mincho ProN") && is_serif_name("游明朝") && is_serif_name("PMingLiU") && is_serif_name("Noto Serif"));
         assert!(!is_serif_name("BIZ UDPGothic") && !is_serif_name("Microsoft Sans Serif") && !is_serif_name("Coming Soon"));
     }

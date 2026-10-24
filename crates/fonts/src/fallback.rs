@@ -347,6 +347,18 @@ impl FontDb {
         self.fallback_in(c, u32::MAX, locale.or(cjk), &accept, false)
     }
 
+    /// The platform's own interface face for East Asian text of tradition `locale`, as its own
+    /// apps draw their menus (Hiragino Sans on macOS, Yu Gothic UI on Windows, for Japanese): the
+    /// regular weight, or with `bold` a weight of 600 or more. `None` when none is installed, and
+    /// on Linux and the web, where the bundled face serves.
+    pub fn platform_interface_face(&self, locale: CjkLocale, bold: bool) -> Option<Arc<FontFace>> {
+        let style = if bold { "SemiBold" } else { "Regular" };
+        crate::substitute::platform_interface_families(locale)
+            .iter()
+            .filter_map(|fam| self.try_family(fam, style))
+            .find(|f| !f.italic && f.weight >= 350.0 && (f.weight >= 600.0) == bold)
+    }
+
     /// The face for one grapheme cluster: the first of `chain` that draws all of it, else the
     /// bundled face for its script, else an installed face for the script, else any loaded
     /// face that draws it, else `chain[0]` (or the default face if `chain` is empty). Kana and
@@ -405,6 +417,26 @@ pub fn ligature_carets(face: &FontFace, gid: u32) -> Vec<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_platform_interface_face_is_the_systems_own() {
+        let db = FontDb::global();
+        let regular = db.platform_interface_face(CjkLocale::Japanese, false);
+        let bold = db.platform_interface_face(CjkLocale::Japanese, true);
+        if cfg!(target_os = "macos") && db.has_family("Hiragino Sans") {
+            // W4 for regular text and W6 for bold, as Inter Regular and SemiBold.
+            let (r, b) = (regular.clone().unwrap(), bold.clone().unwrap());
+            assert_eq!((r.family.as_str(), r.weight), ("Hiragino Sans", 400.0), "{}", r.style);
+            assert_eq!((b.family.as_str(), b.weight), ("Hiragino Sans", 600.0), "{}", b.style);
+            assert!(r.covers('あ') && r.covers('漢'));
+            assert!(crate::maps_char(r.data(), r.index(), 'あ') && !crate::maps_char(r.data(), r.index(), '\u{E000}'));
+        }
+        if !cfg!(any(target_os = "macos", windows)) {
+            assert!(regular.is_none() && bold.is_none(), "the bundled face draws the interface");
+        }
+        // Never the bundled face, whatever is installed.
+        assert!(![regular, bold].iter().flatten().any(|f| CRAFT_FONTS.iter().any(|c| c.family == f.family)));
+    }
 
     #[test]
     fn requested_face_wins_when_it_covers() {

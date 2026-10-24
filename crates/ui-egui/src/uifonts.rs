@@ -45,7 +45,7 @@ fn wanted(c: char) -> bool {
 /// the system's East Asian language, Japanese when that is unknown (so Japanese file names and
 /// notes never come out in Chinese letterforms); Chinese or Korean only for a Chinese or Korean
 /// system. Kana is always drawn with a Japanese face and Hangul with a Korean one.
-fn interface_cjk(system: Option<deckcraft_fonts::CjkLocale>) -> deckcraft_fonts::CjkLocale {
+pub(crate) fn interface_cjk(system: Option<deckcraft_fonts::CjkLocale>) -> deckcraft_fonts::CjkLocale {
     system.unwrap_or(deckcraft_fonts::CjkLocale::Japanese)
 }
 
@@ -79,19 +79,17 @@ impl UiFonts {
         if !text.chars().any(|c| wanted(c) && !self.seen.contains(&c)) {
             return;
         }
-        let font = egui::FontId::proportional(13.0);
         // Chinese, Japanese and Korean characters: the platform's interface face of the
         // tradition first (Hiragino on macOS, Yu Gothic UI or Meiryo UI on Windows for Japanese).
         let cjk = interface_cjk(deckcraft_fonts::default_cjk_locale());
-        let new = ctx.fonts_mut(|f| {
-            faces_for_text(
-                text,
-                &self.faces,
-                &mut self.seen,
-                |c| f.has_glyph(&font, c),
-                |c| FontDb::global().interface_fallback(c, Some(cjk), |face| accepts_face(face.data().len(), face.is_color())),
-            )
-        });
+        let defs = ctx.fonts(|f| f.definitions().clone());
+        let new = faces_for_text(
+            text,
+            &self.faces,
+            &mut self.seen,
+            |c| crate::theme::draws(&defs, &egui::FontFamily::Proportional, c),
+            |c| FontDb::global().interface_fallback(c, Some(cjk), |face| accepts_face(face.data().len(), face.is_color())),
+        );
         if !new.is_empty() {
             log::debug!("interface fallback fonts: {}", new.iter().map(|f| f.family.as_str()).collect::<Vec<_>>().join(", "));
             self.faces.extend(new);
