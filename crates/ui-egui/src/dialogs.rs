@@ -2077,11 +2077,13 @@ fn body(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             ok || cancel
         }
         "language" => {
-            // Starts from the selected text's language and Do Not Check Spelling.
+            // Starts from the selected text's language and Do Not Check Spelling. With nothing
+            // selected it sets the language of new text (the status bar shows it then).
             let (cur, np) = selected_language(app);
             let lang = d.get("lang", &cur);
             let mut no_proof = d.get("noProof", if np { "1" } else { "" }) == "1";
-            ui.label(tl!("Mark selected text as:"));
+            let nothing = app.session.active().is_some_and(|st| st.selection.text.is_none() && st.selection.shapes.is_empty());
+            ui.label(if nothing { tl!("Default language for new text:") } else { tl!("Mark selected text as:") });
             egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
                 // The selection's own language first when the list doesn't have it.
                 let own = (!crate::squiggles::LANGS.iter().any(|(_, t)| t.eq_ignore_ascii_case(&cur))).then(|| (cur.clone(), cur.clone()));
@@ -2097,13 +2099,14 @@ fn body(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             });
             ui.add_space(4.0);
             ui.label(egui::RichText::new(tl!("Spelling is checked for languages marked (dictionary).")).small().weak());
-            if ui.checkbox(&mut no_proof, tl!("Do not check spelling or grammar")).changed() {
+            if !nothing && ui.checkbox(&mut no_proof, tl!("Do not check spelling or grammar")).changed() {
                 d.fields.insert("noProof".into(), if no_proof { "1".into() } else { String::new() });
             }
             let (ok, cancel) = buttons(ui, "OK");
             if ok {
                 let lang = d.get("lang", &cur);
-                run(app, "format.language", json!({"lang": lang, "noProof": no_proof}));
+                let params = if nothing { json!({"lang": lang}) } else { json!({"lang": lang, "noProof": no_proof}) };
+                run(app, "format.language", params);
             }
             ok || cancel
         }
