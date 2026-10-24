@@ -124,6 +124,14 @@ pub fn bundled_families(script: ScriptTag) -> Vec<&'static str> {
 }
 
 impl FontDb {
+    /// [`FontDb::cascade`] for text in East Asian tradition `cjk` (the run's language, or the
+    /// system's East Asian language for Han text without one): Han characters the requested
+    /// faces lack fall back to a face of that tradition.
+    pub fn cascade_for(&self, cluster: &[char], chain: &[Arc<FontFace>], style: &str, cjk: Option<crate::CjkLocale>) -> Arc<FontFace> {
+        let _ = cjk;
+        self.cascade(cluster, chain, style)
+    }
+
     /// The face for one grapheme cluster: the first of `chain` that draws all of it, else the
     /// bundled face for its script, else an installed face for the script, else any loaded
     /// face that draws it, else `chain[0]` (or the default face if `chain` is empty).

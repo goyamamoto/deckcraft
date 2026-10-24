@@ -365,6 +365,9 @@ struct Style {
     style_name: &'static str,
     /// BCP 47 language (`a:rPr/@lang`), for shaping.
     lang: Option<String>,
+    /// The East Asian tradition Han characters are drawn in: the run's `lang` or `altLang` when
+    /// it is Chinese, Japanese or Korean, else the system's East Asian language.
+    cjk: Option<deckcraft_fonts::CjkLocale>,
     /// The `a:ea` and `a:cs` families (theme references resolved), if the document names one.
     ea: Option<String>,
     cs: Option<String>,
@@ -490,6 +493,11 @@ fn make_style(ctx: &Ctx, r: &RunProps, scale: f64, prompt: Option<Rgba>) -> Styl
         effects: run_effects(ctx, r, scale),
         style_name: style_name(bold, italic),
         lang: r.lang.clone().filter(|l| !l.is_empty()),
+        cjk: [r.lang.as_deref(), r.alt_lang.as_deref()]
+            .into_iter()
+            .flatten()
+            .find_map(deckcraft_fonts::CjkLocale::from_lang)
+            .or_else(deckcraft_fonts::default_cjk_locale),
         ea,
         cs,
         sym: r.font_sym.as_deref().map(|f| ctx.master.theme.font(f)).filter(|f| !f.trim().is_empty()),
@@ -891,7 +899,7 @@ fn shape_cells(
             }
             (None, _) => {
                 let chain = chains.entry((si, slot, sc)).or_insert_with(|| face_chain(ctx, st, slot, sc));
-                db.cascade(cluster, chain, st.style_name)
+                db.cascade_for(cluster, chain, st.style_name, st.cjk)
             }
         };
         let fi = face_index(faces, &face);
