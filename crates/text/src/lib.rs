@@ -460,10 +460,14 @@ fn synthetic_style(bold: bool, italic: bool, face: &FontFace) -> (bool, bool) {
 /// `a:ea`).
 ///
 /// PowerPoint for Mac draws a run in the theme's `Jpan` font when its `lang` or its `altLang` is
-/// `ja-JP`, and Chinese and Korean runs are taken to follow their own tradition the same way. An
-/// `en-US` run's kanji don't take the theme font; they fall back to a Japanese face on a Japanese
-/// system. A run with no language at all takes the system's East Asian language, else the one
-/// its paragraph's kana or Hangul tell.
+/// `ja-JP`, and Chinese and Korean runs follow their own tradition the same way. For Chinese that
+/// is a deliberate difference: on a Japanese system PowerPoint draws a `zh-CN` run's Han in its
+/// Japanese fallback face (MS Gothic) and leaves the theme's `Hans` font unused, so the deck's
+/// Chinese looks different on each system; DeckCraft draws it in Chinese forms and the font the
+/// theme names for Chinese wherever it is opened (and × ° then take that font too). Korean runs
+/// were not measured. An `en-US` run's kanji don't take the theme font; they fall back to a
+/// Japanese face on a Japanese system. A run with no language at all takes the system's East
+/// Asian language, else the one its paragraph's kana or Hangul tell.
 fn run_traditions(
     lang: Option<&str>,
     alt_lang: Option<&str>,
@@ -1066,7 +1070,9 @@ fn caps_char(ch: char) -> char {
 /// Does `c` stand upright in East Asian vertical text? Ideographs, kana, Hangul, Bopomofo, CJK
 /// symbols and punctuation, full-width forms, enclosed and compatibility CJK, circled numbers
 /// and emoji (Unicode's Vertical_Orientation U and T, roughly); Latin, digits and the rest of the
-/// half-width text lie on their side as in `vert`.
+/// half-width text lie on their side as in `vert`. The Tr characters (「 」 （ ） 〜 ー) stand
+/// upright in their horizontal forms: PowerPoint for Mac neither turns them nor substitutes
+/// vertical alternates, so ー stays a horizontal bar across the column.
 pub fn is_upright(c: char) -> bool {
     matches!(c as u32,
         0x1100..=0x11FF
