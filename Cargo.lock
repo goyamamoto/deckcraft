@@ -962,6 +962,7 @@ dependencies = [
  "deckcraft-pptx",
  "deckcraft-render",
  "deckcraft-text",
+ "encoding_rs",
  "i_overlay",
  "image",
  "js-sys",
