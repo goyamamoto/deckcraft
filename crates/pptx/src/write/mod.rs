@@ -1111,6 +1111,10 @@ fn presentation_xml(x: &mut Exp, o: &mut Out, masters: &[(u64, String)], notes: 
         w.close("p:custShowLst");
     }
     cust_data(&mut w, x, o, &p.tags);
+    // Schema order: custDataLst, kinsoku, defaultTextStyle.
+    if let Some(k) = &p.kinsoku {
+        w.empty("p:kinsoku", A::new().o("lang", k.lang.as_deref().filter(|l| !l.is_empty())).a("invalStChars", &k.start).a("invalEndChars", &k.end));
+    }
     let dts = if p.default_text_style.is_empty() { defaults::default_text_style() } else { p.default_text_style.clone() };
     dml::list_style(&mut w, x, o, "p:defaultTextStyle", &dts);
     let sections = section_slides(p);

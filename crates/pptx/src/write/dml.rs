@@ -609,7 +609,9 @@ fn typeface(w: &mut W, tag: &str, f: &Option<String>) {
 /// `a:rPr`, `a:defRPr`, `a:endParaRPr`.
 pub fn rpr(w: &mut W, x: &mut Exp, o: &mut Out, tag: &str, r: &RunProps) {
     let a = A::new()
+        .b("kumimoji", r.kumimoji)
         .o("lang", r.lang.as_deref().filter(|l| !l.is_empty()))
+        .o("altLang", r.alt_lang.as_deref().filter(|l| !l.is_empty()))
         .o("sz", r.size.map(|s| (s.clamp(1.0, 4000.0) * 100.0).round() as i64))
         .b("b", r.bold)
         .b("i", r.italic)
@@ -705,6 +707,10 @@ pub fn list_style(w: &mut W, x: &mut Exp, o: &mut Out, tag: &str, ls: &ListStyle
         return;
     }
     w.open0(tag);
+    if let Some(d) = &ls.default {
+        let def = (d.run != RunProps::default()).then_some(&d.run);
+        ppr(w, x, o, "a:defPPr", None, &d.para, def);
+    }
     for (i, l) in ls.levels.iter().enumerate().take(9) {
         if let Some(l) = l {
             let t = format!("a:lvl{}pPr", i + 1);

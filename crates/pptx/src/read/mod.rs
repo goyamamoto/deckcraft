@@ -488,6 +488,15 @@ pub fn import_checked(bytes: &[u8]) -> Result<(Presentation, Vec<String>), PptxE
     if let Some(dts) = pres_el.child("defaultTextStyle") {
         p.default_text_style = dml::list_style(&mut imp, &pres_part, dts);
     }
+    if let Some(k) = pres_el.child("kinsoku") {
+        // Hostile files: a line-breaking list is a few dozen characters, never megabytes.
+        let list = |name: &str| k.attr(name).unwrap_or("").chars().take(4096).collect::<String>();
+        p.kinsoku = Some(deckcraft_model::Kinsoku {
+            lang: k.attr("lang").map(str::trim).filter(|l| !l.is_empty()).map(String::from),
+            start: list("invalStChars"),
+            end: list("invalEndChars"),
+        });
+    }
     if let Some(r) = pres_part.rels.first_of("tableStyles")
         && let Some(d) = load(&pkg, &r.target)
     {

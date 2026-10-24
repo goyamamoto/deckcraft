@@ -508,6 +508,7 @@ pub fn blank_presentation(size: Size, theme: Theme, title_slide: bool) -> Presen
         header_footer: HeaderFooter::default(),
         props: Default::default(),
         default_text_style: default_text_style(),
+        kinsoku: None,
         media: vec![],
         first_slide_number: 1,
         next_id: next.max(256),

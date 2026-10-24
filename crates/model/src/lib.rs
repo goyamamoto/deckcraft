@@ -990,6 +990,10 @@ pub struct Presentation {
     pub props: Properties,
     /// Presentation-wide default text style (shapes that aren't placeholders).
     pub default_text_style: text::ListStyle,
+    /// Custom line-breaking characters (`p:kinsoku`, File › Options › Language › Asian
+    /// typography): the deck's own lists in place of the standard Japanese ones.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kinsoku: Option<Kinsoku>,
     pub media: Vec<MediaItem>,
     pub first_slide_number: u32,
     /// Next free shape/slide/layout/media id.
@@ -1012,6 +1016,20 @@ pub struct Presentation {
     /// Unmodelled presentation-level XML kept for round-trip.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub raw_ext: Option<String>,
+}
+
+/// Custom kinsoku settings (`p:kinsoku`, ECMA-376 Part 1 §19.2.1.17): characters that may not
+/// start a line and characters that may not end one, for the East Asian language `lang`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Kinsoku {
+    /// BCP 47 language the lists are for (`ja-JP`); `None` when the file names none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lang: Option<String>,
+    /// `invalStChars`: no line starts with one of these.
+    pub start: String,
+    /// `invalEndChars`: no line ends with one of these.
+    pub end: String,
 }
 
 /// A drawing guide: a vertical line at `pos` points from the slide's left edge, or a horizontal

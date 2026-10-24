@@ -496,6 +496,8 @@ pub fn hyperlink(imp: &mut Imp, part: &Part, h: &El) -> Option<Hyperlink> {
 pub fn rpr(imp: &mut Imp, part: &Part, r: &El) -> RunProps {
     let mut p = RunProps {
         lang: r.attr("lang").map(String::from),
+        alt_lang: r.attr("altLang").map(str::trim).filter(|l| !l.is_empty()).map(String::from),
+        kumimoji: r.bool("kumimoji"),
         size: r.f64("sz").map(|s| (s / 100.0).clamp(1.0, 4000.0)),
         bold: r.bool("b"),
         italic: r.bool("i"),
@@ -547,6 +549,11 @@ pub fn list_style(imp: &mut Imp, part: &Part, ls: &El) -> ListStyle {
     let mut out = ListStyle::default();
     for e in ls.elements() {
         let n = e.local();
+        if n == "defPPr" {
+            let (_, para, run) = ppr(imp, part, e);
+            out.default = Some(LevelStyle { para, run: run.unwrap_or_default() });
+            continue;
+        }
         let Some(l) = n.strip_prefix("lvl").and_then(|r| r.strip_suffix("pPr")).and_then(|d| d.parse::<u8>().ok()) else { continue };
         if !(1..=9).contains(&l) {
             continue;
