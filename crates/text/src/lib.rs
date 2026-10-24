@@ -2331,7 +2331,12 @@ fn layout_scaled(ctx: &Ctx, shape: &Shape, body: &TextBody, bp: &BodyProps, opts
             let width = x;
             let align = props.align.unwrap_or(Align::Left);
             let last_line = li + 1 == raw.len();
-            let slack = (avail - width).max(0.0);
+            // A full stop or comma hanging past the margin (`hangingPunct`) is left out of the
+            // justified width: PowerPoint stretches the rest of the line to the margin and lets
+            // the mark hang after it ("日本語とEnglish textの…で" + "、": its space +2.92 pt).
+            let hanging = width > avail + 0.01 && n > 1 && line_cells.last().is_some_and(|c| is_hanging_punct(c.ch));
+            let body_n = if hanging { n - 1 } else { n };
+            let slack = (avail - adv.iter().take(body_n).sum::<f64>()).max(0.0);
             // Justification: kashida (justLow, Arabic), spaces, or every character.
             let stretch = !last_line && wrap && slack > 0.0;
             let mut kashida = vec![0.0; n];
@@ -2350,7 +2355,8 @@ fn layout_scaled(ctx: &Ctx, shape: &Shape, body: &TextBody, bp: &BodyProps, opts
                 }
             }
             if stretch && !filled && matches!(align, Align::Justify | Align::JustLow) {
-                filled = justify(&mut adv, line_cells, &p.styles, rl.start, slack);
+                let body = line_cells.get(..body_n).unwrap_or(line_cells);
+                filled = adv.get_mut(..body_n).is_some_and(|a| justify(a, body, &p.styles, rl.start, slack));
             }
             if align == Align::Distributed && n > 1 {
                 for a in adv.iter_mut().take(n - 1) {
