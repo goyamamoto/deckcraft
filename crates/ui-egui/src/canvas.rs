@@ -454,14 +454,31 @@ pub fn ime_area(app: &SlideApp, xf: Xf) -> Option<Rect> {
 /// Turn the input method on for the slide while it takes typing, with its candidate window at
 /// the insertion point (#101). Without this egui leaves it off, and a Korean keyboard types
 /// separate jamo (ㅇ ㅏ ㄴ) instead of syllables. A focused text field sets its own.
-fn ime_output(app: &SlideApp, ui: &Ui, xf: Xf) {
+///
+/// The position is reported every frame the slide's text has the keyboard — the last one when the
+/// caret can't be placed in a frame — since a frame without one turns the input method off, which
+/// commits whatever it still marks (the rest of a conversion whose first clause was just
+/// committed). The caret follows the input method's own caret inside the composition
+/// (`text.compose`), so the candidate window does too. What the input method may read of the text
+/// (再変換, live conversion) is gathered here for the desktop app to report ([`crate::ime`]).
+fn ime_output(app: &mut SlideApp, ui: &Ui, xf: Xf) {
     let ctx = ui.ctx();
     if ctx.memory(|m| m.focused().is_some()) || app.dialog.as_ref().is_some_and(|d| d.modal()) || app.palette.is_some() || app.backstage_open() {
         return;
     }
-    let Some(r) = ime_area(app, xf) else { return };
+    let editing = app.session.active().is_some_and(|d| d.selection.text.as_ref().is_some_and(|t| !t.notes));
     let to_global = ctx.layer_transform_to_global(ui.layer_id()).unwrap_or_default();
-    let r = to_global * r;
+    let r = match ime_area(app, xf) {
+        Some(r) => to_global * r,
+        None => match app.ime.rect.filter(|_| editing) {
+            Some(r) => r,
+            None => return,
+        },
+    };
+    app.ime.rect = Some(r);
+    if editing {
+        app.ime.surrounding = crate::ime::surrounding(&app.session);
+    }
     ctx.output_mut(|o| {
         o.ime = Some(egui::output::IMEOutput { purpose: egui::IMEPurpose::Normal, rect: r, cursor_rect: r, should_interrupt_composition: false });
     });

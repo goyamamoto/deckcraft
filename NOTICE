@@ -80,3 +80,7 @@ Code dependencies
   (https://github.com/saucecontrol/Compact-ICC-Profiles) are CC0-1.0; the profile
   licence is retained in licenses/pdf-writer/LICENSE-ICC.txt and exact files, sources
   and hashes are in ATTRIBUTION.md.
+
+- winit 0.30.13 (https://github.com/rust-windowing/winit) is vendored in vendor/winit under the
+  Apache License, Version 2.0 (vendor/winit/LICENSE), with a local patch to its macOS input-method
+  view, marked "DeckCraft patch" in the changed files and described in vendor/patches/winit/.

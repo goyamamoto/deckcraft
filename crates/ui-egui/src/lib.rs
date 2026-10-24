@@ -16,6 +16,7 @@ pub mod doc_window;
 pub mod eyedropper;
 pub mod fillui;
 pub mod icons;
+pub mod ime;
 pub mod media;
 pub mod menus;
 pub mod notes;
@@ -498,6 +499,9 @@ pub struct SlideApp {
     pub(crate) notes_buf: (u64, usize, notes::Draft),
     /// Faces borrowed from the font database for text the interface fonts can't draw (#101).
     pub ui_fonts: uifonts::UiFonts,
+    /// What the input method may read of the slide's text, the range it asked to replace, and the
+    /// IME position last reported ([`ime`]).
+    pub ime: ime::ImeState,
     /// Thumbnail pane drag (slide index, current drop index).
     pub(crate) thumb_drag: Option<(usize, usize)>,
     /// Selection pane: folded groups, renaming, drag and drop.
@@ -580,6 +584,7 @@ impl SlideApp {
             quit_confirmed: false,
             notes_buf: (0, usize::MAX, notes::Draft::default()),
             ui_fonts: uifonts::UiFonts::default(),
+            ime: ime::ImeState::default(),
             thumb_drag: None,
             selpane: selpane::State::default(),
             align_to: None,
@@ -1662,12 +1667,33 @@ impl SlideApp {
 
     /// An input method's event for the slide's text (#101): the preedit is shown in the text and
     /// replaced on each update; the commit replaces it as one undo step.
+    ///
+    /// Reconversion (再変換): the input method names the committed text its composition replaces
+    /// ([`ime::ImeState::replace`]); that text is selected and the composition takes its place.
+    /// Named while a composition shows (live conversion marks the words before its marked text
+    /// again), the range counts that composition, which goes first ([`ime::committed_range`]). A
+    /// dismissal naming a range is a commit's first half: the range, mapped, waits for the commit,
+    /// which then replaces that text.
     fn ime_event(&mut self, e: &egui::ImeEvent) {
         let r = match e {
             egui::ImeEvent::Preedit { text, active_range_chars } => {
+                if let Some(range) = self.ime.replace.take() {
+                    let range = ime::committed_range(&mut self.session, range);
+                    if text.is_empty() {
+                        self.ime.replace = Some(range);
+                    } else {
+                        ime::select_range(&mut self.session, range);
+                    }
+                }
                 self.session.compose_text(text, active_range_chars.as_ref().map(|r| (r.start, r.end)))
             }
-            egui::ImeEvent::Commit(text) => self.session.commit_text(text),
+            egui::ImeEvent::Commit(text) => {
+                if let Some(range) = self.ime.replace.take() {
+                    let range = ime::committed_range(&mut self.session, range);
+                    ime::select_range(&mut self.session, range);
+                }
+                self.session.commit_text(text)
+            }
             #[allow(deprecated)]
             egui::ImeEvent::Disabled => {
                 self.session.end_composition();
@@ -1828,6 +1854,8 @@ impl SlideApp {
 
     /// Lay out the whole window.
     pub fn ui(&mut self, ui: &mut egui::Ui) {
+        // Reported again by the canvas while the slide's text has the keyboard ([`ime`]).
+        self.ime.surrounding = None;
         let ctx = ui.ctx().clone();
         if !self.fonts_ready {
             ctx.request_repaint();
