@@ -23,6 +23,7 @@ pub mod dialogs;
 pub mod doc_window;
 pub mod eyedropper;
 pub mod fillui;
+pub mod fontpick;
 pub mod i18n;
 pub mod icons;
 pub mod ime;

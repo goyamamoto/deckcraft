@@ -24,9 +24,10 @@ pub fn status_bar(app: &mut SlideApp, ui: &mut Ui) {
             ),
             _ => tl!("Slide Master").to_string(),
         };
-        // The selection's proofing language; a click opens Review › Language.
+        // The language of the text at the caret (its own, else inherited from the placeholder,
+        // master and the deck's default: 日本語 in a Japanese deck); a click opens Review › Language.
         let (lang, no_proof) = crate::dialogs::selected_language(app);
-        let lang_name = crate::squiggles::lang_name(&lang);
+        let lang_name = language_name(&lang);
         let name =
             if no_proof { crate::i18n::fmt(tl!("{language} (not checked)"), &[("language", tl!(&lang_name))]) } else { tl!(&lang_name).to_string() };
         // Transient status message: kept in English (the control channel reads it), shown translated.
@@ -91,7 +92,11 @@ pub fn status_bar(app: &mut SlideApp, ui: &mut Ui) {
         let at = |x: f32| pos2(x, rect.center().y);
         let counter = p.text(at(rect.min.x + 14.0), Align2::LEFT_CENTER, &left, font.clone(), t.text_dim);
         let lr = p.text(at(counter.max.x + STATUS_GAP), Align2::LEFT_CENTER, &name, font.clone(), t.text_dim);
-        if ui.interact(lr.expand(3.0), ui.id().with("status_lang"), Sense::click()).on_hover_text(tl!("Language")).clicked() {
+        let lang_resp = ui.interact(lr.expand(3.0), ui.id().with("status_lang"), Sense::click());
+        // Named for screen readers (and tests) by what it says, not only "Language".
+        let access = crate::i18n::fmt(tl!("Language: {language}"), &[("language", &name)]);
+        lang_resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &access));
+        if lang_resp.on_hover_text(tl!("Language")).clicked() {
             app.dialog = Some(crate::dialogs::Dialog::new("language"));
         }
         if let Some(msg) = msg {
@@ -100,6 +105,18 @@ pub fn status_bar(app: &mut SlideApp, ui: &mut Ui) {
         }
         let _ = Stroke::NONE;
     });
+}
+
+/// The name the status bar gives a language tag: the proofing languages' name for it, else the
+/// name of the one with the same language when the tag gives none of the region (`ja` is 日本語),
+/// else the tag itself.
+pub fn language_name(tag: &str) -> String {
+    let named = crate::squiggles::lang_name(tag);
+    if named != tag || tag.contains(['-', '_']) {
+        return named;
+    }
+    let primary = |t: &str| t.split(['-', '_']).next().unwrap_or("").to_ascii_lowercase();
+    crate::squiggles::LANGS.iter().find(|(_, t)| primary(t) == tag.to_ascii_lowercase()).map_or(named, |(n, _)| n.to_string())
 }
 
 fn small_icon(ui: &mut Ui, icon: Icon, tip: &str, on: bool) -> egui::Response {
