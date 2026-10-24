@@ -240,7 +240,9 @@ pub fn resolve(chars: &[char]) -> Vec<(Option<ScriptTag>, FontSlot)> {
 /// run's language is Chinese, Japanese or Korean and whether the run has an East Asian font
 /// ([`slot_class`]). A character with a slot of its own keeps it; the others take the script and
 /// slot of the preceding character with one (at the start, of the following one; Latin when there
-/// is none), except that Latin-class characters next to East Asian text are Latin text.
+/// is none), except that Latin-class characters next to East Asian text are Latin text. Symbols
+/// with no script that take the East Asian slot (★ ① ™, CJK punctuation) don't tell which text
+/// the characters after them follow: the digits of "مرحبا ★ 2024" stay Arabic text.
 pub fn resolve_in(chars: &[char], run_of: impl Fn(usize) -> (bool, bool)) -> Vec<(Option<ScriptTag>, FontSlot)> {
     let own: Vec<(Option<ScriptTag>, SlotClass)> = chars
         .iter()
@@ -250,21 +252,24 @@ pub fn resolve_in(chars: &[char], run_of: impl Fn(usize) -> (bool, bool)) -> Vec
             (script_of(*c), slot_class(*c, cjk, ea))
         })
         .collect();
+    let tells = |s: Option<ScriptTag>, sl: FontSlot| s.is_some() || sl != FontSlot::EastAsian;
     let first = own
         .iter()
         .find_map(|(s, cl)| match cl {
-            SlotClass::Own(sl) => Some((*s, *sl)),
+            SlotClass::Own(sl) if tells(*s, *sl) => Some((*s, *sl)),
             _ => None,
         })
         .unwrap_or((None, FontSlot::Latin));
-    // The last character with a slot of its own, and the last one resolved.
+    // The last character whose slot tells the text's, and the last one resolved.
     let (mut strong, mut prev) = (first, first);
     own.into_iter()
         .map(|(s, cl)| {
             match cl {
                 SlotClass::Own(sl) => {
-                    strong = (s, sl);
-                    prev = strong;
+                    prev = (s, sl);
+                    if tells(s, sl) {
+                        strong = prev;
+                    }
                 }
                 SlotClass::Latin if strong.1 == FontSlot::EastAsian => prev = (Some(LATIN), FontSlot::Latin),
                 SlotClass::Latin => prev = strong,
@@ -433,6 +438,15 @@ mod tests {
         assert_eq!(slots_str("“س”", false, false), "CCC");
         // An East Asian language makes the quotes East Asian, whatever they enclose.
         assert_eq!(slots_str("“س”", true, false), "ECE");
+        // A symbol always drawn in the East Asian font (★ ①, × with an East Asian font) doesn't
+        // take the Arabic or Hebrew text's spaces and digits after it out of the complex-script
+        // font.
+        assert_eq!(slots_str("مرحبا ★ 2024 عالم", false, false), "CCCCCCECCCCCCCCCC");
+        assert_eq!(slots_str("שלום ① 2024 עולם", false, false), "CCCCCECCCCCCCCCC");
+        assert_eq!(slots_str("سنة 10×20", false, true), "CCCCCCECC");
+        // Next to Japanese, the digits after one are still Latin text.
+        assert_eq!(slots_str("日本★ 2024", true, true), "EEELLLLL");
+        assert_eq!(slots_str("★ 2024 日本", true, true), "ELLLLLLEE");
     }
 
     #[test]
