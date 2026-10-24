@@ -193,6 +193,40 @@ fn bold_of_a_weight_named_family_is_its_partner() {
     }
 }
 
+/// A weight-named face that is already bold (W6 and heavier, as Windows draws them: the caller
+/// makes only lighter faces bolder) is its own bold, and a light one's bold is its partner,
+/// whichever of the family's other weights earlier lookups happened to load: a title's weight
+/// never changes with what the other slides contain.
+#[test]
+fn bold_of_a_weight_named_family_does_not_depend_on_earlier_lookups() {
+    let weights = || [("W3", 300, false), ("W6", 600, true), ("W7", 700, true), ("W9", 900, true)].map(|(w, n, b)| (w, kaku(w, n, b)));
+    let db = bare_db();
+    for (_, f) in weights() {
+        assert_eq!(db.add_font(f), 1);
+    }
+    for (name, bold) in [("DeckCraft Kaku W3", "W6"), ("DeckCraft Kaku W6", "W6"), ("DeckCraft Kaku W7", "W7"), ("デッキ角ゴ W9", "W9")] {
+        assert_eq!(db.face(name, "Bold").style, bold, "{name}");
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let dir = crate::test_fonts::temp_dir("bold-order");
+        for (w, data) in weights() {
+            std::fs::write(dir.join(format!("kaku-{w}.ttf")), data).unwrap();
+        }
+        let fresh = || FontDb::without_bundled(vec![dir.clone()]);
+        // The W6's bold before and after something loads the whole family.
+        let db = fresh();
+        assert_eq!(db.face("DeckCraft Kaku W6", "Bold").style, "W6");
+        assert_eq!(db.face("DeckCraft Kaku", "Regular").style, "W3");
+        assert_eq!(db.face("DeckCraft Kaku W6", "Bold").style, "W6");
+        // The W3's bold when only a heavier weight than its partner was loaded before.
+        let db = fresh();
+        assert_eq!(db.face("DeckCraft Kaku W7", "Regular").style, "W7");
+        assert_eq!(db.face("DeckCraft Kaku W3", "Bold").style, "W6");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
 /// The families the stand-in and fallback chains name, built in memory: a gothic, a Mincho and
 /// a fixed-pitch gothic every platform's chain lists, and a Simplified Chinese and a Korean
 /// face. Each draws kana, kanji, hanzi and Hangul alike, so only the choice tells them apart.

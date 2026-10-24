@@ -1206,6 +1206,10 @@ pub(crate) fn plain_style(style: &str) -> &'static str {
     }
 }
 
+/// The weight from which a face is drawn as bold without being made bolder (the text layout
+/// emboldens lighter faces for bold text): a weight-named family's W6 to W9 are their own bold.
+const ALREADY_BOLD: f32 = 550.0;
+
 /// The bold face a weight-named family's `base` face pairs with, as macOS pairs them: in the
 /// same typographic family, marked bold in OS/2 but not the Bold of another Windows family (Yu
 /// Gothic Bold is Yu Gothic's, not Yu Gothic Light's), the lightest at least 250 heavier
@@ -1609,9 +1613,14 @@ impl FontDb {
         self.ensure_loaded(family);
         let found = self.find(family, style)?;
         // Bold of a weight-named Windows family (Hiragino Kaku Gothic ProN W3): the bold face it
-        // pairs with (W6) is in the rest of the typographic family, which loads now.
+        // pairs with (W6) is in the rest of the typographic family, which loads now. Decided by
+        // the plain face's weight, not by what `find` settled for among the faces loaded so far.
         #[cfg(not(target_arch = "wasm32"))]
-        if style_weight(style) >= 600.0 && found.weight < 550.0 && found.keys.family != fold_font_name(family) && self.ensure_loaded(&found.family) {
+        if style_weight(style) >= 600.0
+            && found.keys.family != fold_font_name(family)
+            && self.find(family, if style_italic(style) { "Italic" } else { "Regular" }).is_some_and(|plain| plain.weight < ALREADY_BOLD)
+            && self.ensure_loaded(&found.family)
+        {
             return self.find(family, style).or(Some(found));
         }
         Some(found)
@@ -1753,12 +1762,15 @@ impl FontDb {
             }
             // Bold of a family that is itself a weight (Semibold, Light, W3): the bold face the
             // font pairs with it (Hiragino's W6 for W3, as macOS draws it), else the face itself,
-            // made bolder by the caller, as Windows does, rather than a face of another weight.
+            // made bolder by the caller, as Windows does, rather than a face of another weight. A
+            // face that is already bold (W6 and heavier) is its own bold, whatever heavier
+            // weights are loaded.
             let plain = |italic: bool| {
                 cands.iter().find(|f| f.legacy.as_ref().is_some_and(|(_, ls)| norm(ls) == (if italic { "italic" } else { "regular" })))
             };
             if let Some(f) = plain(style_italic(style)).or_else(|| plain(false)) {
                 if style_weight(style) >= 600.0
+                    && f.weight < ALREADY_BOLD
                     && let Some(partner) = bold_partner(&faces, f)
                 {
                     return Some(partner);
