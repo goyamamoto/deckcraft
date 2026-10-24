@@ -89,7 +89,7 @@ fn section_header(app: &mut SlideApp, ui: &mut Ui, h: &Header<'_>) -> Rect {
     painter.rect_filled(r, CornerRadius::same(4), bg);
     let chev = Rect::from_center_size(pos2(r.min.x + 20.0, r.center().y), vec2(24.0, 24.0));
     let cresp = ui.interact(chev, ui.id().with(("sorter-fold", h.uid, h.index)), Sense::click());
-    let fold = format!("{} {}", if open { "Collapse" } else { "Expand" }, h.name);
+    let fold = crate::i18n::fmt(tl!(if open { "Collapse {name}" } else { "Expand {name}" }), &[("name", h.name)]);
     cresp.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, &fold));
     icons::paint(&painter, chev.shrink(4.0), if open { Icon::ChevronDown } else { Icon::ChevronRight }, t.text_dim, h.first.is_none());
     let renaming = app.sorter.renaming.clone().filter(|(uid, index, _)| *uid == h.uid && *index == h.index).map(|(_, _, text)| text);
@@ -144,31 +144,31 @@ fn section_header(app: &mut SlideApp, ui: &mut Ui, h: &Header<'_>) -> Rect {
     let index = h.index;
     let name = h.name.to_string();
     resp.context_menu(|ui| {
-        if ui.button("Rename Section…").clicked() {
+        if ui.button(tl!("Rename Section…")).clicked() {
             let mut d = crate::dialogs::Dialog::new("renameSection");
             d.params = json!({"index": index, "name": name});
             app.dialog = Some(d);
             ui.close();
         }
-        if ui.button("Add Section").clicked() {
+        if ui.button(tl!("Add Section")).clicked() {
             if let Some(at) = app.session.active().map(|st| st.selection.slide) {
                 let _ = app.run("section.add", json!({"at": at}));
             }
             ui.close();
         }
-        if ui.button("Remove Section").clicked() {
+        if ui.button(tl!("Remove Section")).clicked() {
             let _ = app.run("section.remove", json!({"index": index}));
             ui.close();
         }
-        if ui.button("Remove Section & Slides").clicked() {
+        if ui.button(tl!("Remove Section & Slides")).clicked() {
             let _ = app.run("section.remove", json!({"index": index, "slides": true}));
             ui.close();
         }
-        if ui.button("Move Section Up").clicked() {
+        if ui.button(tl!("Move Section Up")).clicked() {
             let _ = app.run("section.move", json!({"index": index, "to": index.saturating_sub(1)}));
             ui.close();
         }
-        if ui.button("Move Section Down").clicked() {
+        if ui.button(tl!("Move Section Down")).clicked() {
             let _ = app.run("section.move", json!({"index": index, "to": index + 1}));
             ui.close();
         }
@@ -198,7 +198,7 @@ fn place_slides(app: &mut SlideApp, ui: &mut Ui, g: &Grid<'_>, budget: &mut u32,
             for c in 0..cols {
                 let Some(&i) = g.indices.get(row * cols + c) else { break };
                 let (cell, resp) = ui.allocate_exact_size(vec2(g.tw + 36.0, g.th + 36.0), Sense::click_and_drag());
-                let label = format!("Slide {}", i + 1);
+                let label = crate::i18n::fmt(tl!("Slide {n}"), &[("n", &(i + 1).to_string())]);
                 resp.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, &label));
                 let img = crate::textures::device_pixel_rect(Rect::from_min_size(cell.min + vec2(18.0, 8.0), vec2(g.tw, g.th)), ppp);
                 rects.push((i, cell));
@@ -226,7 +226,12 @@ fn place_slides(app: &mut SlideApp, ui: &mut Ui, g: &Grid<'_>, budget: &mut u32,
                 );
                 p.text(pos2(img.min.x, img.max.y + 12.0), Align2::LEFT_CENTER, format!("{}", i + 1), theme::font(12.0), t.text_dim);
                 if let Some(tr) = g.doc.slides.get(i).and_then(|s| s.transition.as_ref()).filter(|tr| tr.kind != "none") {
-                    p.text(pos2(img.max.x, img.max.y + 12.0), Align2::RIGHT_CENTER, format!("★ {}", tr.kind), theme::font(10.5), t.text_faint);
+                    // The transition's name as the Transitions gallery shows it; an unknown kind as stored.
+                    let name = deckcraft_model::anim::TRANSITIONS
+                        .iter()
+                        .find(|x| x.0 == tr.kind)
+                        .map_or(tr.kind.as_str(), |x| crate::i18n::tc("transition", x.1));
+                    p.text(pos2(img.max.x, img.max.y + 12.0), Align2::RIGHT_CENTER, format!("★ {name}"), theme::font(10.5), t.text_faint);
                 }
                 if resp.clicked() {
                     let add = ui.input(|inp| inp.modifiers.command);
@@ -276,7 +281,7 @@ pub fn show(app: &mut SlideApp, ui: &mut Ui) {
         ui.add_space(12.0);
         ui.horizontal(|ui| {
             ui.add_space(24.0);
-            if ui.add(egui::Button::new("Add Section").stroke(Stroke::new(1.0, t.border))).clicked() {
+            if ui.add(egui::Button::new(tl!("Add Section")).stroke(Stroke::new(1.0, t.border))).clicked() {
                 let _ = app.run("section.add", json!({"at": cur}));
             }
         });
