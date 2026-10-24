@@ -5,7 +5,8 @@
 /// A font chosen by a CREATEFONTINDIRECT record (MS-WMF 2.2.1.2 Font, MS-EMF 2.2.13 LogFont).
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Font {
-    /// The face name the file asks for (`"Arial"`, `"Wingdings"`); may be empty.
+    /// The face name the file asks for (`"Arial"`, `"Wingdings"`, `"ＭＳ ゴシック"`), without the
+    /// `@` of a vertical font ([`Font::vertical`]); may be empty.
     pub family: String,
     /// LOGFONT height in text units: negative is the character (em) height, positive the cell
     /// height (ascent plus descent), 0 the default size.
@@ -17,8 +18,24 @@ pub struct Font {
     pub italic: bool,
     pub underline: bool,
     pub strike: bool,
-    /// LOGFONT character set (0 ANSI, 2 SYMBOL, 238 EASTEUROPE…).
+    /// LOGFONT character set (0 ANSI, 2 SYMBOL, 128 SHIFTJIS, 238 EASTEUROPE…).
     pub charset: u8,
+    /// The vertical version of an East Asian font, which GDI selects by an `@` before the face
+    /// name (`@ＭＳ ゴシック`): full-width and CJK characters are turned a quarter turn
+    /// counter-clockwise against the baseline, so along a baseline running down the page
+    /// (escapement 2700) they stand upright while Latin text lies on its side. EMF+ strings in a
+    /// vertical string format are drawn the same way.
+    pub vertical: bool,
+}
+
+/// A LOGFONT face name as GDI looks it up: trimmed, and without the `@` that asks for the font's
+/// vertical version (whether it was there is the second value).
+pub(crate) fn face_name(name: &str) -> (String, bool) {
+    let name = name.trim();
+    match name.strip_prefix('@') {
+        Some(rest) => (rest.trim().to_string(), true),
+        None => (name.to_string(), false),
+    }
 }
 
 /// SYMBOL_CHARSET: byte codes are the font's own symbol codes.
@@ -96,24 +113,112 @@ pub(crate) fn align(ta: u32) -> (HAlign, VAlign) {
     (h, v)
 }
 
-/// Decodes 8-bit text in `charset` to one character per byte, and merges `dx` to match: a
-/// double-byte character set's lead and trail bytes become one blank (its glyphs are not
-/// decoded) whose advance is the sum of both. `dx` may be empty.
+/// Decodes 8-bit text in the code page of `charset`, as GDI plays back EXTTEXTOUTA, TEXTOUT and
+/// small-character strings, and merges `dx` to match: one entry per character, a double-byte
+/// character taking the advances of both its bytes. `dx` may be empty.
+///
+/// The East Asian character sets are double-byte code pages ([`DoubleByte::of`]): 128 SHIFTJIS
+/// is CP932, 129 HANGUL CP949, 134 GB2312 CP936 (GBK) and 136 CHINESEBIG5 CP950. A lead byte
+/// whose next byte does not complete a character, or that ends the string, is one U+FFFD.
 pub(crate) fn decode_bytes(bytes: &[u8], charset: u8, dx: &[f32]) -> (String, Vec<f32>) {
     let mut s = String::with_capacity(bytes.len());
     let mut out_dx = Vec::with_capacity(dx.len().min(bytes.len()));
-    let dbcs = matches!(charset, 128 | 129 | 130 | 134 | 136);
-    let mut i = 0;
-    while let Some(&b) = bytes.get(i) {
-        let n = if dbcs && b >= 0x81 && i + 1 < bytes.len() { 2 } else { 1 };
-        let c = if n == 2 { ' ' } else { byte_char(b, charset) };
+    let mut push = |c: char, from: usize, n: usize| {
         s.push(c);
         if !dx.is_empty() {
-            out_dx.push((i..i + n).filter_map(|k| dx.get(k)).sum());
+            out_dx.push((from..from + n).filter_map(|k| dx.get(k)).sum());
         }
-        i += n;
+    };
+    let double = DoubleByte::of(charset);
+    let mut i = 0;
+    while let Some(&b) = bytes.get(i) {
+        let Some(db) = double.as_ref().filter(|_| b >= 0x80) else {
+            push(byte_char(b, charset), i, 1);
+            i += 1;
+            continue;
+        };
+        if !(db.lead)(b) {
+            // A single byte above ASCII: half-width katakana in CP932, the euro sign in GBK.
+            push(db.enc.map_or(char::REPLACEMENT_CHARACTER, |e| one_char(e, &[b])), i, 1);
+            i += 1;
+            continue;
+        }
+        let pair = match (db.enc, bytes.get(i + 1)) {
+            (Some(e), Some(&t)) => only_char(e, &[b, t]),
+            // JOHAB has no decoder: a blank as wide as the character.
+            (None, Some(_)) => Some(' '),
+            (_, None) => None,
+        };
+        match pair {
+            Some(c) => {
+                push(c, i, 2);
+                i += 2;
+            }
+            None => {
+                push(char::REPLACEMENT_CHARACTER, i, 1);
+                i += 1;
+            }
+        }
     }
     (s, out_dx)
+}
+
+/// An East Asian double-byte code page: its decoder and which bytes lead a two-byte character.
+struct DoubleByte {
+    /// None for JOHAB (130), which has none.
+    enc: Option<&'static encoding_rs::Encoding>,
+    lead: fn(u8) -> bool,
+}
+
+impl DoubleByte {
+    /// The double-byte code page of a LOGFONT character set: CP932 for 128 (lead bytes 0x81–0x9F
+    /// and 0xE0–0xFC, so 0xA1–0xDF stay single-byte half-width katakana), CP949 for 129, CP936
+    /// for 134 and CP950 for 136 (lead bytes 0x81–0xFE), JOHAB for 130. None for the single-byte
+    /// character sets.
+    fn of(charset: u8) -> Option<DoubleByte> {
+        let (enc, lead): (_, fn(u8) -> bool) = match charset {
+            128 => (Some(encoding_rs::SHIFT_JIS), |b| matches!(b, 0x81..=0x9F | 0xE0..=0xFC)),
+            129 => (Some(encoding_rs::EUC_KR), |b| matches!(b, 0x81..=0xFE)),
+            134 => (Some(encoding_rs::GBK), |b| matches!(b, 0x81..=0xFE)),
+            136 => (Some(encoding_rs::BIG5), |b| matches!(b, 0x81..=0xFE)),
+            130 => (None, |b| matches!(b, 0x84..=0xD3 | 0xD8..=0xDE | 0xE0..=0xF9)),
+            _ => return None,
+        };
+        Some(DoubleByte { enc, lead })
+    }
+}
+
+/// The single character `bytes` decode to in `enc`; None when they decode to none or to more
+/// (a lead byte whose trail byte is not one).
+fn only_char(enc: &'static encoding_rs::Encoding, bytes: &[u8]) -> Option<char> {
+    let d = enc.decode_without_bom_handling(bytes).0;
+    let mut chars = d.chars();
+    match (chars.next(), chars.next()) {
+        (Some(c), None) => Some(c),
+        _ => None,
+    }
+}
+
+/// [`only_char`], U+FFFD when there isn't one.
+fn one_char(enc: &'static encoding_rs::Encoding, bytes: &[u8]) -> char {
+    only_char(enc, bytes).unwrap_or(char::REPLACEMENT_CHARACTER)
+}
+
+/// The single-byte code page of a LOGFONT character set this module keeps no table for: 161
+/// GREEK (1253), 162 TURKISH (1254), 163 VIETNAMESE (1258), 177 HEBREW (1255), 178 ARABIC (1256),
+/// 186 BALTIC (1257), 222 THAI (874) and 77 MAC (Mac OS Roman).
+fn single_byte_encoding(charset: u8) -> Option<&'static encoding_rs::Encoding> {
+    Some(match charset {
+        161 => encoding_rs::WINDOWS_1253,
+        162 => encoding_rs::WINDOWS_1254,
+        163 => encoding_rs::WINDOWS_1258,
+        177 => encoding_rs::WINDOWS_1255,
+        178 => encoding_rs::WINDOWS_1256,
+        186 => encoding_rs::WINDOWS_1257,
+        222 => encoding_rs::WINDOWS_874,
+        77 => encoding_rs::MACINTOSH,
+        _ => return None,
+    })
 }
 
 /// UTF-16 text to a string with one dx entry per character: a surrogate pair takes the sum of
@@ -134,11 +239,15 @@ pub(crate) fn decode_utf16(units: &[u16], dx: &[f32]) -> (String, Vec<f32>) {
     (s, out_dx)
 }
 
-/// One byte in a single-byte Windows code page. Symbol fonts keep their codes in the private-use
+/// One byte in a single-byte Windows code page (Windows-1252 for ANSI, DEFAULT and any other
+/// character set without a page of its own). Symbol fonts keep their codes in the private-use
 /// range (U+F000 + code), where symbol fonts map them.
 fn byte_char(b: u8, charset: u8) -> char {
     if b < 0x80 && charset != SYMBOL_CHARSET {
         return char::from(b);
+    }
+    if let Some(enc) = single_byte_encoding(charset) {
+        return one_char(enc, &[b]);
     }
     let cp = match charset {
         SYMBOL_CHARSET => 0xF000 | u32::from(b),

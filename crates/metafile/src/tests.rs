@@ -1177,11 +1177,75 @@ fn character_sets_decode_bytes() {
     assert_eq!(one(204, &[0xC0, 0xFF, 0xA8]), "АяЁ");
     assert_eq!(one(2, b"n\xA7"), "\u{F06E}\u{F0A7}", "symbol fonts keep their codes in the private-use area");
     assert_eq!(one(0, &[0x81]), "\u{FFFD}", "an undefined byte");
-    // A double-byte character set: a lead and trail byte become one blank with both advances.
+    assert_eq!(one(161, &[0xC1, 0xE2]), "Αβ", "GREEK_CHARSET is Windows-1253");
+    assert_eq!(one(162, &[0xD0, 0xFD]), "Ğı", "TURKISH_CHARSET is Windows-1254");
+    assert_eq!(one(177, &[0xF9]), "ש", "HEBREW_CHARSET is Windows-1255");
+    assert_eq!(one(222, &[0xA1]), "ก", "THAI_CHARSET is Windows-874");
+    // SHIFTJIS_CHARSET is CP932: a lead and trail byte are one character with both advances.
     let p =
         wmf200(&[wfont(-10, 400, [0, 0, 0], 128, 0, b"F"), wrec(0x012D, &h16(0)), wtext(0, 0, &[0x41, 0x82, 0xA0, 0x42], 0, None, &[1, 2, 3, 4])]);
     let t = texts(&p)[0];
-    assert_eq!((t.text.as_str(), t.dx.as_slice()), ("A B", [1.0, 5.0, 4.0].as_slice()));
+    assert_eq!((t.text.as_str(), t.dx.as_slice()), ("AあB", [1.0, 5.0, 4.0].as_slice()));
+}
+
+/// GDI decodes 8-bit strings in the code page of the font's character set: Japanese, Korean and
+/// both Chinese pictures keep their labels, each double-byte character with the advances of its
+/// two bytes.
+#[test]
+fn east_asian_character_sets_decode_double_byte_text() {
+    let one = |charset: u8, s: &[u8], dx: &[i32]| {
+        let p = wmf200(&[wfont(-10, 400, [0, 0, 0], charset, 0, b"F"), wrec(0x012D, &h16(0)), wtext(0, 0, s, 0, None, dx)]);
+        let t = texts(&p)[0];
+        (t.text.clone(), t.dx.clone())
+    };
+    // CP932: 日本語 (93FA 967B 8CEA), then ｱｲｳ, half-width katakana that are single bytes in
+    // 0xA1–0xDF (no longer read as lead bytes swallowing the next one).
+    let (text, dx) = one(128, &[0x93, 0xFA, 0x96, 0x7B, 0x8C, 0xEA, 0xB1, 0xB2, 0xB3], &[9, 1, 9, 1, 9, 1, 5, 5, 5]);
+    assert_eq!(text, "日本語ｱｲｳ");
+    assert_eq!(dx, [10.0, 10.0, 10.0, 5.0, 5.0, 5.0]);
+    // 0xE0–0xFC lead too (漾 E040), a trail byte can be ASCII (ソ 835C), a lone 0x5C is a backslash.
+    assert_eq!(one(128, &[0xE0, 0x40, 0x83, 0x5C, 0x5C], &[]).0, "漾ソ\\");
+    // A lead byte at the end, or followed by a byte that cannot trail, is one U+FFFD and the
+    // next byte starts afresh.
+    assert_eq!(one(128, &[0x41, 0x82], &[3, 4]), ("A\u{FFFD}".to_string(), vec![3.0, 4.0]));
+    assert_eq!(one(128, &[0x82, 0x0A, 0x42], &[]).0, "\u{FFFD}\nB");
+    // CP949 (한국 C7D1 B1B9), CP936 (中文 D6D0 CEC4), CP950 (中文 A4A4 A4E5).
+    assert_eq!(one(129, &[0xC7, 0xD1, 0xB1, 0xB9], &[]).0, "한국");
+    assert_eq!(one(134, &[0xD6, 0xD0, 0xCE, 0xC4], &[]).0, "中文");
+    assert_eq!(one(136, &[0xA4, 0xA4, 0xA4, 0xE5], &[]).0, "中文");
+    // EMR_EXTTEXTOUTA decodes through the selected font's character set the same way.
+    let recs = [efont(-10, 0, 400, 0, 128, "F"), erec(37, &h32(1)), etext(false, 0, 0, &[0x82, 0xA0, 0x82, 0xA2], 0, &[6, 0, 6, 0])];
+    let p = parse(&emf(&recs, [0, 0, 200, 100], [0, 0, 5000, 2500])).unwrap();
+    let t = texts(&p)[0];
+    assert_eq!((t.text.as_str(), t.dx.as_slice()), ("あい", [6.0, 6.0].as_slice()));
+}
+
+/// A WMF made on Japanese Windows names its fonts in the font's code page, and an `@` before the
+/// name selects the font's vertical version: the name is decoded, the `@` taken off and kept as
+/// the font's vertical flag.
+#[test]
+fn face_names_decode_in_the_font_code_page_and_at_marks_vertical_fonts() {
+    // ＭＳ ゴシック in CP932.
+    let gothic = [0x82, 0x6C, 0x82, 0x72, 0x20, 0x83, 0x53, 0x83, 0x56, 0x83, 0x62, 0x83, 0x4E];
+    let font_of = |charset: u8, face: &[u8]| {
+        let p = wmf200(&[wfont(-10, 400, [0, 0, 0], charset, 2700, face), wrec(0x012D, &h16(0)), wtext(0, 0, b"x", 0, None, &[])]);
+        texts(&p)[0].font.clone()
+    };
+    let f = font_of(128, &gothic);
+    assert_eq!((f.family.as_str(), f.vertical), ("ＭＳ ゴシック", false));
+    let at: Vec<u8> = [b'@'].iter().chain(&gothic).copied().collect();
+    let f = font_of(128, &at);
+    assert_eq!((f.family.as_str(), f.vertical, f.charset), ("ＭＳ ゴシック", true, 128));
+    // A symbol font's name is plain text, not symbol codes.
+    assert_eq!(font_of(2, b"Wingdings").family, "Wingdings");
+    // EMF names are UTF-16.
+    let recs = [efont(-10, 2700, 400, 0, 128, "@メイリオ"), erec(37, &h32(1)), etext(true, 0, 0, &[0x4E00], 0, &[])];
+    let p = parse(&emf(&recs, [0, 0, 200, 100], [0, 0, 5000, 2500])).unwrap();
+    let t = texts(&p)[0];
+    assert_eq!((t.font.family.as_str(), t.font.vertical), ("メイリオ", true));
+    // Escapement 2700: the baseline runs down the picture.
+    let [a, b, ..] = t.transform;
+    assert!(a.abs() < 1e-9 && b > 0.0, "{:?}", t.transform);
 }
 
 #[test]
@@ -1786,6 +1850,50 @@ fn emfplus_draw_string_with_font_and_centred_format() {
     assert!(close(t.transform[4] as f32, 50.0));
     assert_eq!(t.background, None);
     assert_eq!(t.clip, None);
+}
+
+/// A vertical string format (StringFormatFlagsDirectionVertical) lays each line out as a column
+/// running down the layout rectangle, East Asian characters upright: each line's baseline runs
+/// down the picture and its font is drawn as a vertical font. Columns go from left to right, or
+/// from right to left under the right-to-left flag; the alignment places the text along the
+/// column.
+#[test]
+fn emfplus_vertical_string_format_runs_columns_down_the_rectangle() {
+    let fmt = |flags: u32, align: u32| prec(0x4008, 0x0700 | 4, &cat(vec![h32(0xDBC0_1002), h32(flags), h32(0), h32(align), h32(0)]));
+    let pic = |flags: u32, align: u32| {
+        plus_pic(vec![
+            prec(0x400A, 0x8000, &cat(vec![h32(0xFFFF_FFFF), h32(1), f32s(&[0.0, 0.0, 60.0, 100.0])])),
+            prec(0x4008, 0x0600 | 3, &font_obj("Yu Gothic", 10.0, 0, 0)),
+            fmt(flags, align),
+            prec(0x401C, 0x8000 | 3, &cat(vec![h32(0xFF00_0000), h32(4), h32(6), f32s(&[0.0, 0.0, 60.0, 100.0]), u16s("縦書き\n二行")])),
+        ])
+    };
+    let p = pic(0x2 | 0x4000, 0);
+    let t = texts(&p);
+    assert_eq!(t.iter().map(|t| t.text.as_str()).collect::<Vec<_>>(), ["縦書き", "二行"]);
+    for t in &t {
+        assert!(t.font.vertical && t.font.family == "Yu Gothic", "{:?}", t.font);
+        assert_eq!((t.h_align, t.v_align), (HAlign::Left, VAlign::Baseline));
+    }
+    // 12-unit columns (1.2 em) from the left; each baseline 0.38 em left of its column's centre
+    // line, running down from the top.
+    assert!(close6(t[0].transform, [0.0, 1.0, -1.0, 0.0, 6.0 - 3.8, 0.0]), "{:?}", t[0].transform);
+    assert!(close6(t[1].transform, [0.0, 1.0, -1.0, 0.0, 18.0 - 3.8, 0.0]), "{:?}", t[1].transform);
+    // Right to left: the first column at the right edge. Centred along the column.
+    let p = pic(0x1 | 0x2 | 0x4000, 1);
+    let t = texts(&p);
+    assert!(close(t[0].transform[4] as f32, 54.0 - 3.8) && close(t[1].transform[4] as f32, 42.0 - 3.8), "{:?}", t);
+    assert!(close(t[0].transform[5] as f32, 50.0) && t[0].h_align == HAlign::Center);
+    // Without the flag the same string runs across.
+    let p = pic(0x4000, 0);
+    let t = texts(&p);
+    assert!(!t[0].font.vertical && close6(t[0].transform, [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]), "{:?}", t[0]);
+    // An `@` font name is a vertical font in EMF+ too.
+    let p = plus_pic(vec![
+        prec(0x4008, 0x0600 | 3, &font_obj("@Yu Gothic", 10.0, 0, 0)),
+        prec(0x401C, 0x8000 | 3, &cat(vec![h32(0xFF00_0000), h32(9), h32(1), f32s(&[0.0, 0.0, 60.0, 100.0]), u16s("一")])),
+    ]);
+    assert!(texts(&p).first().is_some_and(|t| t.font.vertical && t.font.family == "Yu Gothic"), "{:?}", p.items);
 }
 
 #[test]

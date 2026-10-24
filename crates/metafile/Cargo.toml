@@ -12,3 +12,6 @@ workspace = true
 kurbo = { workspace = true }
 thiserror = { workspace = true }
 image = { workspace = true }
+# East Asian code pages of 8-bit metafile text (Shift_JIS, GBK, UHC, Big5) and the single-byte
+# Windows ones without a table here; pure Rust, already in the lock through symphonia.
+encoding_rs = "0.8"

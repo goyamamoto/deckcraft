@@ -56,6 +56,17 @@ const TA_CENTER: u32 = 6;
 const TA_BOTTOM: u32 = 8;
 const TA_BASELINE: u32 = 24;
 
+/// String format flags (MS-EMFPLUS 2.1.2.8): right-to-left reading order (columns read from
+/// right to left in vertical text), vertical lines, no wrapping, no clipping.
+const SF_DIRECTION_RTL: u32 = 0x0001;
+const SF_DIRECTION_VERTICAL: u32 = 0x0002;
+const SF_NO_WRAP: u32 = 0x1000;
+const SF_NO_CLIP: u32 = 0x4000;
+/// Share of the em the centre of an upright East Asian glyph's em box sits above the baseline
+/// (the renderer turns upright glyphs about that point; CJK fonts put the em box from 0.88 em
+/// above to 0.12 em below the baseline).
+const UPRIGHT_CENTRE: f64 = 0.38;
+
 /// What a brush paints. Coordinates are in brush space, which `xf` maps to world space.
 #[derive(Clone)]
 enum Fill {
@@ -615,13 +626,15 @@ impl Plus {
     /// The font as a LOGFONT whose height is in world units.
     fn log_font(&self, f: &FontObj) -> LogFont {
         let em = if f.unit == 0 { f.em } else { f.em * unit_px(f.unit, self.dpi) / self.page };
+        let (family, vertical) = crate::text::face_name(&f.family);
         let font = Font {
-            family: f.family.clone(),
+            family,
             height: -(em.clamp(0.0, 1.0e6) as f32),
             weight: if f.style & 1 != 0 { 700 } else { 400 },
             italic: f.style & 2 != 0,
             underline: f.style & 4 != 0,
             strike: f.style & 8 != 0,
+            vertical,
             ..Font::default()
         };
         LogFont { font, escapement: 0.0 }
@@ -640,15 +653,23 @@ impl Plus {
         let units: Vec<u16> = (0..len).map(|i| r.u16(28 + i * 2)).collect::<Option<_>>()?;
         let lf = self.log_font(&font);
         let em = f64::from(-lf.font.height);
-        let wrap = w > 0.0 && fmt.flags & 0x1000 == 0;
+        let vertical = fmt.flags & SF_DIRECTION_VERTICAL != 0;
+        // Lines run across the rectangle, or down it in vertical text.
+        let length = if vertical { h } else { w };
+        let wrap = length > 0.0 && fmt.flags & SF_NO_WRAP == 0;
         let lines: Vec<Vec<u16>> = units
             .split(|u| *u == 0x0A)
             .flat_map(|l| {
                 let l: Vec<u16> = l.iter().copied().filter(|u| *u != 0x0D).collect();
-                if wrap { wrap_line(&l, w, em) } else { vec![l] }
+                if wrap { wrap_line(&l, length, em) } else { vec![l] }
             })
             .collect();
         let line_h = em * 1.2;
+        let clip = (w > 0.0 && h > 0.0 && fmt.flags & SF_NO_CLIP == 0).then_some([x, y, x + w, y + h]);
+        if vertical {
+            self.vertical_lines(cv, &lines, TextStyle { color, font: lf, align: 0, clip }, [x, y, w, h], fmt);
+            return Some(());
+        }
         let (ax, ta_h) = match fmt.align {
             1 => (x + w / 2.0, TA_CENTER),
             2 => (x + w, TA_RIGHT),
@@ -660,7 +681,6 @@ impl Plus {
             2 => y + h - block,
             _ => y,
         };
-        let clip = (w > 0.0 && h > 0.0 && fmt.flags & 0x4000 == 0).then_some([x, y, x + w, y + h]);
         let p = self.painter();
         for (i, line) in lines.iter().enumerate() {
             if line.is_empty() {
@@ -672,6 +692,50 @@ impl Plus {
             p.text(cv, at, text, dx, TextStyle { color, font: lf.clone(), align: ta, clip }, IDENTITY);
         }
         Some(())
+    }
+
+    /// The lines of a DrawString in a vertical string format, as GDI+ lays them out: each line a
+    /// column running down the rectangle, East Asian characters upright and the rest turned a
+    /// quarter turn clockwise, the columns side by side from left to right (from right to left
+    /// under the right-to-left flag). The format's alignment places the text along its column
+    /// (top, centre, bottom); its line alignment places the block of columns across the
+    /// rectangle, near being the side reading starts from.
+    fn vertical_lines(&self, cv: &mut Canvas, lines: &[Vec<u16>], style: TextStyle, rect: [f64; 4], fmt: Format) {
+        let [x, y, w, h] = rect;
+        let mut lf = style.font;
+        let em = f64::from(-lf.font.height);
+        let col_w = em * 1.2;
+        // The baseline runs down the page, and the glyphs that stand upright are turned back.
+        lf.escapement = 2700.0;
+        lf.font.vertical = true;
+        let rtl = fmt.flags & SF_DIRECTION_RTL != 0;
+        let n = lines.len();
+        let block = col_w * n as f64;
+        let left = match fmt.line_align {
+            1 => x + (w - block) / 2.0,
+            2 if rtl => x,
+            2 => x + w - block,
+            _ if rtl => x + w - block,
+            _ => x,
+        };
+        let (ay, ta_h) = match fmt.align {
+            1 => (y + h / 2.0, TA_CENTER),
+            2 => (y + h, TA_RIGHT),
+            _ => (y, 0),
+        };
+        let p = self.painter();
+        for (i, line) in lines.iter().enumerate() {
+            if line.is_empty() {
+                continue;
+            }
+            let k = if rtl { n.saturating_sub(i + 1) } else { i };
+            let centre = left + col_w * (k as f64 + 0.5);
+            // Up in text space points right along this baseline: the baseline sits left of the
+            // column's centre line by as much as an upright glyph's em box centre is above it.
+            let at = (centre - em * UPRIGHT_CENTRE, ay);
+            let (text, dx) = crate::text::decode_utf16(line, &[]);
+            p.text(cv, at, text, dx, TextStyle { color: style.color, font: lf.clone(), align: ta_h | TA_BASELINE, clip: style.clip }, IDENTITY);
+        }
     }
 
     /// DrawDriverString with character codes (CmapLookup): positioned glyphs on a baseline.

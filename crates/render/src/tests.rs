@@ -1808,6 +1808,70 @@ fn metafile_symbol_text_draws_a_bullet_not_a_box() {
     }
 }
 
+/// CREATEFONTINDIRECT with a face name given as bytes in the font's code page (`charset`), then
+/// SELECTOBJECT, transparent background and alignment `ta`; and EXTTEXTOUT of 8-bit `bytes`.
+fn mf_cjk_records(height: i32, esc: i32, face: &[u8], charset: u8, ta: i32, at: (i32, i32), bytes: &[u8]) -> Vec<(u16, Vec<u8>)> {
+    let mut f = i16s(&[height, 0, esc, esc, 400]);
+    f.extend([0, 0, 0, charset, 0, 0, 0, 0]);
+    f.extend(face);
+    f.push(0);
+    let mut t = i16s(&[at.1, at.0, bytes.len() as i32, 0]);
+    t.extend(bytes);
+    if bytes.len() % 2 == 1 {
+        t.push(0);
+    }
+    vec![(0x02FB, f), (0x012D, i16s(&[0])), (0x0102, i16s(&[1])), (0x012E, i16s(&[ta])), (0x0A32, t)]
+}
+
+/// A Shift_JIS WMF label in the vertical version of a Japanese font (`@ＭＳ ゴシック`, written by
+/// Office for vertical text) along a baseline running down the page (escapement 2700): GDI
+/// stands each kanji upright, so "一" (88 EA) is a horizontal stroke; in the horizontal font it
+/// lies on its side along that baseline. The vertical font on a horizontal baseline turns it a
+/// quarter turn back.
+#[test]
+fn metafile_vertical_font_stands_kanji_upright() {
+    let gothic: &[u8] = &[0x82, 0x6C, 0x82, 0x72, 0x20, 0x83, 0x53, 0x83, 0x56, 0x83, 0x62, 0x83, 0x4E];
+    let at_gothic: Vec<u8> = [b'@'].iter().chain(gothic).copied().collect();
+    let ink = |face: &[u8], esc: i32| {
+        let recs = mf_cjk_records(-720, esc, face, 128, 0, (1440, 200), &[0x88, 0xEA]);
+        let img = crate::metafile::rasterize(&wmf_with(2880, 1440, &recs), 288).expect("raster");
+        let (x0, y0, x1, y1) = mf_ink(&img).expect("ink");
+        (x1 - x0 + 1, y1 - y0 + 1, (x0 + x1) / 2, (y0 + y1) / 2)
+    };
+    let (w, h, cx, cy) = ink(&at_gothic, 2700);
+    assert!(w > h * 3, "upright in the vertical font: {w}x{h}");
+    // The top of the cell is right of the baseline: the em box runs left from the reference
+    // point (144 px) and down from 20 px.
+    assert!((90..130).contains(&cx) && (35..80).contains(&cy), "in its cell: ({cx}, {cy})");
+    let (w, h, ..) = ink(gothic, 2700);
+    assert!(h > w * 3, "on its side in the horizontal font: {w}x{h}");
+    let (w, h, ..) = ink(&at_gothic, 0);
+    assert!(h > w * 3, "a vertical font on a horizontal baseline turns it: {w}x{h}");
+}
+
+/// Upright characters in a vertical font advance one em each along the baseline when the file
+/// gives no dx array; Latin letters keep their own advances, lying on their side.
+#[test]
+fn metafile_vertical_font_steps_one_em_per_upright_character() {
+    let rows = |bytes: &[u8]| {
+        let recs = mf_cjk_records(-720, 2700, b"@Gothic", 128, 0, (1440, 100), bytes);
+        let img = crate::metafile::rasterize(&wmf_with(2880, 1440, &recs), 288).expect("raster");
+        // Rows with ink, grouped into strokes.
+        let inked: Vec<u32> = (0..img.height()).filter(|&y| (0..img.width()).any(|x| img.get_pixel(x, y)[3] > 128)).collect();
+        let mut starts = vec![];
+        for (k, y) in inked.iter().enumerate() {
+            if k == 0 || inked[k - 1] + 1 != *y {
+                starts.push(*y);
+            }
+        }
+        starts
+    };
+    // 一一: two strokes 72 px (one 36 pt em at 2 px per point) apart.
+    let s = rows(&[0x88, 0xEA, 0x88, 0xEA]);
+    assert_eq!(s.len(), 2, "two strokes: {s:?}");
+    assert!((s[1] - s[0]).abs_diff(72) <= 3, "one em apart: {s:?}");
+}
+
 #[test]
 fn metafile_opaque_text_fills_its_cell() {
     // OPAQUE background in red behind a space.
