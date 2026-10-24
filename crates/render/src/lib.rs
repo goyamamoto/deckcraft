@@ -242,6 +242,10 @@ pub struct RenderOpts<'a> {
     /// only what is on the slide is drawn over transparency: PNG export with a transparent
     /// background. Shapes filled with the background (`useBgFill`) still show it.
     pub transparent_background: bool,
+    /// The prompt an empty placeholder of each kind shows in the editor (`edit`), when the layout
+    /// has no prompt of its own: the interface supplies it in its language. `None`: the English
+    /// [`PhType::prompt`].
+    pub prompt: Option<fn(PhType) -> &'static str>,
 }
 
 impl Default for RenderOpts<'_> {
@@ -262,6 +266,7 @@ impl Default for RenderOpts<'_> {
             date_text: None,
             now: None,
             transparent_background: false,
+            prompt: None,
         }
     }
 }
@@ -1387,7 +1392,7 @@ impl Renderer {
                 }
             } else if f.opts.edit && s.ph.is_some() {
                 let kind = s.ph_type().unwrap_or(PhType::Body);
-                let prompt_body = prompt_body(rctx, s, kind);
+                let prompt_body = prompt_body(rctx, s, kind, f.opts.prompt);
                 if !prompt_body.is_empty() {
                     let grey = Rgba::rgb(0x59, 0x59, 0x59);
                     draw_text(ctx, rctx, s, &prompt_body, tr, m, &f.fields, Some(grey));
@@ -2053,8 +2058,9 @@ fn arrowheads(ctx: &mut RenderContext, rctx: &Ctx, line: &Line, ph: Option<Rgba>
     }
 }
 
-/// The prompt shown in an empty placeholder, formatted like its content would be.
-fn prompt_body(rctx: &Ctx, s: &Shape, kind: PhType) -> TextBody {
+/// The prompt shown in an empty placeholder, formatted like its content would be: the layout's
+/// own, else `prompt`'s for the kind ([`RenderOpts::prompt`]), else the English one.
+fn prompt_body(rctx: &Ctx, s: &Shape, kind: PhType, prompt: Option<fn(PhType) -> &'static str>) -> TextBody {
     // Layout/master prompt text when the layout supplies a custom one.
     let (lp, _) = resolve::parents(rctx, s);
     let custom = lp.and_then(|l| l.ph.as_ref().filter(|p| p.has_custom_prompt).and(l.text.as_ref())).filter(|t| !t.is_empty());
@@ -2064,7 +2070,7 @@ fn prompt_body(rctx: &Ctx, s: &Shape, kind: PhType) -> TextBody {
     if matches!(rctx.owner, resolve::Owner::Layout | resolve::Owner::Master) {
         return TextBody::default();
     }
-    let txt = kind.prompt();
+    let txt = prompt.map_or_else(|| kind.prompt(), |p| p(kind));
     if txt.is_empty() || kind.is_footer_kind() {
         return TextBody::default();
     }

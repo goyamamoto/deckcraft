@@ -83,9 +83,10 @@ fn intra_layer_allowed(from: &str, to: &str) -> bool {
     })
 }
 
-/// External crates that constitute a UI toolkit / windowing dependency.
+/// External crates that constitute a UI toolkit / windowing dependency, and interface
+/// translation (`craft-i18n`): command labels, errors and history below the UI stay English.
 /// Entries ending in `*` are prefixes.
-pub const UI_CRATES: &[&str] = &["egui", "eframe", "winit", "egui_kittest", "rfd", "bevy*"];
+pub const UI_CRATES: &[&str] = &["egui", "eframe", "winit", "egui_kittest", "rfd", "bevy*", "craft-i18n"];
 
 /// First layer allowed to use UI crates.
 pub const UI_MIN_LAYER: u8 = 6;
@@ -152,7 +153,7 @@ impl std::fmt::Display for Violation {
                 write!(f, "{krate}: deckcraft-testkit may only be a dev-dependency")
             }
             Violation::UiBelowL6 { krate, dep, layer } => {
-                write!(f, "{krate} (L{layer}) depends on UI crate `{dep}`; UI toolkits are only allowed in L6+")
+                write!(f, "{krate} (L{layer}) depends on UI crate `{dep}`; UI toolkits and interface translation are only allowed in L6+")
             }
         }
     }
@@ -298,7 +299,7 @@ mod tests {
 
     #[test]
     fn ui_crates_below_l6_flagged() {
-        for dep in ["egui", "eframe", "winit", "egui_kittest", "rfd", "bevy_ecs", "bevy"] {
+        for dep in ["egui", "eframe", "winit", "egui_kittest", "rfd", "bevy_ecs", "bevy", "craft-i18n"] {
             let v = check(&[c("deckcraft-engine", &[(dep, Normal, false)])]);
             assert!(matches!(v[..], [Violation::UiBelowL6 { layer: 5, .. }]), "{dep}");
         }
