@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 
 use crate::SlideApp;
 use crate::theme::{self, Tokens};
+use crate::units::{len_text, parse_len};
 
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct Dialog {
@@ -195,6 +196,35 @@ fn language_picker(app: &mut SlideApp, ui: &mut Ui) {
         let _ = app.run("app.language", json!({ "value": value }));
     }
     ui.label(egui::RichText::new(tl!("Menus, dialogs and messages change; your presentations don't.")).small().weak());
+}
+
+/// Preferences ▸ General ▸ Measurement units: follow the system region (the default: centimetres
+/// in Japan, inches in the United States, as PowerPoint) or pick one. It applies at once through
+/// `tools.units`; Cancel puts the one the dialog opened with back (it is one of the preferences).
+fn units_picker(app: &mut SlideApp, ui: &mut Ui) {
+    use crate::units::unit_label;
+    let region_unit = app.session.region.units();
+    let auto_label = crate::i18n::fmt(tl!("Automatic ({unit})"), &[("unit", tl!(unit_label(region_unit)))]);
+    let chosen = app.session.prefs.units;
+    let current = chosen.map_or_else(|| auto_label.clone(), |u| tl!(unit_label(u)).to_string());
+    let mut pick: Option<&str> = None;
+    ui.horizontal(|ui| {
+        ui.label(tl!("Measurement units:"));
+        let opened = egui::ComboBox::from_id_salt("measurement_units").selected_text(current.as_str()).width(200.0).show_ui(ui, |ui| {
+            if ui.selectable_label(chosen.is_none(), auto_label.as_str()).clicked() {
+                pick = Some("auto");
+            }
+            for u in deckcraft_geom::Unit::CHOICES {
+                if ui.selectable_label(chosen == Some(u), tl!(unit_label(u))).clicked() {
+                    pick = Some(u.id());
+                }
+            }
+        });
+        opened.response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, current.as_str()));
+    });
+    if let Some(value) = pick {
+        let _ = app.run("tools.units", json!({ "value": value }));
+    }
 }
 
 /// Puts back the settings the Preferences dialog opened with (Cancel, Esc, the close button).
@@ -1090,34 +1120,45 @@ fn body(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         }
         "slideSize" => {
             let cur = app.session.active().map(|s| s.doc.slide_size).unwrap_or(deckcraft_model::defaults::WIDE);
+            // Width and height in the measurement unit (33.867 cm, 13.333"); each keeps the exact
+            // size it was filled with until it is edited.
+            let unit = app.session.units();
+            if !d.fields.contains_key("w") {
+                put_dim(d, "w", cur.width, slide_len_text(cur.width, unit));
+                put_dim(d, "h", cur.height, slide_len_text(cur.height, unit));
+            }
             ui.label("Slides sized for:");
             let preset = d.get("preset", "");
             egui::ComboBox::from_id_salt("sizes").selected_text(if preset.is_empty() { "Custom" } else { &preset }).show_ui(ui, |ui| {
                 for (label, w, h) in deckcraft_model::defaults::SLIDE_SIZES {
                     if ui.selectable_label(preset == *label, *label).clicked() {
                         d.fields.insert("preset".into(), label.to_string());
-                        d.fields.insert("w".into(), format!("{:.2}", w / 72.0));
-                        d.fields.insert("h".into(), format!("{:.2}", h / 72.0));
+                        put_dim(d, "w", *w, slide_len_text(*w, unit));
+                        put_dim(d, "h", *h, slide_len_text(*h, unit));
                     }
                 }
             });
-            field(ui, d, "Width (in):", "w", &format!("{:.2}", cur.width / 72.0));
-            field(ui, d, "Height (in):", "h", &format!("{:.2}", cur.height / 72.0));
-            let (w, h) = (num(d, "w", cur.width / 72.0), num(d, "h", cur.height / 72.0));
+            field(ui, d, tl!("Width:"), "w", "");
+            field(ui, d, tl!("Height:"), "h", "");
+            let (w, h) = (length_value(d, "w", unit).unwrap_or(cur.width), length_value(d, "h", unit).unwrap_or(cur.height));
             ui.horizontal(|ui| {
                 ui.label("Orientation:");
                 let portrait = ui.radio(h > w, "Portrait").clicked();
                 let landscape = ui.radio(w >= h, "Landscape").clicked();
                 // Picking the other orientation swaps the width and height fields.
                 if portrait && w > h || landscape && h > w {
-                    d.fields.insert("w".into(), format!("{h:.2}"));
-                    d.fields.insert("h".into(), format!("{w:.2}"));
+                    put_dim(d, "w", h, slide_len_text(h, unit));
+                    put_dim(d, "h", w, slide_len_text(w, unit));
                 }
             });
             let maximize = check(ui, d, "Maximize content (else ensure fit)", "max", false);
             let (ok, cancel) = buttons(ui, "OK");
             if ok {
-                let (w, h) = (num(d, "w", cur.width / 72.0) * 72.0, num(d, "h", cur.height / 72.0) * 72.0);
+                let (Some(w), Some(h)) = (length_value(d, "w", unit), length_value(d, "h", unit)) else {
+                    let which = if length_value(d, "w", unit).is_none() { "Width must be a length" } else { "Height must be a length" };
+                    app.set_status(which);
+                    return false;
+                };
                 run(app, "design.slideSize", json!({"w": w, "h": h, "scale": if maximize { "maximize" } else { "ensureFit" }}));
             }
             ok || cancel
@@ -2201,6 +2242,7 @@ fn body(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             }
             ui.label(egui::RichText::new(tl!("General")).font(theme::bold(13.0)));
             language_picker(app, ui);
+            units_picker(app, ui);
             let mut dark = app.ui.brightness == theme::Brightness::Dark;
             if ui.checkbox(&mut dark, tl!("Dark appearance")).changed() {
                 let _ = app.run("view.dark", json!({"on": dark}));
@@ -2293,6 +2335,21 @@ fn exact_of(d: &Dialog, key: &str) -> Option<f64> {
     parse_shown(&field_of(d, &format!("{key}Pt")))
 }
 
+/// A length field's value in points: the exact length it was filled with while its text is
+/// unchanged ([`put_dim`]), else the text read as a length in `unit` (or with its own unit:
+/// `2.5 cm`, `1"`, `72 pt`).
+fn length_value(d: &Dialog, key: &str, unit: deckcraft_geom::Unit) -> Option<f64> {
+    if edited(d, key) { parse_len(&field_of(d, key), unit) } else { exact_of(d, key) }
+}
+
+/// A slide's width or height as Slide Size shows it: a decimal more than other lengths, as
+/// PowerPoint shows 33.867 cm and 13.333" for a widescreen slide.
+fn slide_len_text(pt: f64, unit: deckcraft_geom::Unit) -> String {
+    use deckcraft_geom::Unit;
+    let places = if matches!(unit, Unit::Inches | Unit::Centimeters) { 3 } else { unit.places() };
+    format!("{}{}", unit.number(pt, places), unit.suffix())
+}
+
 fn selection_xfrm(app: &SlideApp) -> Option<deckcraft_geom::Xfrm> {
     let st = app.session.active()?;
     let id = *st.selection.shapes.first()?;
@@ -2314,10 +2371,13 @@ fn seed_size_position(app: &SlideApp, d: &mut Dialog) {
     let sw = num("scaleW").unwrap_or(100.0);
     let sh = num("scaleH").unwrap_or(100.0);
     let lock = d.params.get("lockAspect").and_then(Value::as_bool).unwrap_or(false);
-    put_dim(d, "x", x, num_text(x / 72.0));
-    put_dim(d, "y", y, num_text(y / 72.0));
-    put_dim(d, "w", w, num_text(w / 72.0));
-    put_dim(d, "h", h, num_text(h / 72.0));
+    // Lengths in the measurement unit, kept for as long as the dialog is open.
+    let unit = app.session.units();
+    d.fields.insert("unit".into(), unit.id().into());
+    put_dim(d, "x", x, len_text(x, unit));
+    put_dim(d, "y", y, len_text(y, unit));
+    put_dim(d, "w", w, len_text(w, unit));
+    put_dim(d, "h", h, len_text(h, unit));
     put_dim(d, "rot", rot, num_text(rot));
     put_dim(d, "scaleW", sw, num_text(sw));
     put_dim(d, "scaleH", sh, num_text(sh));
@@ -2332,8 +2392,13 @@ fn scale_of(pt: f64, base: f64) -> f64 {
     if base > 0.0 { pt / base * 100.0 } else { 100.0 }
 }
 
+/// The unit a dialog's length fields were filled in ([`seed_size_position`]).
+fn dialog_unit(d: &Dialog) -> deckcraft_geom::Unit {
+    deckcraft_geom::Unit::from_id(&field_of(d, "unit")).unwrap_or_default()
+}
+
 fn current_points(d: &Dialog, key: &str) -> Option<f64> {
-    if edited(d, key) { parse_shown(&field_of(d, key)).map(|inches| inches * 72.0) } else { exact_of(d, key) }
+    length_value(d, key, dialog_unit(d))
 }
 
 /// Keep scale tied to size, and the other side tied when aspect is locked.
@@ -2343,30 +2408,29 @@ fn reconcile_size_fields(d: &mut Dialog) {
     let base_w = parse_shown(&field_of(d, "baseW")).unwrap_or(1.0);
     let base_h = parse_shown(&field_of(d, "baseH")).unwrap_or(1.0);
     let ar = if base_h > 0.0 { base_w / base_h } else { 1.0 };
+    let unit = dialog_unit(d);
     let (w_s, h_s, sw_s, sh_s) = (field_of(d, "w"), field_of(d, "h"), field_of(d, "scaleW"), field_of(d, "scaleH"));
     let (prev_w, prev_h, prev_sw, prev_sh) = (field_of(d, "prevw"), field_of(d, "prevh"), field_of(d, "prevscaleW"), field_of(d, "prevscaleH"));
     if w_s != prev_w {
-        if let Some(inches) = parse_shown(&w_s) {
-            let w_pt = inches * 72.0;
+        if let Some(w_pt) = parse_len(&w_s, unit) {
             d.fields.insert("wPt".into(), w_pt.to_string());
             let pct = scale_of(w_pt, base_w);
             publish_dim(d, "scaleW", pct, num_text(pct));
             if lock {
                 let h_pt = if ar > 0.0 { w_pt / ar } else { w_pt };
-                publish_dim(d, "h", h_pt, num_text(h_pt / 72.0));
+                publish_dim(d, "h", h_pt, len_text(h_pt, unit));
                 let hp = scale_of(h_pt, base_h);
                 publish_dim(d, "scaleH", hp, num_text(hp));
             }
         }
     } else if h_s != prev_h {
-        if let Some(inches) = parse_shown(&h_s) {
-            let h_pt = inches * 72.0;
+        if let Some(h_pt) = parse_len(&h_s, unit) {
             d.fields.insert("hPt".into(), h_pt.to_string());
             let pct = scale_of(h_pt, base_h);
             publish_dim(d, "scaleH", pct, num_text(pct));
             if lock {
                 let w_pt = h_pt * ar;
-                publish_dim(d, "w", w_pt, num_text(w_pt / 72.0));
+                publish_dim(d, "w", w_pt, len_text(w_pt, unit));
                 let wp = scale_of(w_pt, base_w);
                 publish_dim(d, "scaleW", wp, num_text(wp));
             }
@@ -2375,10 +2439,10 @@ fn reconcile_size_fields(d: &mut Dialog) {
         if let Some(pct) = parse_shown(&sw_s) {
             let w_pt = base_w * pct / 100.0;
             d.fields.insert("scaleWPt".into(), pct.to_string());
-            publish_dim(d, "w", w_pt, num_text(w_pt / 72.0));
+            publish_dim(d, "w", w_pt, len_text(w_pt, unit));
             if lock {
                 let h_pt = if ar > 0.0 { w_pt / ar } else { w_pt };
-                publish_dim(d, "h", h_pt, num_text(h_pt / 72.0));
+                publish_dim(d, "h", h_pt, len_text(h_pt, unit));
                 publish_dim(d, "scaleH", pct, num_text(pct));
             }
         }
@@ -2386,10 +2450,10 @@ fn reconcile_size_fields(d: &mut Dialog) {
         if let Some(pct) = parse_shown(&sh_s) {
             let h_pt = base_h * pct / 100.0;
             d.fields.insert("scaleHPt".into(), pct.to_string());
-            publish_dim(d, "h", h_pt, num_text(h_pt / 72.0));
+            publish_dim(d, "h", h_pt, len_text(h_pt, unit));
             if lock {
                 let w_pt = h_pt * ar;
-                publish_dim(d, "w", w_pt, num_text(w_pt / 72.0));
+                publish_dim(d, "w", w_pt, len_text(w_pt, unit));
                 publish_dim(d, "scaleW", pct, num_text(pct));
             }
         }
@@ -2398,7 +2462,7 @@ fn reconcile_size_fields(d: &mut Dialog) {
         && let Some(w_pt) = current_points(d, "w")
     {
         let h_pt = if ar > 0.0 { w_pt / ar } else { w_pt };
-        publish_dim(d, "h", h_pt, num_text(h_pt / 72.0));
+        publish_dim(d, "h", h_pt, len_text(h_pt, unit));
         let hp = scale_of(h_pt, base_h);
         publish_dim(d, "scaleH", hp, num_text(hp));
         let wp = scale_of(w_pt, base_w);
@@ -2411,12 +2475,9 @@ fn reconcile_size_fields(d: &mut Dialog) {
     d.fields.insert("prevlock".into(), if lock { "1".into() } else { "0".into() });
 }
 
-fn shown_points(d: &Dialog, key: &str, label: &str) -> Result<f64, String> {
-    if edited(d, key) {
-        let n = parse_shown(&field_of(d, key)).ok_or_else(|| format!("{label} must be a number"))?;
-        return Ok(n * 72.0);
-    }
-    exact_of(d, key).ok_or_else(|| format!("{label} must be a number"))
+/// A length field's value in points, or `error` (a whole message, translated when shown).
+fn shown_points(d: &Dialog, key: &str, error: &str) -> Result<f64, String> {
+    length_value(d, key, dialog_unit(d)).ok_or_else(|| error.to_string())
 }
 
 fn shown_number(d: &Dialog, key: &str, label: &str) -> Result<f64, String> {
@@ -2427,24 +2488,24 @@ fn shown_number(d: &Dialog, key: &str, label: &str) -> Result<f64, String> {
 }
 
 fn size_position_value(d: &Dialog) -> Result<Value, String> {
-    let x = shown_points(d, "x", "Horizontal")?;
-    let y = shown_points(d, "y", "Vertical")?;
+    let x = shown_points(d, "x", "Horizontal position must be a length")?;
+    let y = shown_points(d, "y", "Vertical position must be a length")?;
     let rot = shown_number(d, "rot", "Rotation")?;
     let base_w = parse_shown(&field_of(d, "baseW")).unwrap_or(1.0);
     let base_h = parse_shown(&field_of(d, "baseH")).unwrap_or(1.0);
     let mut w = if edited(d, "w") {
-        shown_points(d, "w", "Width")?
+        shown_points(d, "w", "Width must be a length")?
     } else if edited(d, "scaleW") {
         base_w * shown_number(d, "scaleW", "Scale width")? / 100.0
     } else {
-        shown_points(d, "w", "Width")?
+        shown_points(d, "w", "Width must be a length")?
     };
     let mut h = if edited(d, "h") {
-        shown_points(d, "h", "Height")?
+        shown_points(d, "h", "Height must be a length")?
     } else if edited(d, "scaleH") {
         base_h * shown_number(d, "scaleH", "Scale height")? / 100.0
     } else {
-        shown_points(d, "h", "Height")?
+        shown_points(d, "h", "Height must be a length")?
     };
     if field_of(d, "lock") == "1" {
         let ar = if base_h > 0.0 { base_w / base_h } else { 1.0 };
@@ -2470,8 +2531,8 @@ fn text_row(ui: &mut Ui, d: &mut Dialog, label: &str, key: &str) {
 fn size_position_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     seed_size_position(app, d);
     ui.label(egui::RichText::new("Size").strong());
-    text_row(ui, d, "Height (in):", "h");
-    text_row(ui, d, "Width (in):", "w");
+    text_row(ui, d, tl!("Height:"), "h");
+    text_row(ui, d, tl!("Width:"), "w");
     text_row(ui, d, "Rotation (°):", "rot");
     text_row(ui, d, "Scale height (%):", "scaleH");
     text_row(ui, d, "Scale width (%):", "scaleW");
@@ -2479,8 +2540,8 @@ fn size_position_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool
     ui.add_space(8.0);
     ui.label(egui::RichText::new("Position").strong());
     ui.label("From the top-left corner of the slide");
-    text_row(ui, d, "Horizontal (in):", "x");
-    text_row(ui, d, "Vertical (in):", "y");
+    text_row(ui, d, crate::i18n::tc("position", "Horizontal:"), "x");
+    text_row(ui, d, crate::i18n::tc("position", "Vertical:"), "y");
     reconcile_size_fields(d);
     let (ok, cancel) = buttons(ui, "OK");
     if ok {
@@ -3004,16 +3065,28 @@ fn pt_text(v: Option<&Value>, default: f64) -> String {
     }
 }
 
-fn inches_text(v: Option<&Value>) -> String {
-    crate::widgets::fmt_num(v.and_then(Value::as_f64).filter(|n| n.is_finite()).unwrap_or(0.0) / 72.0, "")
+/// Fill a length field once with `v` (points) in `unit`; the exact length stays behind it until
+/// the text is edited ([`length_value`]).
+fn seed_length(d: &mut Dialog, key: &str, v: Option<&Value>, unit: deckcraft_geom::Unit) {
+    if !d.fields.contains_key(key) {
+        let pt = v.and_then(Value::as_f64).filter(|n| n.is_finite()).unwrap_or(0.0);
+        put_dim(d, key, pt, len_text(pt, unit));
+    }
 }
 
-fn seed_paragraph_fields(d: &mut Dialog) {
+/// An indent field's length in points (`None` when the text isn't a length).
+fn indent_value(d: &Dialog, key: &str) -> Option<f64> {
+    length_value(d, key, dialog_unit(d))
+}
+
+fn seed_paragraph_fields(d: &mut Dialog, unit: deckcraft_geom::Unit) {
+    seed_once(d, "unit", unit.id().to_string());
+    let unit = dialog_unit(d);
     seed_once(d, "align", json_text(d.params.get("align"), "left"));
-    seed_once(d, "before", inches_text(d.params.get("indentLeft")));
-    seed_once(d, "after", inches_text(d.params.get("indentRight")));
+    seed_length(d, "before", d.params.get("indentLeft").cloned().as_ref(), unit);
+    seed_length(d, "after", d.params.get("indentRight").cloned().as_ref(), unit);
     seed_once(d, "special", json_text(d.params.get("special"), "none"));
-    seed_once(d, "by", inches_text(d.params.get("specialBy")));
+    seed_length(d, "by", d.params.get("specialBy").cloned().as_ref(), unit);
     seed_once(d, "spaceBefore", pt_text(d.params.get("spaceBefore"), 0.0));
     seed_once(d, "spaceBeforeSeed", pt_text(d.params.get("spaceBefore"), 0.0));
     seed_once(d, "spaceAfter", pt_text(d.params.get("spaceAfter"), 0.0));
@@ -3023,9 +3096,9 @@ fn seed_paragraph_fields(d: &mut Dialog) {
 }
 
 fn paragraph_return_params(d: &mut Dialog) -> Value {
-    let before = finite_pt(&d.get("before", "0")).unwrap_or(0.0) * 72.0;
-    let after = finite_pt(&d.get("after", "0")).unwrap_or(0.0) * 72.0;
-    let by = finite_pt(&d.get("by", "0")).unwrap_or(0.0) * 72.0;
+    let before = indent_value(d, "before").unwrap_or(0.0);
+    let after = indent_value(d, "after").unwrap_or(0.0);
+    let by = indent_value(d, "by").unwrap_or(0.0);
     let space_before = finite_pt(&d.get("spaceBefore", "0")).unwrap_or(0.0);
     let space_after = finite_pt(&d.get("spaceAfter", "0")).unwrap_or(0.0);
     let line_value = finite_pt(&d.get("lineValue", "1")).unwrap_or(1.0);
@@ -3064,7 +3137,7 @@ fn line_preset_label(kind: &str, value: &str) -> &'static str {
 /// Home › Paragraph launcher. One OK applies alignment, indentation and spacing together.
 fn paragraph_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     ui.set_min_width(460.0);
-    seed_paragraph_fields(d);
+    seed_paragraph_fields(d, app.session.units());
     ui.horizontal(|ui| {
         ui.add_sized(vec2(110.0, 20.0), egui::Label::new("Alignment"));
         choice(
@@ -3083,19 +3156,17 @@ fn paragraph_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         );
     });
     ui.label(egui::RichText::new("Indentation").strong());
+    // The indents show their unit in the field (`1.27 cm`, `0.5"`).
     ui.horizontal(|ui| {
-        let _ = labeled_text(ui, d, "Before text", "before", 64.0);
-        ui.label("in");
+        let _ = labeled_text(ui, d, "Before text", "before", 72.0);
         ui.add_space(12.0);
-        let _ = labeled_text(ui, d, "After text", "after", 64.0);
-        ui.label("in");
+        let _ = labeled_text(ui, d, "After text", "after", 72.0);
     });
     ui.horizontal(|ui| {
         ui.add_sized(vec2(110.0, 20.0), egui::Label::new("Special"));
         choice(ui, d, "paragraph_special", "special", &[("none", "None"), ("first", "First line"), ("hanging", "Hanging")]);
         ui.add_space(8.0);
-        let _ = labeled_text(ui, d, "By", "by", 64.0);
-        ui.label("in");
+        let _ = labeled_text(ui, d, "By", "by", 72.0);
     });
     ui.label(egui::RichText::new("Spacing").strong());
     ui.horizontal(|ui| {
@@ -3155,16 +3226,16 @@ fn paragraph_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         return true;
     }
     if ok {
-        let Some(before_in) = finite_pt(&d.get("before", "")) else {
-            app.set_status("Indent before text must be a number of inches");
+        let Some(before_pt) = indent_value(d, "before") else {
+            app.set_status("Indent before text must be a length");
             return false;
         };
-        let Some(after_in) = finite_pt(&d.get("after", "")) else {
-            app.set_status("Indent after text must be a number of inches");
+        let Some(after_pt) = indent_value(d, "after") else {
+            app.set_status("Indent after text must be a length");
             return false;
         };
-        let Some(by_in) = finite_pt(&d.get("by", "")) else {
-            app.set_status("Special indent must be a number of inches");
+        let Some(by_pt) = indent_value(d, "by") else {
+            app.set_status("Special indent must be a length");
             return false;
         };
         let Some(space_before) = finite_pt(&d.get("spaceBefore", "")) else {
@@ -3181,10 +3252,10 @@ fn paragraph_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         };
         let mut params = json!({
             "align": d.get("align", "left"),
-            "indentLeft": before_in * 72.0,
-            "indentRight": after_in * 72.0,
+            "indentLeft": before_pt,
+            "indentRight": after_pt,
             "special": d.get("special", "none"),
-            "specialBy": by_in * 72.0,
+            "specialBy": by_pt,
             "spaceBefore": space_before,
             "spaceAfter": space_after,
             "spaceBeforeKind": if d.get("spaceBefore", "") == d.get("spaceBeforeSeed", "") { d.params.get("spaceBeforeKind").and_then(Value::as_str).unwrap_or("pts") } else { "pts" },
@@ -3205,7 +3276,8 @@ fn paragraph_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
 const TAB_KINDS: [(&str, &str); 4] = [("l", "Left"), ("ctr", "Center"), ("r", "Right"), ("dec", "Decimal")];
 
 /// Format › Tabs: the default spacing and the tab stops of the selected paragraphs, edited as a
-/// list (inches, as PowerPoint's dialog) and applied together with OK.
+/// list and applied together with OK. Positions show and take the measurement unit (`2.54 cm`
+/// in Japan, `1"` in the United States); the list keeps them in inches internally.
 fn tabs_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     if !d.fields.contains_key("stops") {
         // Opened from Paragraph (or by `format.tabs` with no fields) the stops come with the
@@ -3216,8 +3288,12 @@ fn tabs_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             .map(|a| a.iter().filter_map(|t| Some(format!("{}:{}", t["pos"].as_f64()? / 72.0, t["align"].as_str().unwrap_or("l")))).collect())
             .unwrap_or_default();
         d.fields.insert("stops".into(), stops.join("|"));
-        d.fields.insert("default".into(), format!("{}", r["defaultTab"].as_f64().unwrap_or(72.0) / 72.0));
+        let unit = app.session.units();
+        d.fields.insert("unit".into(), unit.id().into());
+        let default_pt = r["defaultTab"].as_f64().filter(|v| v.is_finite()).unwrap_or(72.0);
+        put_dim(d, "default", default_pt, len_text(default_pt, unit));
     }
+    let unit = dialog_unit(d);
     let mut stops: Vec<(f64, String)> = d
         .get("stops", "")
         .split('|')
@@ -3226,7 +3302,7 @@ fn tabs_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             Some((p.parse::<f64>().ok().filter(|v| v.is_finite())?, a.to_string()))
         })
         .collect();
-    field(ui, d, "Default tab stops (in):", "default", "1");
+    field(ui, d, tl!("Default tab stops:"), "default", "");
     ui.add_space(6.0);
     ui.label("Tab stops:");
     let mut remove = None;
@@ -3236,9 +3312,11 @@ fn tabs_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             ui.end_row();
         }
         for (i, (pos, align)) in stops.iter().enumerate() {
-            ui.label(format!("{pos:.2}\""));
+            let at = len_text(pos * 72.0, unit);
+            ui.label(&at);
             ui.label(TAB_KINDS.iter().find(|k| k.0 == align).map(|k| k.1).unwrap_or("Left"));
-            if ui.small_button("Clear").on_hover_text(format!("Clear the tab at {pos:.2}\"")).clicked() {
+            let tip = crate::i18n::fmt(tl!("Clear the tab at {position}"), &[("position", &at)]);
+            if ui.small_button("Clear").on_hover_text(tip).clicked() {
                 remove = Some(i);
             }
             ui.end_row();
@@ -3249,7 +3327,7 @@ fn tabs_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     }
     ui.add_space(6.0);
     ui.horizontal(|ui| {
-        ui.label("Tab stop position (in):");
+        ui.label(tl!("Tab stop position:"));
         let mut v = d.get("newpos", "");
         ui.add(egui::TextEdit::singleline(&mut v).desired_width(60.0));
         d.fields.insert("newpos".into(), v);
@@ -3265,7 +3343,7 @@ fn tabs_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     });
     ui.horizontal(|ui| {
         if ui.button("Set").clicked()
-            && let Some(p) = Some(num(d, "newpos", f64::NAN)).filter(|v| v.is_finite() && *v >= 0.0 && *v <= 56.0)
+            && let Some(p) = parse_len(&d.get("newpos", ""), unit).map(|pt| pt / 72.0).filter(|v| v.is_finite() && *v >= 0.0 && *v <= 56.0)
         {
             stops.retain(|(q, _)| (q - p).abs() > 0.005);
             stops.push((p, d.get("newalign", "l")));
@@ -3280,7 +3358,7 @@ fn tabs_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     let (ok, cancel) = buttons(ui, "OK");
     if ok {
         let set: Vec<Value> = stops.iter().map(|(p, a)| json!({"pos": p * 72.0, "align": a})).collect();
-        let dt = num(d, "default", 1.0).clamp(0.02, 56.0) * 72.0;
+        let dt = length_value(d, "default", unit).filter(|v| v.is_finite()).unwrap_or(72.0).clamp(1.44, 4032.0);
         if let Err(e) = app.run("format.tabs", json!({"set": set, "defaultTab": dt})) {
             app.set_status(e);
         } else if let Some(ret) = d.params.get_mut("returnParams").and_then(Value::as_object_mut) {

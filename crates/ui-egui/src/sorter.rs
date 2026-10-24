@@ -366,14 +366,16 @@ pub fn notes_page(app: &mut SlideApp, ui: &mut Ui) {
     let Some(st) = app.session.active() else { return };
     let doc = st.doc.clone();
     let idx = st.selection.slide;
+    // The page is the paper notes pages print on by default: A4 in Japan and other A4 regions,
+    // Letter in the United States (`Session::default_paper`).
+    let paper = deckcraft_engine::cmd::file::paper_size(app.session.default_paper(), false).unwrap_or((612.0, 792.0));
     let page_h = avail.height() - 40.0;
-    let page_w = page_h * 8.5 / 11.0;
+    let page_w = page_h * (paper.0 / paper.1) as f32;
     let page = Rect::from_center_size(avail.center(), vec2(page_w, page_h));
     ui.painter().rect_filled(page.translate(vec2(2.0, 2.0)), CornerRadius::ZERO, t.shadow);
     ui.painter().rect_filled(page, CornerRadius::ZERO, Color32::WHITE);
-    // The notes master places the slide, the notes and the header and footer text (in Letter
-    // points, as the PDF notes pages do).
-    let paper = (612.0, 792.0);
+    // The notes master places the slide, the notes and the header and footer text (in the
+    // paper's points, as the PDF notes pages do).
     let k = page_w / paper.0 as f32;
     let to_screen = |(x0, y0, x1, y1): (f64, f64, f64, f64)| {
         Rect::from_min_max(page.min + vec2(x0 as f32 * k, y0 as f32 * k), page.min + vec2(x1 as f32 * k, y1 as f32 * k))

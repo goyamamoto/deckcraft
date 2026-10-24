@@ -295,6 +295,11 @@ fn main() -> eframe::Result {
             let east_asian = east_asian_editing();
             log::info!("East Asian editing language: {east_asian:?}");
             app.session.set_east_asian_editing(east_asian);
+            // The system region picks the measurement unit (centimetres in Japan, inches in the
+            // United States) and the paper notes pages print on, as PowerPoint takes them.
+            let region = deckcraft_ui_egui::units::system_region();
+            log::info!("Region: {} ({} on {})", region.tag(), region.units().id(), region.paper_id());
+            app.session.set_region(region);
             load_prefs(&mut app);
             // AutoRecover: reopen what a previous run left unsaved, then keep it current.
             if std::env::var_os("DECKCRAFT_NO_RECOVERY").is_none() {

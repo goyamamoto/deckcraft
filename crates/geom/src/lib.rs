@@ -8,10 +8,12 @@
 
 pub mod morph;
 pub mod preset;
+pub mod region;
 pub mod squircle;
 pub mod warp;
 
 pub use kurbo::{Affine, BezPath, PathEl, Point, Rect, Shape as KurboShape, Size, Vec2};
+pub use region::Region;
 use serde::{Deserialize, Serialize};
 
 /// EMU per point.
@@ -40,22 +42,29 @@ pub fn pt_to_emu(pt: f64) -> i64 {
     }
 }
 
-/// Display units for measurements (inches on US English systems, centimetres elsewhere).
+/// Display units for measurements (inches on US English systems, centimetres elsewhere; see
+/// [`Region::units`]). Lengths are kept in points everywhere; only the rulers and the length
+/// fields show them in a unit.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Unit {
     #[default]
     Inches,
     Centimeters,
+    Millimeters,
     Points,
     Pixels,
 }
 
 impl Unit {
+    /// The units a person can choose to measure in (Preferences), in menu order.
+    pub const CHOICES: [Unit; 4] = [Unit::Inches, Unit::Centimeters, Unit::Millimeters, Unit::Points];
+
     pub fn points_per_unit(self) -> f64 {
         match self {
             Unit::Inches => 72.0,
             Unit::Centimeters => 72.0 / 2.54,
+            Unit::Millimeters => 72.0 / 25.4,
             Unit::Points => 1.0,
             Unit::Pixels => 0.75,
         }
@@ -64,31 +73,92 @@ impl Unit {
         match self {
             Unit::Inches => "\"",
             Unit::Centimeters => " cm",
+            Unit::Millimeters => " mm",
             Unit::Points => " pt",
             Unit::Pixels => " px",
         }
     }
-    /// `2.08"` style text for a length in points.
-    pub fn format(self, pt: f64) -> String {
-        let v = pt / self.points_per_unit();
-        let s = format!("{v:.2}");
-        format!("{s}{}", self.suffix())
+    /// The unit's short name, as typed after a number (`in`, `cm`, `mm`, `pt`, `px`).
+    pub fn abbrev(self) -> &'static str {
+        match self {
+            Unit::Inches => "in",
+            Unit::Centimeters => "cm",
+            Unit::Millimeters => "mm",
+            Unit::Points => "pt",
+            Unit::Pixels => "px",
+        }
     }
-    /// Parses `2.5`, `2.5"`, `2.5 in`, `6 cm`, `30 pt`, `40px`, `5mm` into points. A bare number uses `self`.
+    /// The unit's id in settings and command parameters (`inches`, `centimeters`…).
+    pub fn id(self) -> &'static str {
+        match self {
+            Unit::Inches => "inches",
+            Unit::Centimeters => "centimeters",
+            Unit::Millimeters => "millimeters",
+            Unit::Points => "points",
+            Unit::Pixels => "pixels",
+        }
+    }
+    /// The unit an id or short name names (`centimeters`, `cm`, `Centimetres`), any case.
+    pub fn from_id(id: &str) -> Option<Unit> {
+        match id.trim().to_ascii_lowercase().as_str() {
+            "inches" | "inch" | "in" => Some(Unit::Inches),
+            "centimeters" | "centimetres" | "centimeter" | "centimetre" | "cm" => Some(Unit::Centimeters),
+            "millimeters" | "millimetres" | "millimeter" | "millimetre" | "mm" => Some(Unit::Millimeters),
+            "points" | "point" | "pt" => Some(Unit::Points),
+            "pixels" | "pixel" | "px" => Some(Unit::Pixels),
+            _ => None,
+        }
+    }
+    /// How many decimals a length in this unit is shown with at most: one for millimetres, two
+    /// otherwise (`2.54 cm`, `25.4 mm`, `12 pt`, `1.25"`).
+    pub fn places(self) -> usize {
+        match self {
+            Unit::Millimeters => 1,
+            _ => 2,
+        }
+    }
+    /// `pt` as a number in this unit with at most `places` decimals and no trailing zeros, without
+    /// the unit (`2.54`, `1`, `-0.5`). Non-finite input is 0.
+    pub fn number(self, pt: f64, places: usize) -> String {
+        let v = if pt.is_finite() { pt / self.points_per_unit() } else { 0.0 };
+        let s = format!("{v:.places$}", places = places.min(6));
+        let s = if s.contains('.') { s.trim_end_matches('0').trim_end_matches('.') } else { &s };
+        if s == "-0" { "0".to_string() } else { s.to_string() }
+    }
+    /// A length in points as this unit shows it: `2.08"`, `2.54 cm`, `25.4 mm`, `12 pt`.
+    pub fn format(self, pt: f64) -> String {
+        format!("{}{}", self.number(pt, self.places()), self.suffix())
+    }
+    /// Parses `2.5`, `2.5"`, `2.5 in`, `6 cm`, `30 pt`, `40px`, `5mm` into points. A bare number
+    /// uses `self`. Full-width digits, letters and marks typed through a Japanese input method
+    /// (`２．５ｃｍ`) read as their ASCII forms, and `″` or `”` as an inch mark.
     pub fn parse(self, text: &str) -> Option<f64> {
-        let t = text.trim().to_ascii_lowercase();
+        let t: String = text.chars().take(64).map(narrow).collect::<String>().trim().to_ascii_lowercase();
         let (num, unit) = split_number(&t)?;
         let ppu = match unit.trim() {
             "" => self.points_per_unit(),
             "\"" | "in" | "inch" | "inches" => 72.0,
             "cm" => 72.0 / 2.54,
             "mm" => 72.0 / 25.4,
-            "pt" | "pts" => 1.0,
+            "pt" | "pts" | "point" | "points" => 1.0,
             "px" => 0.75,
             _ => return None,
         };
         let v = num * ppu;
         v.is_finite().then_some(v)
+    }
+}
+
+/// A character as the length parser reads it: full-width ASCII forms (U+FF01..U+FF5E) and the
+/// ideographic space as their ASCII counterparts, the minus sign as `-`, and the double prime
+/// and right double quote as the inch mark.
+fn narrow(c: char) -> char {
+    match c {
+        '\u{FF01}'..='\u{FF5E}' => char::from_u32(c as u32 - 0xFEE0).unwrap_or(c),
+        '\u{3000}' => ' ',
+        '\u{2212}' => '-',
+        '\u{2033}' | '\u{201D}' => '"',
+        c => c,
     }
 }
 
@@ -240,6 +310,45 @@ mod tests {
         assert_eq!(Unit::Inches.parse("abc"), None);
         assert_eq!(Unit::Inches.parse(""), None);
         assert_eq!(Unit::Inches.format(150.0), "2.08\"");
+    }
+
+    /// Centimetres for metric regions (PowerPoint in Japan): 72 pt is 2.54 cm, and a field
+    /// takes an explicit unit, full-width input from a Japanese input method and odd inch marks.
+    #[test]
+    fn metric_units_format_and_parse() {
+        assert_eq!(Unit::Centimeters.format(72.0), "2.54 cm");
+        assert_eq!(Unit::Centimeters.format(960.0), "33.87 cm", "a widescreen slide's width");
+        assert_eq!(Unit::Millimeters.format(72.0), "25.4 mm");
+        assert_eq!(Unit::Points.format(12.0), "12 pt");
+        assert_eq!(Unit::Inches.format(72.0), "1\"");
+        assert_eq!(Unit::Centimeters.format(-0.001), "0 cm");
+        assert_eq!(Unit::Centimeters.format(f64::NAN), "0 cm");
+        assert_eq!(Unit::Centimeters.number(960.0, 3), "33.867");
+        let close = |a: Option<f64>, b: f64| a.is_some_and(|a| (a - b).abs() < 1e-9);
+        assert!(close(Unit::Centimeters.parse("2.54"), 72.0));
+        assert!(close(Unit::Centimeters.parse("2.54 cm"), 72.0));
+        assert!(close(Unit::Centimeters.parse("25.4mm"), 72.0));
+        assert!(close(Unit::Centimeters.parse("1\""), 72.0));
+        assert!(close(Unit::Centimeters.parse("1 in"), 72.0));
+        assert!(close(Unit::Centimeters.parse("72 pt"), 72.0));
+        assert!(close(Unit::Centimeters.parse("２．５４ｃｍ"), 72.0), "full-width input");
+        assert!(close(Unit::Centimeters.parse("１″"), 72.0));
+        assert!(close(Unit::Centimeters.parse("1”"), 72.0));
+        assert!(close(Unit::Centimeters.parse("−2.54"), -72.0));
+        assert!(close(Unit::Millimeters.parse("10"), 72.0 / 2.54));
+        for bad in ["", "cm", "2 furlongs", "1e999", "--1", "1.2.3"] {
+            assert_eq!(Unit::Centimeters.parse(bad), None, "{bad:?}");
+        }
+        assert_eq!(Unit::Centimeters.parse(&"9".repeat(100_000)), Some(Unit::Centimeters.parse(&"9".repeat(64)).unwrap()), "long input is cut");
+        for u in Unit::CHOICES {
+            assert_eq!(Unit::from_id(u.id()), Some(u));
+            assert_eq!(Unit::from_id(u.abbrev()), Some(u));
+            // What a field shows reads back within its rounding.
+            let back = u.parse(&u.format(123.0)).unwrap();
+            assert!((back - 123.0).abs() <= u.points_per_unit() * 0.051, "{u:?}: {back}");
+        }
+        assert_eq!(Unit::from_id("Centimetres"), Some(Unit::Centimeters));
+        assert_eq!(Unit::from_id("furlongs"), None);
     }
 
     #[test]

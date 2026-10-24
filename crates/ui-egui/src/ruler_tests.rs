@@ -132,7 +132,7 @@ fn tabs_dialog_sets_clears_and_applies_on_ok() {
     h.state_mut().session.execute("format.tabs", &json!({"add": {"pos": 36}})).unwrap();
     h.state_mut().dialog = Some(crate::dialogs::Dialog::new("tabs"));
     h.run_steps(3);
-    assert!(h.query_by_label_contains("0.50\"").is_some(), "the existing stop is listed");
+    assert!(h.query_by_label("0.5\"").is_some(), "the existing stop is listed");
     let d = h.state_mut().dialog.as_mut().unwrap();
     d.fields.insert("newpos".into(), "2".into());
     d.fields.insert("default".into(), "0.5".into());
