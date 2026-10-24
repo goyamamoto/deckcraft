@@ -37,7 +37,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(noundo "file.saveAs", "Save As…", ["File"], Some("Cmd+Shift+S"), "{path, format?}", has_doc, save_as),
         cmd!(noundo "file.saveTemplate", "Save as Template…", ["File"], None, "{path}", has_doc, save_as),
         cmd!(query "file.saveBytes", "Save to Data", [], None, "{format?: deckcraft|pptx} → {data: base64}", has_doc, save_bytes_cmd),
-        cmd!(noundo "file.export", "Export…", ["File"], None, "{path, format?: png|jpeg|pptx|deckcraft|outline|pdf|gif (else by path), slide?: index, all?: bool, scale?: px per pt, layout?: slides|notes|handouts (pdf), perPage?: 1|2|3|4|6|9, paper?: letter|a4|legal|a3 (pdf), orientation?: portrait|landscape (pdf), dpi?, slides?: [index]|range (\"1-3,5\"), includeHidden?, textLayer?, frame?, transparentBackground?: bool (png: leave the slide background out), width?: px 16-3840|small|medium|large|extraLarge (gif), secondsPerSlide?: 0.1-600 (gif; 5), loop?: bool (gif; true: forever)} → {path, bytes} or {files} (png, jpeg); gif adds frames, width, height, secondsPerSlide", has_doc, export),
+        cmd!(noundo "file.export", "Export…", ["File"], None, "{path, format?: png|jpeg|pptx|deckcraft|outline|pdf|gif (else by path), slide?: index, all?: bool, scale?: px per pt, layout?: slides|notes|handouts (pdf), perPage?: 1|2|3|4|6|9, paper?: letter|a4|legal|a3|b4|b5 (pdf; default: the region's, A4 or Letter), orientation?: portrait|landscape (pdf), dpi?, slides?: [index]|range (\"1-3,5\"), includeHidden?, textLayer?, frame?, transparentBackground?: bool (png: leave the slide background out), width?: px 16-3840|small|medium|large|extraLarge (gif), secondsPerSlide?: 0.1-600 (gif; 5), loop?: bool (gif; true: forever)} → {path, bytes} or {files} (png, jpeg); gif adds frames, width, height, secondsPerSlide", has_doc, export),
         cmd!(
             query "file.info",
             "Info",
@@ -420,7 +420,7 @@ pub fn save_bytes(doc: &Presentation, format: &str) -> Result<Vec<u8>> {
 pub use deckcraft_pdf::{PAPERS, paper_size};
 
 /// PDF options from command params: `{layout: slides|notes|handouts, perPage, dpi, slides,
-/// includeHidden, textLayer, frame, paper: letter|a4|legal|a3, orientation: portrait|landscape}` for a presentation of `count` slides. `slides` is a list of
+/// includeHidden, textLayer, frame, paper: letter|a4|legal|a3|b4|b5, orientation: portrait|landscape}` for a presentation of `count` slides. `slides` is a list of
 /// 0-based indices or a range as typed in PowerPoint's Print page (`"1-3, 5"`, 1-based).
 pub fn pdf_options(p: &Value, count: usize) -> Result<deckcraft_pdf::PdfOptions> {
     let mut o = deckcraft_pdf::PdfOptions { layout: deckcraft_pdf::PageLayout::Slides, ..Default::default() };
@@ -482,6 +482,18 @@ pub fn parse_slide_range(text: &str, count: usize) -> Result<Vec<usize>> {
 /// PDF bytes for `doc` with [`pdf_options`] from `p`.
 pub fn pdf_bytes(doc: &Presentation, p: &Value) -> Result<Vec<u8>> {
     deckcraft_pdf::export(doc, &pdf_options(p, doc.slides.len())?).map_err(|e| EngineError::Other(e.to_string()))
+}
+
+/// `p` with `paper` filled in when it names none ([`crate::Session::default_paper`]: notes pages
+/// and handouts print on A4 in Japan and other A4 regions, on Letter in the United States).
+pub fn with_default_paper(p: &Value, paper: &str) -> Value {
+    let mut p = if p.is_object() { p.clone() } else { json!({}) };
+    if let Some(o) = p.as_object_mut()
+        && o.get("paper").is_none_or(Value::is_null)
+    {
+        o.insert("paper".into(), json!(paper));
+    }
+    p
 }
 
 /// The output extensions [`format_for_path`] maps to a writer of that format.
@@ -677,7 +689,7 @@ fn export(s: &mut Session, p: &Value) -> Result<Value> {
             Ok(json!({"files": written}))
         }
         "pdf" => {
-            let bytes = pdf_bytes(&st.doc, p)?;
+            let bytes = pdf_bytes(&st.doc, &with_default_paper(p, s.default_paper()))?;
             write_file(&path, &bytes)?;
             Ok(json!({"path": path, "bytes": bytes.len()}))
         }

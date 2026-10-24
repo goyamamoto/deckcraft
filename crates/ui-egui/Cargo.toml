@@ -25,9 +25,13 @@ egui = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
+# The system region (`units::system_region`): it picks the measurement unit and the default paper
+# (MIT OR Apache-2.0; craft-i18n already depends on it).
+sys-locale = "0.3"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = "0.3"
+sys-locale = { version = "0.3", features = ["js"] }
 
 [dev-dependencies]
 egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }

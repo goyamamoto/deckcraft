@@ -355,7 +355,7 @@ pub fn show(app: &mut SlideApp, ui: &mut Ui) {
         draw_guides(app, &painter, xf, slide_rect, &t);
     }
     if app.ui.ruler {
-        ruler(&painter, avail, slide_rect, scale, &t);
+        ruler(&painter, avail, slide_rect, scale, app.session.units(), &t);
         ruler_markers(app, ui, &painter, avail, xf, &t);
     }
     pointer(app, ui, &resp, xf);
@@ -594,46 +594,45 @@ fn master_tex(
     Some((crate::textures::upload_editor(ctx, "master-canvas", crate::textures::to_color_image(&img, false)), region))
 }
 
-fn ruler(p: &egui::Painter, avail: Rect, slide: Rect, scale: f32, t: &Tokens) {
+/// The rulers along the top and the left of the canvas, counted from the slide's top-left
+/// corner in the measurement unit (`unit`): inches in quarters, or centimetres numbered every
+/// centimetre in a metric region such as Japan, as PowerPoint draws them there.
+fn ruler(p: &egui::Painter, avail: Rect, slide: Rect, scale: f32, unit: deckcraft_geom::Unit, t: &Tokens) {
     let top = Rect::from_min_max(avail.min, pos2(avail.max.x, avail.min.y + 16.0));
     let left = Rect::from_min_max(avail.min, pos2(avail.min.x + 16.0, avail.max.y));
     p.rect_filled(top, CornerRadius::ZERO, t.card);
     p.rect_filled(left, CornerRadius::ZERO, t.card);
-    let inch = 72.0 * scale;
-    let mut k = 0;
-    loop {
-        let x = slide.min.x + k as f32 * inch / 4.0;
+    let plan = crate::units::ruler_scale(unit, scale);
+    let tick = plan.tick_pt() as f32 * scale;
+    if !(tick.is_finite() && tick > 0.0) {
+        return;
+    }
+    // A slide is at most 56 in wide, so this is far more ticks than a ruler ever needs.
+    const MAX_TICKS: u32 = 20_000;
+    let ink = Stroke::new(1.0, t.text_faint);
+    for k in 0..MAX_TICKS {
+        let x = slide.min.x + k as f32 * tick;
         if x > slide.max.x {
             break;
         }
-        let h = if k % 4 == 0 {
-            8.0
-        } else if k % 2 == 0 {
-            5.0
-        } else {
-            3.0
-        };
-        p.line_segment([pos2(x, top.max.y - h), pos2(x, top.max.y)], Stroke::new(1.0, t.text_faint));
-        if k % 4 == 0 {
-            p.text(pos2(x + 2.0, top.min.y + 1.0), Align2::LEFT_TOP, format!("{}", k / 4), theme::font(8.0), t.text_dim);
+        let h = plan.tick_height(k);
+        p.line_segment([pos2(x, top.max.y - h), pos2(x, top.max.y)], ink);
+        if let Some(n) = plan.label(k) {
+            p.text(pos2(x + 2.0, top.min.y + 1.0), Align2::LEFT_TOP, n, theme::font(8.0), t.text_dim);
         }
-        k += 1;
     }
-    let mut k = 0;
-    loop {
-        let y = slide.min.y + k as f32 * inch / 4.0;
+    for k in 0..MAX_TICKS {
+        let y = slide.min.y + k as f32 * tick;
         if y > slide.max.y {
             break;
         }
-        let w = if k % 4 == 0 {
-            8.0
-        } else if k % 2 == 0 {
-            5.0
-        } else {
-            3.0
-        };
-        p.line_segment([pos2(left.max.x - w, y), pos2(left.max.x, y)], Stroke::new(1.0, t.text_faint));
-        k += 1;
+        let w = plan.tick_height(k);
+        p.line_segment([pos2(left.max.x - w, y), pos2(left.max.x, y)], ink);
+        if k > 0
+            && let Some(n) = plan.label(k)
+        {
+            p.text(pos2(left.min.x + 1.0, y + 1.0), Align2::LEFT_TOP, n, theme::font(7.0), t.text_dim);
+        }
     }
 }
 

@@ -203,6 +203,16 @@ impl Backstage {
         }
     }
 
+    /// The Print page starting on `paper` (a [`deckcraft_engine::cmd::file::PAPERS`] id): the
+    /// region's, A4 in Japan and other A4 regions, Letter in the United States and Canada
+    /// ([`deckcraft_engine::Session::default_paper`]). An unknown id keeps Letter.
+    pub fn with_paper(mut self, paper: &'static str) -> Backstage {
+        if deckcraft_engine::cmd::file::PAPERS.iter().any(|p| p.0 == paper) {
+            self.print_paper = paper;
+        }
+        self
+    }
+
     /// Show `page`, as a click in the side menu does.
     pub fn go(&mut self, page: Page) {
         if self.page != page {
@@ -569,12 +579,15 @@ fn template_tiles(app: &mut SlideApp, ui: &mut Ui, query: &str, limit: usize) ->
     true
 }
 
-/// File name and folder of a recent path, split as text (nothing on disk is read).
+/// File name and folder of a recent path, split as text (nothing on disk is read) and composed
+/// for display: a macOS name with decomposed voiced kana (`フ` + U+3099) shows as `ブ`, as
+/// PowerPoint's Recent list does ([`deckcraft_engine::names::display_name`]). The list keeps
+/// the real path for opening.
 pub fn split_path(path: &str) -> (String, String) {
     let p = std::path::Path::new(path);
-    let name = p.file_name().and_then(|n| n.to_str()).unwrap_or(path).to_string();
-    let folder = p.parent().and_then(|f| f.to_str()).unwrap_or("").to_string();
-    (name, folder)
+    let name = p.file_name().and_then(|n| n.to_str()).unwrap_or(path);
+    let folder = p.parent().and_then(|f| f.to_str()).unwrap_or("");
+    (deckcraft_engine::names::display_name(name), deckcraft_engine::names::display_name(folder))
 }
 
 /// Recent presentations whose name matches `query`, newest first, at most `limit`. Opening one is
@@ -616,7 +629,8 @@ fn recent_list(app: &mut SlideApp, ui: &mut Ui, query: &str, limit: usize) {
                 p.text(pos2(visible_right - 82.0, rect.center().y), Align2::RIGHT_CENTER, "(missing)", theme::font(11.0), t.text_dim);
             }
         }
-        let resp = if missing { resp.on_hover_text(format!("{path} — this file can't be found")) } else { resp.on_hover_text(&path) };
+        let shown = deckcraft_engine::names::compose_kana(&path);
+        let resp = if missing { resp.on_hover_text(format!("{shown} — this file can't be found")) } else { resp.on_hover_text(shown.as_ref()) };
         // Remove from the list: a real labelled widget on top of the row, with a code-drawn icon
         // (a text glyph would need a font that has it).
         let x = ui.allocate_rect(
@@ -816,7 +830,7 @@ fn info(app: &mut SlideApp, ui: &mut Ui, bs: &mut Backstage) {
     let dirty = v.get("dirty").and_then(Value::as_bool).unwrap_or(false);
     ui.label(RichText::new(&title).font(theme::font(24.0)).color(t.accent));
     match &path {
-        Some(p) => dim(ui, p),
+        Some(p) => dim(ui, &deckcraft_engine::names::compose_kana(p)),
         None => dim(ui, "Not saved yet"),
     }
     if let Some(p) = &path {
@@ -891,7 +905,7 @@ fn info(app: &mut SlideApp, ui: &mut Ui, bs: &mut Backstage) {
                     }
                     ui.end_row();
                 }
-                row(ui, "Location", path.clone().unwrap_or_else(|| "Not saved yet".into()));
+                row(ui, "Location", path.as_deref().map_or_else(|| "Not saved yet".into(), deckcraft_engine::names::display_name));
             });
         });
     });
@@ -930,7 +944,7 @@ fn save_as(app: &mut SlideApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcom
     let t = Tokens::get(ui.ctx());
     let (title, path) = app.session.active().map(|d| (d.title(), d.path.clone())).unwrap_or_default();
     ui.label(RichText::new(&title).font(theme::font(15.0)).color(t.text));
-    dim(ui, path.as_deref().unwrap_or("Not saved yet"));
+    dim(ui, &path.as_deref().map_or(std::borrow::Cow::Borrowed("Not saved yet"), deckcraft_engine::names::compose_kana));
     ui.add_space(14.0);
     let current = SAVE_TYPES.iter().find(|s| s.0 == bs.file_type).map_or(SAVE_TYPES[0].1, |s| s.1);
     ui.horizontal(|ui| {
@@ -1090,9 +1104,9 @@ fn print(app: &mut SlideApp, ui: &mut Ui, bs: &mut Backstage) {
             // for notes pages and handouts.
             ui.add_enabled_ui(bs.print_layout != "slides", |ui| {
                 let paper = deckcraft_engine::cmd::file::PAPERS.iter().find(|p| p.0 == bs.print_paper).map_or("Letter", |p| p.1);
-                egui::ComboBox::from_id_salt("backstage_print_paper").width(240.0).selected_text(paper).show_ui(ui, |ui| {
+                egui::ComboBox::from_id_salt("backstage_print_paper").width(240.0).selected_text(tl!(paper)).show_ui(ui, |ui| {
                     for (id, label, _) in deckcraft_engine::cmd::file::PAPERS {
-                        if ui.selectable_label(bs.print_paper == id, label).clicked() {
+                        if ui.selectable_label(bs.print_paper == id, tl!(label)).clicked() {
                             bs.print_paper = id;
                         }
                     }
