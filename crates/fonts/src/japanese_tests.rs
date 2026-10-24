@@ -424,6 +424,8 @@ fn east_asian_fallback_follows_the_texts_tradition_genre_and_style() {
         (f.family.clone(), f.style.clone())
     };
     let fam = |cluster: &[char], cjk| pick(cluster, chain, "Regular", cjk).0;
+    // A sans run's kanji take a gothic, also when the tradition is only the system's (an en-US
+    // run, which PowerPoint draws in its own Mincho: see the notes in `fallback`).
     assert_eq!(fam(&['漢'], Some(CjkLocale::Japanese)), "IPAexGothic");
     assert_eq!(fam(&['漢'], Some(CjkLocale::SimplifiedChinese)), "WenQuanYi Micro Hei");
     assert_eq!(fam(&['한'], Some(CjkLocale::Japanese)), "NanumGothic", "Hangul is always Korean");
