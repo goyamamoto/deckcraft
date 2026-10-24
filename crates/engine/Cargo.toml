@@ -26,6 +26,8 @@ thiserror = { workspace = true }
 log = { workspace = true }
 image = { workspace = true }
 chrono = { workspace = true }
+# Legacy code pages (Shift_JIS, GBK, Big5, EUC-KR, Windows-1252) and UTF-16 for text outlines.
+encoding_rs = "0.8"
 
 [dev-dependencies]
 deckcraft-anim = { workspace = true }

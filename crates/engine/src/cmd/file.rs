@@ -168,7 +168,7 @@ fn open_other(name: &str, bytes: &[u8]) -> Result<(Presentation, Vec<String>)> {
     }
     let lower = name.to_ascii_lowercase();
     if lower.ends_with(".txt") || lower.ends_with(".md") {
-        let text = String::from_utf8_lossy(bytes);
+        let text = decode_text(bytes);
         let mut p = defaults::blank_presentation(defaults::WIDE, Default::default(), false);
         if lower.ends_with(".md") {
             deckcraft_format::markdown_to_slides(&mut p, &text);
@@ -181,6 +181,76 @@ fn open_other(name: &str, bytes: &[u8]) -> Result<(Presentation, Vec<String>)> {
         return Ok((p, vec![]));
     }
     Err(EngineError::Other(format!("{name}: not a presentation DeckCraft can read")))
+}
+
+/// The text of an outline file (`.txt`, `.md`), as PowerPoint reads a text outline: a UTF-8 or
+/// UTF-16 byte order mark says the encoding (and is not part of the text); UTF-16 without one is
+/// told by its zero bytes; bytes that are valid UTF-8 are UTF-8; anything else is in a legacy
+/// code page — the one of the East Asian editing language ([`deckcraft_fonts::default_cjk_locale`]:
+/// Shift_JIS for Japanese, the ANSI code page Notepad and Excel on Japanese Windows save), else
+/// Shift_JIS when the bytes read as it, else Windows-1252.
+pub fn decode_text(bytes: &[u8]) -> String {
+    decode_text_in(bytes, deckcraft_fonts::default_cjk_locale())
+}
+
+/// [`decode_text`] with `east_asian` as the East Asian editing language.
+pub fn decode_text_in(bytes: &[u8], east_asian: Option<deckcraft_fonts::CjkLocale>) -> String {
+    use deckcraft_fonts::CjkLocale;
+    use encoding_rs::{BIG5, EUC_KR, GBK, SHIFT_JIS, UTF_16BE, UTF_16LE, WINDOWS_1252};
+    if let Some(rest) = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
+        return String::from_utf8_lossy(rest).into_owned();
+    }
+    if let Some(rest) = bytes.strip_prefix(&[0xFF, 0xFE]) {
+        return UTF_16LE.decode_without_bom_handling(rest).0.into_owned();
+    }
+    if let Some(rest) = bytes.strip_prefix(&[0xFE, 0xFF]) {
+        return UTF_16BE.decode_without_bom_handling(rest).0.into_owned();
+    }
+    if let Some(le) = unmarked_utf16(bytes) {
+        return if le { UTF_16LE } else { UTF_16BE }.decode_without_bom_handling(bytes).0.into_owned();
+    }
+    if let Ok(s) = std::str::from_utf8(bytes) {
+        return s.to_string();
+    }
+    let own = east_asian.map(|l| match l {
+        CjkLocale::Japanese => SHIFT_JIS,
+        CjkLocale::SimplifiedChinese => GBK,
+        CjkLocale::TraditionalChinese => BIG5,
+        CjkLocale::Korean => EUC_KR,
+    });
+    if let Some(s) = own.and_then(|enc| enc.decode_without_bom_handling_and_without_replacement(bytes)) {
+        return s.into_owned();
+    }
+    // Shift_JIS without Japanese editing only when it reads as Japanese: Western text in
+    // Windows-1252 whose capitals (Ä Ö Ü É) would read as half-width katakana stays Western.
+    if east_asian != Some(CjkLocale::Japanese)
+        && let Some(s) = SHIFT_JIS.decode_without_bom_handling_and_without_replacement(bytes)
+        && (!s.chars().any(|c| ('\u{FF61}'..='\u{FF9F}').contains(&c)) || s.chars().any(|c| ('\u{3041}'..='\u{30FF}').contains(&c)))
+    {
+        return s.into_owned();
+    }
+    WINDOWS_1252.decode_without_bom_handling(bytes).0.into_owned()
+}
+
+/// UTF-16 without a byte order mark, told by its zero bytes: `Some(true)` little-endian,
+/// `Some(false)` big-endian. UTF-8 and legacy code pages have no zero byte in text, while UTF-16
+/// has one in every Latin letter, digit, tab and line break — after it in little-endian, before
+/// it in big-endian — so even a Japanese outline shows its order by the zeros of its line ends
+/// (a few kanji such as 一, U+4E00, have a zero byte on the other side).
+fn unmarked_utf16(b: &[u8]) -> Option<bool> {
+    if b.len() < 2 || !b.len().is_multiple_of(2) {
+        return None;
+    }
+    let sample = b.get(..b.len().min(64 << 10))?;
+    let even_zero = sample.iter().step_by(2).filter(|x| **x == 0).count();
+    let odd_zero = sample.iter().skip(1).step_by(2).filter(|x| **x == 0).count();
+    if odd_zero > 0 && odd_zero >= even_zero.saturating_mul(3) {
+        return Some(true);
+    }
+    if even_zero > 0 && even_zero >= odd_zero.saturating_mul(3) {
+        return Some(false);
+    }
+    None
 }
 
 /// Fill in each audio and video clip's length and picture size from its bytes: a `.pptx` doesn't

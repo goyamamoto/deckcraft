@@ -36,6 +36,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub use cmd::{CommandInfo, CommandSpec, command_specs, find_command};
+pub use deckcraft_fonts::CjkLocale;
+pub use deckcraft_fonts::cjk::east_asian_of as east_asian_editing_language;
 pub use deckcraft_geom as geom;
 pub use deckcraft_media as media;
 pub use deckcraft_model as model;
@@ -477,6 +479,13 @@ pub struct Session {
     /// ends) instead of Windows and Linux (Ctrl+arrows by word or paragraph). Defaults to the
     /// platform DeckCraft was built for.
     pub mac_keys: bool,
+    /// The East Asian editing language: the first Japanese, Chinese or Korean language among the
+    /// system's preferred languages, which the desktop app sets at start
+    /// ([`Session::set_east_asian_editing`]). East Asian text typed, committed by the input
+    /// method or pasted as plain text into a run of another language is tagged with it (as
+    /// PowerPoint tags text with the input language). `None` (tests, headless sessions, systems
+    /// without one) tags Han text as Japanese, kana as Japanese and Hangul as Korean.
+    pub east_asian_editing: Option<CjkLocale>,
     /// Command panics caught by the guard (the document was rolled back); soak tests require 0.
     pub panics_caught: u64,
     /// Presentations a host read off the UI thread, waiting for `file.adopt` (by token).
@@ -510,6 +519,7 @@ impl Session {
             media_status: Default::default(),
             gif_paused: Default::default(),
             mac_keys: cfg!(target_os = "macos"),
+            east_asian_editing: None,
             panics_caught: 0,
             loaded: vec![],
             next_loaded: 0,
@@ -531,6 +541,14 @@ impl Session {
     pub(crate) fn take_loaded(&mut self, token: u64) -> Option<cmd::file::LoadedFile> {
         let i = self.loaded.iter().position(|(t, _)| *t == token)?;
         Some(self.loaded.remove(i).1)
+    }
+    /// Set the East Asian editing language ([`Session::east_asian_editing`]) and, for the whole
+    /// process, the tradition Han text without a language of its own is drawn in
+    /// ([`deckcraft_fonts::set_default_cjk_locale`]). The desktop app calls this once at start;
+    /// tests set the field alone, so they don't change each other's drawing.
+    pub fn set_east_asian_editing(&mut self, l: Option<CjkLocale>) {
+        self.east_asian_editing = l;
+        deckcraft_fonts::set_default_cjk_locale(l);
     }
     /// A session with one new presentation open.
     pub fn with_new() -> Self {
@@ -785,5 +803,7 @@ pub(crate) fn push_undo(st: &mut DocState, e: HistoryEntry) {
 mod soak_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_ja_editing;
 #[cfg(test)]
 mod tests_keys;

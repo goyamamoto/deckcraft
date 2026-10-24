@@ -13,6 +13,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
+pub use deckcraft_model::words::is_east_asian;
+
 type Flag = u32;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -357,7 +359,8 @@ impl Dictionary {
 
     /// Is `word` spelt correctly? Capitalised and upper-case forms of a lower-case word pass.
     pub fn check(&self, word: &str) -> bool {
-        if word.is_empty() || word.chars().all(|c| !c.is_alphabetic()) {
+        // East Asian text is never checked against a Latin dictionary (see [`is_east_asian`]).
+        if word.is_empty() || word.chars().all(|c| !c.is_alphabetic()) || word.chars().any(is_east_asian) {
             return true;
         }
         if self.check_exact(word) {
@@ -681,16 +684,28 @@ pub struct Word {
     pub repeated: Option<usize>,
 }
 
+/// The language a run suggests for text that names none, when spelling picks a deck's default:
+/// its `lang`, or for a run in an East Asian language (whose own text is never checked) the
+/// language it was typed alongside (`altLang`, `en-US` for Japanese typed in an English deck).
+pub fn latin_lang_of(props: &deckcraft_model::RunProps) -> Option<String> {
+    let latin = |l: &Option<String>| l.clone().filter(|l| !l.trim().is_empty() && deckcraft_fonts::CjkLocale::from_lang(l).is_none());
+    latin(&props.lang).or_else(|| latin(&props.alt_lang))
+}
+
 /// The words of `p`, each with its run's language (`lang` on the run, else `default`). Words
 /// with digits are skipped; apostrophes inside a word belong to it; hyphenated words are checked
-/// part by part.
+/// part by part. East Asian text — kana, kanji, Hangul, their punctuation and the full-width
+/// forms ([`is_east_asian`]) — is never a word to check, and it ends a Latin word as a space
+/// does: Office's proofing checks only `abc` in `テストabc`, only `thsi` in `を使うthsi文章`, and
+/// never the full-width `ａｂｃ` of `ａｂｃdef` (observed in Word for Mac by WordCraft; PowerPoint
+/// shares Office's proofing).
 pub fn paragraph_words(p: &deckcraft_model::Paragraph, default: &str) -> Vec<Word> {
     let mut chars: Vec<(char, usize)> = vec![];
     for (ri, r) in p.runs.iter().enumerate() {
         chars.extend(r.content().chars().map(|c| (c, ri)));
     }
     let lang_of = |ri: usize| p.runs.get(ri).and_then(|r| r.props.lang.clone()).filter(|l| !l.is_empty()).unwrap_or_else(|| default.to_string());
-    let inside = |c: char| c.is_alphanumeric() || c == '\'' || c == '’' || c == '-';
+    let inside = |c: char| (c.is_alphanumeric() && !is_east_asian(c)) || c == '\'' || c == '’' || c == '-';
     let mut out = vec![];
     let mut i = 0;
     while i < chars.len() {
@@ -868,6 +883,36 @@ SFX D Y 1\nSFX D 0 ed/S .\n";
                 ("l'été", "de-DE", 34)
             ]
         );
+    }
+
+    /// Japanese ends a Latin word as a space does and is never checked itself (Office's
+    /// proofing: `テストabc` checks `abc`, `を使うthsi文章` checks `thsi`, `ａｂｃdef` checks `def`).
+    #[test]
+    fn east_asian_text_bounds_words_and_is_never_checked() {
+        use deckcraft_model::Paragraph;
+        let p = Paragraph::new("テストabc を使うthsi文章 ａｂｃdef 日本語のスライド、PowerPointで資料を作成。한국어x");
+        let w: Vec<(String, usize)> = paragraph_words(&p, "en-US").into_iter().map(|w| (w.text, w.start)).collect();
+        assert_eq!(w, vec![("abc".into(), 3), ("thsi".into(), 10), ("def".into(), 20), ("PowerPoint".into(), 33), ("x".into(), 53)]);
+        // With a dictionary for the run's language, only the Latin typo is flagged.
+        install("x-ea-proof", d());
+        let p = Paragraph::new("テストslide を使うthsi文章 ａｂｃslides 日本語のスライド");
+        let bad: Vec<String> = misspelt(&p, "x-ea-proof", &[]).into_iter().map(|w| w.text).collect();
+        assert_eq!(bad, vec!["thsi"]);
+        // Japanese typed into an English deck points the deck's default back to English.
+        let props = |lang: Option<&str>, alt: Option<&str>| deckcraft_model::RunProps {
+            lang: lang.map(String::from),
+            alt_lang: alt.map(String::from),
+            ..Default::default()
+        };
+        assert_eq!(latin_lang_of(&props(Some("ja-JP"), Some("en-US"))).as_deref(), Some("en-US"));
+        assert_eq!(latin_lang_of(&props(Some("en-GB"), Some("ja-JP"))).as_deref(), Some("en-GB"));
+        assert_eq!(latin_lang_of(&props(Some("ja-JP"), None)), None);
+        assert_eq!(latin_lang_of(&props(None, None)), None);
+        let d = d();
+        assert!(d.check("日本語"));
+        assert!(d.check("ａｂｃ"));
+        assert!(d.check("テストthsi"));
+        assert!(!d.check("thsi"));
     }
 
     #[test]

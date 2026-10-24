@@ -16,7 +16,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Find",
             ["Home", "Editing"],
             None,
-            "{text, matchCase?: bool, wholeWords?: bool} → [{slide, shape (null = notes), cell?: [row, col], para, start, end}] (char offsets in the paragraph)",
+            "{text, matchCase?: bool, wholeWords?: bool, matchWidth?: bool (true keeps half- and full-width forms apart)} → [{slide, shape (null = notes), cell?: [row, col], para, start, end}] (char offsets in the paragraph)",
             has_doc,
             find
         ),
@@ -25,7 +25,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Replace",
             ["Home", "Editing"],
             None,
-            "{text, with, matchCase?, wholeWords?, at?: a text.find match (replace just that one; default: replace all)} → {replaced}",
+            "{text, with, matchCase?, wholeWords?, matchWidth?, at?: a text.find match (replace just that one; default: replace all)} → {replaced}",
             has_doc,
             replace
         ),
@@ -71,37 +71,151 @@ struct Opts {
     pat: Vec<char>,
     case: bool,
     whole: bool,
+    /// PowerPoint's Match half/full width forms (shown with East Asian editing): the half- and
+    /// full-width forms of a character stay apart. Off (the default), they match each other (see
+    /// [`width_key`]).
+    width: bool,
 }
 
 impl Opts {
     fn from(p: &Value, cmd: &str) -> Result<Self> {
-        let pat: Vec<char> = str_param(p, "text").unwrap_or("").chars().collect();
-        if pat.is_empty() {
+        let text = str_param(p, "text").unwrap_or("");
+        if text.is_empty() {
             return Err(bad(cmd, "missing `text`"));
         }
-        Ok(Opts { pat, case: bool_or(p, "matchCase", false), whole: bool_or(p, "wholeWords", false) })
+        Ok(Opts::new(text, bool_or(p, "matchCase", false), bool_or(p, "wholeWords", false), bool_or(p, "matchWidth", false)))
+    }
+    fn new(text: &str, case: bool, whole: bool, width: bool) -> Self {
+        // Folding widths, a half-width kana with its sound mark (ｶﾞ) stands for one character.
+        let pat = if width { text.chars().collect() } else { compose_half_width(text) };
+        Opts { pat, case, whole, width }
     }
     fn eq(&self, a: char, b: char) -> bool {
+        let (a, b) = if self.width { (a, b) } else { (width_key(a), width_key(b)) };
         a == b || (!self.case && a.to_lowercase().eq(b.to_lowercase()))
+    }
+    /// Where a match of the pattern that starts at `i` ends, if one does. Folding widths, a
+    /// half-width kana and the sound mark after it match the voiced kana (ｶﾞ = ガ), so a match
+    /// can be longer than the pattern.
+    fn match_at(&self, text: &[char], i: usize) -> Option<usize> {
+        let mut k = i;
+        for &p in &self.pat {
+            let c = *text.get(k)?;
+            let voiced = if self.width { None } else { text.get(k + 1).and_then(|m| voiced_half_width(c, *m)) };
+            k += match voiced {
+                Some(v) if self.eq(v, p) => 2,
+                _ if self.eq(c, p) => 1,
+                _ => return None,
+            };
+        }
+        Some(k)
     }
     /// Non-overlapping matches as char ranges.
     fn matches(&self, text: &[char]) -> Vec<(usize, usize)> {
-        let n = self.pat.len();
         let word = |c: Option<&char>| c.is_some_and(|c| c.is_alphanumeric() || *c == '_');
         let mut out = vec![];
         let mut i = 0;
-        while i + n <= text.len() {
-            let hit = text[i..i + n].iter().zip(&self.pat).all(|(a, b)| self.eq(*a, *b))
-                && (!self.whole || (!word(i.checked_sub(1).and_then(|j| text.get(j))) && !word(text.get(i + n))));
-            if hit {
-                out.push((i, i + n));
-                i += n;
-            } else {
-                i += 1;
+        while i < text.len() {
+            let whole = |e: usize| !self.whole || (!word(i.checked_sub(1).and_then(|j| text.get(j))) && !word(text.get(e)));
+            match self.match_at(text, i).filter(|&e| e > i && whole(e)) {
+                Some(e) => {
+                    out.push((i, e));
+                    i = e;
+                }
+                None => i += 1,
             }
         }
         out
     }
+}
+
+/// Half-width katakana and punctuation (U+FF61…U+FF9F) as their full-width forms, in code
+/// point order (Unicode's `<narrow>` decompositions).
+const FULL_OF_HALF: &str =
+    "。「」、・ヲァィゥェォャュョッーアイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワン゛゜";
+
+/// Katakana and their voiced forms (written with ﾞ in half-width text).
+const VOICED: &[(char, char)] = &[
+    ('カ', 'ガ'),
+    ('キ', 'ギ'),
+    ('ク', 'グ'),
+    ('ケ', 'ゲ'),
+    ('コ', 'ゴ'),
+    ('サ', 'ザ'),
+    ('シ', 'ジ'),
+    ('ス', 'ズ'),
+    ('セ', 'ゼ'),
+    ('ソ', 'ゾ'),
+    ('タ', 'ダ'),
+    ('チ', 'ヂ'),
+    ('ツ', 'ヅ'),
+    ('テ', 'デ'),
+    ('ト', 'ド'),
+    ('ハ', 'バ'),
+    ('ヒ', 'ビ'),
+    ('フ', 'ブ'),
+    ('ヘ', 'ベ'),
+    ('ホ', 'ボ'),
+    ('ウ', 'ヴ'),
+    ('ワ', 'ヷ'),
+    ('ヲ', 'ヺ'),
+];
+/// Katakana and their semi-voiced forms (written with ﾟ in half-width text).
+const SEMI_VOICED: &[(char, char)] = &[('ハ', 'パ'), ('ヒ', 'ピ'), ('フ', 'プ'), ('ヘ', 'ペ'), ('ホ', 'ポ')];
+
+/// The full-width form of a half-width katakana or punctuation mark.
+fn full_of_half(c: char) -> Option<char> {
+    let i = (c as u32).checked_sub(0xFF61)?;
+    FULL_OF_HALF.chars().nth(usize::try_from(i).ok()?)
+}
+
+/// The character the half- and full-width forms of `c` share, which Find compares when half-
+/// and full-width forms match each other (Match half/full width forms off, the default):
+/// full-width ASCII is ASCII (ＡＢＣ = ABC, １ = 1, （ = `(`), half-width katakana is
+/// katakana (ｶﾀｶﾅ = カタカナ, ｰ = ー, ･ = ・), ￥ is `\` and the ideographic space is a space.
+fn width_key(c: char) -> char {
+    match c {
+        '\u{FF01}'..='\u{FF5E}' => char::from_u32(c as u32 - 0xFEE0).unwrap_or(c),
+        '\u{FFE5}' => '\\',
+        '\u{3000}' => ' ',
+        '\u{FF61}'..='\u{FF9F}' => full_of_half(c).unwrap_or(c),
+        _ => c,
+    }
+}
+
+/// The voiced kana a half-width katakana `c` and the half-width sound mark `mark` (ﾞ or ﾟ)
+/// after it stand for: ｶﾞ is ガ, ﾊﾟ is パ.
+fn voiced_half_width(c: char, mark: char) -> Option<char> {
+    let semi = match mark {
+        '\u{FF9E}' => false,
+        '\u{FF9F}' => true,
+        _ => return None,
+    };
+    let base = full_of_half(c).filter(|_| ('\u{FF66}'..='\u{FF9D}').contains(&c))?;
+    let table = if semi { SEMI_VOICED } else { VOICED };
+    table.iter().find(|(b, _)| *b == base).map(|(_, v)| *v)
+}
+
+/// `text` with each half-width kana and the sound mark after it that stand for one voiced kana
+/// composed (ｶﾞｲﾄﾞ → ガｲド), so every pattern character is one character of the text, or a
+/// half-width pair.
+fn compose_half_width(text: &str) -> Vec<char> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = Vec::with_capacity(chars.len());
+    let mut i = 0;
+    while let Some(&c) = chars.get(i) {
+        match chars.get(i + 1).and_then(|m| voiced_half_width(c, *m)) {
+            Some(v) => {
+                out.push(v);
+                i += 2;
+            }
+            None => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    out
 }
 
 fn para_chars(p: &Paragraph) -> Vec<char> {
@@ -211,7 +325,38 @@ mod tests {
     use deckcraft_model::{Run, RunProps};
 
     fn opts(t: &str, case: bool, whole: bool) -> Opts {
-        Opts { pat: t.chars().collect(), case, whole }
+        Opts::new(t, case, whole, false)
+    }
+
+    fn found(pat: &str, text: &str, case: bool, width: bool) -> Vec<(usize, usize)> {
+        Opts::new(pat, case, false, width).matches(&text.chars().collect::<Vec<char>>())
+    }
+
+    /// Half- and full-width forms match each other unless Match half/full width forms is on.
+    #[test]
+    fn half_and_full_width_forms_match_unless_kept_apart() {
+        assert_eq!(found("abc", "ＡＢＣ abc", false, false), vec![(0, 3), (4, 7)]);
+        assert_eq!(found("ABC", "ＡＢＣ abc", true, false), vec![(0, 3)], "match case still holds");
+        assert_eq!(found("ＡＢＣ", "ABC", true, false), vec![(0, 3)]);
+        assert_eq!(found("abc", "ＡＢＣ abc", false, true), vec![(4, 7)]);
+        assert_eq!(found("カタカナ", "ｶﾀｶﾅとカタカナ", false, false), vec![(0, 4), (5, 9)]);
+        assert_eq!(found("ｶﾀｶﾅ", "カタカナ", false, false), vec![(0, 4)]);
+        assert!(found("カタカナ", "ｶﾀｶﾅ", false, true).is_empty());
+        // A half-width kana and its sound mark are one voiced kana: the match covers both.
+        assert_eq!(found("ガイド", "ｶﾞｲﾄﾞ", false, false), vec![(0, 5)]);
+        assert_eq!(found("ｶﾞｲﾄﾞ", "ガイドとｶﾞｲﾄﾞ", false, false), vec![(0, 3), (4, 9)]);
+        assert_eq!(found("パ", "ﾊﾟﾊﾞﾊ", false, false), vec![(0, 2)]);
+        assert_eq!(found("ハ", "ﾊﾟﾊﾞﾊ", false, false), vec![(0, 1), (2, 3), (4, 5)], "ﾊ alone is ハ");
+        assert!(found("ガ", "カ", false, false).is_empty());
+        assert_eq!(found("\\", "￥100", false, false), vec![(0, 1)]);
+        assert!(found("\\", "¥100", false, false).is_empty(), "¥ is not a width form of \\");
+        assert_eq!(found("a b", "a\u{3000}b", false, false), vec![(0, 3)]);
+        assert_eq!(found("ー・", "ｰ･", false, false), vec![(0, 2)]);
+        assert!(found("。", ".", false, false).is_empty(), "。 is not a full stop");
+        assert_eq!((full_of_half('\u{FF61}'), full_of_half('\u{FF9D}'), full_of_half('\u{FF9F}')), (Some('。'), Some('ン'), Some('゜')));
+        assert_eq!((full_of_half('\u{FFA0}'), full_of_half('a')), (None, None));
+        // Whole words count the text the match covers.
+        assert_eq!(Opts::new("ｶﾞ", false, true, false).matches(&"ガ ｶﾞx ｶﾞ".chars().collect::<Vec<_>>()), vec![(0, 1), (6, 8)]);
     }
 
     #[test]
