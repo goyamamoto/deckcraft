@@ -2361,9 +2361,16 @@ fn layout_scaled(ctx: &Ctx, shape: &Shape, body: &TextBody, bp: &BodyProps, opts
                 let body = line_cells.get(..body_n).unwrap_or(line_cells);
                 filled = adv.get_mut(..body_n).is_some_and(|a| justify(a, body, &p.styles, rl.start, slack));
             }
-            if align == Align::Distributed && n > 1 {
-                for a in adv.iter_mut().take(n - 1) {
-                    *a += slack / (n - 1) as f64;
+            // Distributed: an equal gap after each character but the last, a character being a
+            // whole grapheme (a kana with a combining sound mark gets one gap, not two).
+            let starts: Vec<usize> = (1..n).filter(|&k| line_cells.get(k).is_some_and(|c| c.boundary)).collect();
+            let one_char = starts.is_empty();
+            if align == Align::Distributed && !one_char {
+                let each = slack / starts.len() as f64;
+                for k in starts {
+                    if let Some(a) = adv.get_mut(k - 1) {
+                        *a += each;
+                    }
                 }
                 filled = true;
             }
@@ -2378,7 +2385,7 @@ fn layout_scaled(ctx: &Ctx, shape: &Shape, body: &TextBody, bp: &BodyProps, opts
                     Align::Left => box_l,
                     Align::Right => box_r - line_w,
                     Align::Center => box_l + (box_r - box_l - line_w) / 2.0,
-                    Align::Distributed if n <= 1 => box_l + slack / 2.0,
+                    Align::Distributed if one_char => box_l + slack / 2.0,
                     // Justified lines that aren't stretched (the last one) sit at the start edge.
                     Align::Justify | Align::JustLow | Align::Distributed if p.rtl => box_r - line_w,
                     Align::Justify | Align::JustLow | Align::Distributed => box_l,
