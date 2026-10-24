@@ -634,12 +634,15 @@ impl SlideApp {
         self
     }
 
+    /// Show `msg` in the status bar for a while. It is kept in English (the control channel and
+    /// MCP read it) and translated when painted ([`i18n::message`]: an `@msg` row or template).
     pub fn set_status(&mut self, msg: impl Into<String>) {
         self.status = Some((msg.into(), now_ms()));
     }
 
     /// A message that must be seen wherever the user is: a toast, which also shows over the start
-    /// screen and the File tab, where there is no status bar.
+    /// screen and the File tab, where there is no status bar. Kept in English and translated when
+    /// painted, as [`SlideApp::set_status`]'s.
     pub fn notify(&mut self, msg: impl Into<String>) {
         self.toast = Some(toast::Toast { text: msg.into(), at: now_ms() });
     }
@@ -789,8 +792,8 @@ impl SlideApp {
             "outline" | "txt" => ("txt", "outline", false),
             "deckcraft" => ("deckcraft", "deckcraft", false),
             "gif" => ("gif", "gif", false),
-            other => {
-                self.set_status(format!("DeckCraft can't export “{other}”"));
+            kind => {
+                self.set_status(format!("DeckCraft can't export “{kind}”"));
                 return false;
             }
         };
@@ -1333,7 +1336,10 @@ impl SlideApp {
         };
         let Some(path) = pick("open") else { return };
         match self.session.execute("slide.reuse", &json!({"path": path, "keepFormatting": keep})) {
-            Ok(r) => self.set_status(format!("Inserted {} slides from {path}", r["slides"])),
+            Ok(r) => {
+                let n = r["slides"].as_u64().unwrap_or(0);
+                self.set_status(format!("Inserted {n} slides from {path}"));
+            }
             Err(e) => self.set_status(e.to_string()),
         }
     }

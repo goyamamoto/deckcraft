@@ -310,6 +310,104 @@ fn untranslated_interface_text_in_panes() {
     eprintln!("{} interface texts in the task panes and the Slide Sorter are drawn untranslated (wrap them in tl!):\n{report}", found.len());
 }
 
+/// The same list for the window's other surfaces: every page of the File tab, the slide show (its
+/// toolbar, rehearsal timer, Presenter View, See All Slides, Reading View, Go to Slide and end
+/// screen), a status message and a toast. The File tab's side menu and the show's slide counter
+/// are enforced; the rest is printed. Run it with
+/// `cargo test -p deckcraft-ui-egui untranslated_shell_text -- --nocapture`.
+#[test]
+fn untranslated_shell_text() {
+    let ctx = egui::Context::default();
+    let mut session = deckcraft_engine::Session::new();
+    deckcraft_engine::sample::open_sample(&mut session).unwrap();
+    let mut app = SlideApp::new(session, crate::Services::default());
+    frames(&ctx, &mut app, 3);
+    // The document's text, font and theme names and the product's name are not interface text.
+    let mut names: BTreeSet<String> =
+        app.session.active().map(|d| crate::uifonts::ui_text(d).lines().map(str::to_string).collect()).unwrap_or_default();
+    names.extend(deckcraft_fonts::FontDb::global().families());
+    names.extend(deckcraft_model::theme::builtin_themes().into_iter().map(|t| t.name));
+    names.insert("DeckCraft".into());
+    pseudo::set(true);
+    let mut found: BTreeMap<String, BTreeSet<&str>> = BTreeMap::new();
+    let mut note = |surface: &'static str, drawn: &[String]| {
+        for text in drawn.iter().filter(|t| english_words(t)) {
+            let plain = pseudo::unmarked(text);
+            let plain = plain.trim();
+            if !names.contains(plain) {
+                found.entry(plain.to_string()).or_default().insert(surface);
+            }
+        }
+    };
+    for page in crate::backstage::Page::ALL {
+        app.run("app.backstage", json!({ "page": page.id() })).unwrap();
+        let drawn = frames(&ctx, &mut app, 2);
+        let (top, bottom) = crate::backstage::entries(true);
+        for nav in top.into_iter().chain(bottom) {
+            let label = match nav {
+                crate::backstage::Nav::Page(p) => p.label(),
+                crate::backstage::Nav::Save => "Save",
+                crate::backstage::Nav::Close => "Close",
+                crate::backstage::Nav::Options => "Options",
+            };
+            assert!(drawn.contains(&format!("⟦{label}⟧")), "the File tab's {label} is drawn through translation ({} page)", page.id());
+        }
+        note(page.id(), &drawn);
+    }
+    app.close_backstage();
+    type Setup = fn(&mut crate::show::Show);
+    let shows: [(&'static str, Setup); 6] = [
+        ("show", |s| s.rehearse = true),
+        ("presenter", |s| s.presenter = true),
+        ("grid", |s| s.grid = true),
+        ("reading", |s| s.reading = true),
+        ("zoom", |s| s.zoom_arm = true),
+        ("end", |s| s.ended = true),
+    ];
+    for (surface, setup) in shows {
+        let doc = app.session.active().map(|d| d.doc.clone()).unwrap();
+        let mut show = crate::show::Show::new(&doc, 0, false, false);
+        setup(&mut show);
+        app.show = Some(show);
+        let drawn = frames(&ctx, &mut app, 3);
+        if surface == "reading" {
+            assert!(drawn.iter().any(|t| t.starts_with("⟦Slide ") && t.contains(" of ")), "the Reading View's slide counter is translated");
+        }
+        note(surface, &drawn);
+        app.show = None;
+    }
+    // Go to Slide's digits, typed during the show.
+    let doc = app.session.active().map(|d| d.doc.clone()).unwrap();
+    app.show = Some(crate::show::Show::new(&doc, 0, false, false));
+    frames(&ctx, &mut app, 1);
+    let input = egui::RawInput {
+        events: vec![egui::Event::Key { key: egui::Key::Num2, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }],
+        time: Some(TIME.get() + 0.1),
+        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(2560.0, 900.0))),
+        ..Default::default()
+    };
+    TIME.set(TIME.get() + 0.1);
+    let mut out = ctx.run_ui(input, |ui| {
+        app.logic(ui.ctx());
+        app.ui(ui);
+    });
+    out.textures_delta.clear();
+    let drawn = frames(&ctx, &mut app, 1);
+    note("goto", &drawn);
+    app.show = None;
+    app.set_status("Saved");
+    app.toast =
+        crate::toast::missing_fonts_message(&["Qqq Sans".into(), "Zzz Serif".into()]).map(|text| crate::toast::Toast { text, at: crate::now_ms() });
+    let drawn = frames(&ctx, &mut app, 2);
+    note("messages", &drawn);
+    pseudo::set(false);
+    let mut report = String::new();
+    for (text, surfaces) in &found {
+        report.push_str(&format!("{text:?}  [{}]\n", surfaces.iter().copied().collect::<Vec<_>>().join(", ")));
+    }
+    eprintln!("{} texts on the File tab, the slide show and the messages are drawn untranslated (wrap them in tl!):\n{report}", found.len());
+}
+
 /// The missing-translation report (craft-i18n's integration recipe): the embedded catalogs'
 /// problems, and per language the interface strings with no translation (translators fill them in
 /// craft-i18n's `deckcraft.tsv`). A missing translation shows in English, so the report never
