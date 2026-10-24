@@ -186,6 +186,125 @@ fn replace_run(r: &mut deckcraft_model::text::RunProps, fix: &mut dyn FnMut(&mut
     }
 }
 
+/// The languages whose font names the font list knows each family by, besides its English name:
+/// Japanese, Simplified and Traditional Chinese and Korean (`name` table records in those
+/// languages). A family with a name in one of them is an East Asian font.
+pub const FONT_NAME_LANGUAGES: [&str; 4] = ["ja", "zh-Hans", "zh-Hant", "ko"];
+
+/// One installed family in the font box and the Font dialog's lists.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FontChoice {
+    /// The name the list shows, and the one written when it is picked: the family's name in the
+    /// interface language when the font has one (游ゴシック, ヒラギノ角ゴシック in a Japanese
+    /// interface), else its English name. Japanese PowerPoint writes fonts by these names.
+    pub name: String,
+    /// Its English family name (the font's own name when it has no English one).
+    pub english: String,
+    /// Every name typing finds it by: the English name, then its Japanese, Chinese and Korean
+    /// names, each once.
+    pub names: Vec<String>,
+    /// A Japanese, Chinese or Korean font, listed for Asian text: it has a name in one of those
+    /// languages, or its name is a CJK font's ([`deckcraft_fonts::is_cjk_family`]).
+    pub east_asian: bool,
+}
+
+/// The font list for an interface in `ui_lang` (`en`, `ja`, `zh-Hans`…): `families` (English
+/// names, as [`FontDb::families`] lists them) with each one's names in other languages
+/// (`localized`: per language, (English, localized) pairs as [`FontDb::localized_names`] gives
+/// them). Hidden system faces (a name starting with `.`) are left out; each family is shown by its
+/// name in `ui_lang` when it has one; the list is sorted by the shown name, ignoring case, and a
+/// shown name appears once.
+pub fn font_choices(families: &[String], localized: &[(String, Vec<(String, String)>)], ui_lang: &str) -> Vec<FontChoice> {
+    use deckcraft_fonts::{fold_font_name, name_language_matches};
+    use std::collections::{HashMap, HashSet};
+    let mut names_of: HashMap<String, Vec<(&str, &str)>> = HashMap::new();
+    for (lang, pairs) in localized {
+        for (english, local) in pairs {
+            let local = local.trim();
+            if !local.is_empty() {
+                names_of.entry(fold_font_name(english)).or_default().push((lang.as_str(), local));
+            }
+        }
+    }
+    let cjk_lang = |l: &str| FONT_NAME_LANGUAGES.iter().any(|c| name_language_matches(c, l));
+    let mut out: Vec<FontChoice> = Vec::with_capacity(families.len());
+    let mut seen = HashSet::new();
+    for family in families {
+        let english = family.trim();
+        if english.is_empty() || english.starts_with('.') {
+            continue;
+        }
+        let locals = names_of.get(&fold_font_name(english)).map(Vec::as_slice).unwrap_or(&[]);
+        let shown = locals.iter().find(|(l, _)| name_language_matches(ui_lang, l)).map_or(english, |(_, n)| *n);
+        if !seen.insert(fold_font_name(shown)) {
+            continue;
+        }
+        let mut names = vec![english.to_string()];
+        for (_, n) in locals {
+            if !names.iter().any(|m| m == n) {
+                names.push((*n).to_string());
+            }
+        }
+        let east_asian = locals.iter().any(|(l, _)| cjk_lang(l)) || names.iter().any(|n| deckcraft_fonts::is_cjk_family(n));
+        out.push(FontChoice { name: shown.to_string(), english: english.to_string(), names, east_asian });
+    }
+    out.sort_by_cached_key(|c| c.name.to_lowercase());
+    out
+}
+
+/// [`font_choices`] for the fonts this machine has (bundled, installed and added), named for an
+/// interface in `ui_lang`.
+pub fn installed_font_choices(ui_lang: &str) -> Vec<FontChoice> {
+    use deckcraft_fonts::name_language_matches;
+    let db = FontDb::global();
+    let mut localized: Vec<(String, Vec<(String, String)>)> = FONT_NAME_LANGUAGES.iter().map(|l| ((*l).to_string(), db.localized_names(l))).collect();
+    let english_ui = ui_lang.trim().is_empty() || name_language_matches("en", ui_lang);
+    if !english_ui && !FONT_NAME_LANGUAGES.iter().any(|l| name_language_matches(ui_lang, l)) {
+        localized.push((ui_lang.to_string(), db.localized_names(ui_lang)));
+    }
+    font_choices(&db.families(), &localized, ui_lang)
+}
+
+/// A theme font in the font box's theme section: the theme's heading or body font for Latin
+/// text, or for Asian text.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThemeFontChoice {
+    /// The face the theme names.
+    pub name: String,
+    /// The theme reference written when it is picked (`+mj-lt`, `+mn-lt`, `+mj-ea`, `+mn-ea`), so
+    /// the text follows a later change of theme fonts, as PowerPoint's theme fonts do.
+    pub reference: String,
+    /// `headings` or `body`.
+    pub role: String,
+    /// The Asian text font (`a:ea`).
+    pub east_asian: bool,
+}
+
+/// The theme section of the font list: the heading and body fonts for Latin text and, with East
+/// Asian editing (`east_asian`), those for Asian text: the theme's `a:ea` faces, or where it names
+/// none, its font for that language's script (`Jpan` for Japanese), the one the text is drawn in.
+pub fn theme_font_choices(fonts: &deckcraft_model::theme::FontScheme, east_asian: Option<deckcraft_fonts::CjkLocale>) -> Vec<ThemeFontChoice> {
+    let mut out = Vec::new();
+    let mut add = |name: &str, reference: &str, role: &str, east_asian: bool| {
+        let name = name.trim();
+        if !name.is_empty() {
+            out.push(ThemeFontChoice { name: name.to_string(), reference: reference.to_string(), role: role.to_string(), east_asian });
+        }
+    };
+    add(&fonts.major.latin, "+mj-lt", "headings", false);
+    add(&fonts.minor.latin, "+mn-lt", "body", false);
+    if let Some(cjk) = east_asian {
+        let ea = |set: &deckcraft_model::theme::FontSet| -> String {
+            if set.ea.trim().is_empty() { set.script(cjk.theme_script()).unwrap_or_default().to_string() } else { set.ea.clone() }
+        };
+        add(&ea(&fonts.major), "+mj-ea", "headings", true);
+        add(&ea(&fonts.minor), "+mn-ea", "body", true);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
@@ -317,5 +436,85 @@ mod tests {
         .unwrap();
         s.execute("font.replace", &json!({"from": "Old EA", "to": "BIZ UDMincho"})).unwrap();
         assert_eq!(s.doc().unwrap().doc.default_text_style.default.clone().and_then(|d| d.run.font_ea).as_deref(), Some("BIZ UDMincho"));
+    }
+
+    fn strings(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    fn pairs(v: &[(&str, &str)]) -> Vec<(String, String)> {
+        v.iter().map(|(a, b)| ((*a).to_string(), (*b).to_string())).collect()
+    }
+
+    /// Made-up families: a Japanese one with Japanese names (typographic and Windows family), a
+    /// Korean one, a CJK font known by name only, Latin ones and a hidden system face.
+    fn sample_choices(ui: &str) -> Vec<FontChoice> {
+        let families = strings(&["Qqq Gothic", "Qqq Gothic W3", "Inter", ".Qqq Interface", "Qqq Hangul", "BIZ UDPGothic", "Lato", "  "]);
+        let localized = vec![
+            ("ja".to_string(), pairs(&[("Qqq Gothic", "キューゴシック"), ("Qqq Gothic W3", "キューゴシック W3"), ("qqq hangul", "キュー韓国")])),
+            ("zh-Hans".to_string(), Vec::new()),
+            ("zh-Hant".to_string(), Vec::new()),
+            ("ko".to_string(), pairs(&[("Qqq Hangul", "큐 고딕")])),
+        ];
+        font_choices(&families, &localized, ui)
+    }
+
+    #[test]
+    fn the_font_list_names_families_in_the_interface_language() {
+        let ja = sample_choices("ja");
+        let shown: Vec<&str> = ja.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(
+            shown,
+            ["BIZ UDPGothic", "Inter", "Lato", "キューゴシック", "キューゴシック W3", "キュー韓国"],
+            "sorted by the shown name; the hidden face left out"
+        );
+        let gothic = ja.iter().find(|c| c.english == "Qqq Gothic").unwrap();
+        assert_eq!(gothic.names, ["Qqq Gothic", "キューゴシック"]);
+        assert!(gothic.east_asian);
+        let hangul = ja.iter().find(|c| c.english == "Qqq Hangul").unwrap();
+        assert_eq!(hangul.names, ["Qqq Hangul", "キュー韓国", "큐 고딕"], "every name it is found by");
+        assert!(ja.iter().find(|c| c.english == "BIZ UDPGothic").unwrap().east_asian, "a CJK font by its name");
+        assert!(!ja.iter().find(|c| c.english == "Inter").unwrap().east_asian);
+
+        let en = sample_choices("en");
+        let shown: Vec<&str> = en.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(shown, ["BIZ UDPGothic", "Inter", "Lato", "Qqq Gothic", "Qqq Gothic W3", "Qqq Hangul"]);
+        assert!(en.iter().find(|c| c.name == "Qqq Gothic").unwrap().east_asian);
+        let ko = sample_choices("ko-KR");
+        assert!(ko.iter().any(|c| c.name == "큐 고딕" && c.english == "Qqq Hangul"));
+
+        // Two families shown by the same name appear once.
+        let localized = vec![("ja".to_string(), pairs(&[("Qqq A", "同じ名前"), ("Qqq B", "同じ名前")]))];
+        let same = font_choices(&strings(&["Qqq A", "Qqq B"]), &localized, "ja");
+        assert_eq!(same.len(), 1);
+        assert!(font_choices(&[], &[], "ja").is_empty());
+    }
+
+    #[test]
+    fn the_theme_section_lists_asian_text_fonts_with_east_asian_editing() {
+        use deckcraft_fonts::CjkLocale;
+        use deckcraft_model::theme::{FontScheme, FontSet, ScriptFont};
+        let jpan = |face: &str| vec![ScriptFont { script: "Jpan".into(), typeface: face.into() }];
+        let fonts = FontScheme {
+            name: "Test".into(),
+            major: FontSet { latin: "Lato".into(), scripts: jpan("Qqq 見出し"), ..Default::default() },
+            minor: FontSet { latin: "Roboto".into(), ea: "Qqq 本文".into(), scripts: jpan("Qqq 本文 Jpan"), ..Default::default() },
+        };
+        let rows = |l: Option<CjkLocale>| -> Vec<(String, String, String, bool)> {
+            theme_font_choices(&fonts, l).into_iter().map(|c| (c.name, c.reference, c.role, c.east_asian)).collect()
+        };
+        let row = |n: &str, r: &str, role: &str, ea: bool| (n.to_string(), r.to_string(), role.to_string(), ea);
+        assert_eq!(rows(None), [row("Lato", "+mj-lt", "headings", false), row("Roboto", "+mn-lt", "body", false)]);
+        assert_eq!(
+            rows(Some(CjkLocale::Japanese)),
+            [
+                row("Lato", "+mj-lt", "headings", false),
+                row("Roboto", "+mn-lt", "body", false),
+                row("Qqq 見出し", "+mj-ea", "headings", true),
+                row("Qqq 本文", "+mn-ea", "body", true),
+            ]
+        );
+        // No Korean font in the theme: only the body's own a:ea.
+        assert_eq!(rows(Some(CjkLocale::Korean)).len(), 3);
     }
 }

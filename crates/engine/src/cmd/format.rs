@@ -15,6 +15,15 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(noundo "font.add", "Add Font", [], None, "{data: base64 TTF/OTF/TTC} → {faces} added for this session", always, font_add),
         cmd!(noundo "font.rescan", "Rescan Installed Fonts", ["Home", "Font"], None, "{} → {faces, families} (fonts installed since start-up)", always, font_rescan),
+        cmd!(
+            query "font.list",
+            "Font List",
+            [],
+            None,
+            "{lang?: interface language (en|ja|zh-Hans|zh-Hant|ko…, default en), eastAsian?: bool (list Asian text theme fonts; default: with East Asian editing), fonts?: bool, theme?: bool} → {eastAsian, theme: [{name, reference (+mj-lt|+mn-lt|+mj-ea|+mn-ea), role (headings|body), eastAsian}], fonts: [{name (in lang when the font has one), english, names, eastAsian}]}",
+            always,
+            font_list
+        ),
         cmd!("format.bold", "Bold", ["Home", "Font"], Some("Cmd+B"), "{on?: bool}", has_text_or_shapes, bold),
         cmd!("format.italic", "Italic", ["Home", "Font"], Some("Cmd+I"), "{on?: bool}", has_text_or_shapes, italic),
         cmd!(
@@ -229,7 +238,7 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         cmd!(noundo "format.painter", "Format Painter", ["Home", "Clipboard"], Some("Cmd+Shift+C"), "{sticky?: bool}", has_text_or_shapes, painter_pick),
         cmd!("format.painterApply", "Paste Formatting", [], Some("Cmd+Shift+V"), "{ids?}", has_text_or_shapes, painter_apply),
-        cmd!(query "format.state", "Formatting State", [], None, "{} → the effective formatting at the selection (font, size, bold, …); font is the East Asian font when the character described (the first selected, else the one before the caret) is East Asian, fontLatin and fontEa are both fonts (fontEa null when none applies), dir the text direction", has_doc, state),
+        cmd!(query "format.state", "Formatting State", [], None, "{} → the effective formatting at the selection (font, size, bold, …); font is the East Asian font when the character described (the first selected, else the one before the caret) is East Asian, fontLatin and fontEa are both fonts (fontEa null when none applies), fontTheme headings|body when the font shown is the theme's (else null), dir the text direction, textLang the language of the text (inherited and the deck default included; altLang on East Asian text when only it is East Asian) and noProof", has_doc, state),
     ]
 }
 
@@ -1579,10 +1588,11 @@ fn state(s: &mut Session, _p: &Value) -> Result<Value> {
     let (family, east_asian) = current_fonts(s, &r);
     // On East Asian text the font box names the East Asian font, as PowerPoint's does.
     let on_east_asian = described_char(s).is_some_and(|c| deckcraft_fonts::script::slot_of(c) == Some(deckcraft_fonts::FontSlot::EastAsian));
-    let shown = match (&east_asian, on_east_asian) {
-        (Some(ea), true) => ea.clone(),
-        _ => family.clone(),
+    let (shown, font_theme) = match (&east_asian, on_east_asian) {
+        (Some(ea), true) => (ea.clone(), theme_role_of(r.font_ea.as_deref(), r.font.as_deref(), true)),
+        _ => (family.clone(), theme_role_of(r.font.as_deref(), None, false)),
     };
+    let (text_lang, no_proof) = selection_language(s);
     let dir = s.doc().ok().and_then(|st| {
         let id = st.selection.text.as_ref().filter(|t| !t.notes).map(|t| t.shape).or_else(|| st.selection.shapes.first().copied())?;
         let sh = st.shape(id)?;
@@ -1591,6 +1601,7 @@ fn state(s: &mut Session, _p: &Value) -> Result<Value> {
     });
     Ok(json!({
         "font": shown,
+        "fontTheme": font_theme,
         "fontLatin": family,
         "fontEa": east_asian,
         "fontRef": r.font,
@@ -1607,8 +1618,91 @@ fn state(s: &mut Session, _p: &Value) -> Result<Value> {
         "bullets": matches!(pp.bullet, Some(Bullet::Char { .. })),
         "numbering": matches!(pp.bullet, Some(Bullet::AutoNum { .. })),
         "lang": r.lang,
+        "textLang": text_lang,
+        "noProof": no_proof,
         "lineSpacing": serde_json::to_value(pp.line_spacing).unwrap_or_default(),
         "painter": s.painter.is_some(),
+    }))
+}
+
+/// Is the font a run is drawn in one of the theme's, and which (`headings` or `body`)? The font
+/// box then says so after the name, as PowerPoint's does. `font` is the run's (resolved) font
+/// reference for the slot shown; for the East Asian slot, `latin` is its Latin one, which picks
+/// the heading or body face when the run names no East Asian font. A run without a Latin font
+/// takes the theme's body font.
+fn theme_role_of(font: Option<&str>, latin: Option<&str>, east_asian: bool) -> Option<&'static str> {
+    let role = |f: &str| {
+        if f.starts_with("+mj") {
+            Some("headings")
+        } else if f.starts_with("+mn") {
+            Some("body")
+        } else {
+            None
+        }
+    };
+    match font.map(str::trim) {
+        Some(f) => role(f),
+        None if east_asian && latin.is_some_and(|l| l.trim().starts_with("+mj")) => Some("headings"),
+        None => Some("body"),
+    }
+}
+
+/// The language of the text at the selection, as the status bar names it, and whether that text
+/// is marked Do Not Check Spelling: the run's language, inherited from its placeholder, layout,
+/// master and the deck's default (`a:defPPr`, `ja-JP` in a Japanese deck) when it has none of its
+/// own; its `altLang` instead when the character described (the first selected, else the one
+/// before the caret) is East Asian and only the `altLang` is an East Asian language; with nothing
+/// selected, the deck's default language. `None` when nothing names one.
+pub fn selection_language(s: &Session) -> (Option<String>, bool) {
+    let Ok(st) = s.doc() else { return (None, false) };
+    if st.selection.text.is_none() && st.selection.shapes.is_empty() {
+        let lang = st.doc.default_text_style.default.as_ref().and_then(|d| d.run.lang.clone());
+        return (lang.filter(|l| !l.trim().is_empty()), false);
+    }
+    let r = current_run(s);
+    let cjk = |l: &Option<String>| l.as_deref().and_then(deckcraft_fonts::CjkLocale::from_lang).is_some();
+    let on_east_asian = described_char(s).is_some_and(|c| deckcraft_fonts::script::slot_of(c) == Some(deckcraft_fonts::FontSlot::EastAsian));
+    let lang = if on_east_asian && !cjk(&r.lang) && cjk(&r.alt_lang) { r.alt_lang.clone() } else { r.lang.clone() };
+    (lang.filter(|l| !l.trim().is_empty()), r.no_proof == Some(true))
+}
+
+/// The theme fonts of the master the selection is on (the first master's with no slide).
+fn selection_theme_fonts(s: &Session) -> Option<deckcraft_model::theme::FontScheme> {
+    let st = s.doc().ok()?;
+    match super::text::ctx_for(&st.doc, &st.selection) {
+        Some(c) => Some(c.master.theme.fonts.clone()),
+        None => st.doc.masters.first().map(|m| m.theme.fonts.clone()),
+    }
+}
+
+/// Home ▸ Font's font list: the theme's fonts, then every installed family, each by its name in
+/// the interface language `lang`.
+fn font_list(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "font.list";
+    let lang = match p.get("lang") {
+        None | Some(Value::Null) => "en".to_string(),
+        Some(Value::String(l)) if !l.is_empty() && l.len() <= 35 && l.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') => l.clone(),
+        Some(_) => return Err(bad(CMD, "`lang` is a language tag such as ja or zh-Hans")),
+    };
+    let flag = |key: &str| match p.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Bool(b)) => Ok(Some(*b)),
+        Some(_) => Err(bad(CMD, format!("`{key}` must be true or false"))),
+    };
+    let editing = s.east_asian_editing.or_else(deckcraft_fonts::default_cjk_locale);
+    let east_asian = flag("eastAsian")?.unwrap_or(editing.is_some());
+    let with_fonts = flag("fonts")?.unwrap_or(true);
+    let with_theme = flag("theme")?.unwrap_or(true);
+    let locale = east_asian.then(|| editing.or_else(|| deckcraft_fonts::CjkLocale::from_lang(&lang)).unwrap_or(deckcraft_fonts::CjkLocale::Japanese));
+    let theme = match selection_theme_fonts(s) {
+        Some(f) if with_theme => crate::fonts::theme_font_choices(&f, locale),
+        _ => Vec::new(),
+    };
+    let fonts = if with_fonts { crate::fonts::installed_font_choices(&lang) } else { Vec::new() };
+    Ok(json!({
+        "eastAsian": east_asian,
+        "theme": serde_json::to_value(theme).unwrap_or_default(),
+        "fonts": serde_json::to_value(fonts).unwrap_or_default(),
     }))
 }
 
@@ -2105,6 +2199,133 @@ mod tests {
         assert_eq!(st["lang"], "ja-JP", "the deck's default language");
         assert_eq!(st["font"], "BIZ UDPGothic");
         assert_eq!(st["fontLatin"], "Inter");
+    }
+
+    /// The font box says when the font shown is the theme's heading or body font, for the Latin
+    /// and for the East Asian font, as PowerPoint's box does.
+    #[test]
+    fn the_font_box_says_when_the_font_is_the_themes() {
+        let mut s = Session::new();
+        s.execute("file.new", &json!({"eastAsian": "ja-JP"})).unwrap();
+        let id = text_shape(&mut s, "日本語abc");
+        s.execute("text.edit", &json!({"id": id.0, "at": [0, 6]})).unwrap();
+        let st = s.execute("format.state", &json!({})).unwrap();
+        assert_eq!((st["font"].as_str(), st["fontTheme"].as_str()), (Some("Inter"), Some("body")));
+        s.execute("text.edit", &json!({"id": id.0, "at": [0, 2]})).unwrap();
+        let st = s.execute("format.state", &json!({})).unwrap();
+        assert_eq!((st["font"].as_str(), st["fontTheme"].as_str()), (Some("BIZ UDPGothic"), Some("body")), "the theme's Jpan font");
+
+        // Picking the theme's Asian heading font writes theme references.
+        s.execute("text.select", &json!({"anchor": [0, 0], "caret": [0, 6]})).unwrap();
+        s.execute("format.font", &json!({"family": "+mj-lt", "eastAsian": "+mj-ea"})).unwrap();
+        let r = runs_of(&s, id)[0].props.clone();
+        assert_eq!((r.font.as_deref(), r.font_ea.as_deref()), (Some("+mj-lt"), Some("+mj-ea")));
+        s.execute("text.edit", &json!({"id": id.0, "at": [0, 2]})).unwrap();
+        let st = s.execute("format.state", &json!({})).unwrap();
+        assert_eq!((st["font"].as_str(), st["fontTheme"].as_str()), (Some("BIZ UDPGothic"), Some("headings")));
+        s.execute("text.edit", &json!({"id": id.0, "at": [0, 6]})).unwrap();
+        let st = s.execute("format.state", &json!({})).unwrap();
+        assert_eq!((st["font"].as_str(), st["fontTheme"].as_str()), (Some("Inter"), Some("headings")));
+
+        // A font picked by name is not the theme's.
+        s.execute("text.select", &json!({"anchor": [0, 0], "caret": [0, 6]})).unwrap();
+        s.execute("format.font", &json!({"family": "Liberation Serif", "eastAsian": "テスト明朝"})).unwrap();
+        for at in [2, 6] {
+            s.execute("text.edit", &json!({"id": id.0, "at": [0, at]})).unwrap();
+            assert!(s.execute("format.state", &json!({})).unwrap()["fontTheme"].is_null(), "at {at}");
+        }
+    }
+
+    /// The status bar names the language of the text at the caret: inherited from the deck's
+    /// default (`a:defPPr`) when the run has none, the `altLang` on East Asian text when only it is
+    /// East Asian, and the deck's default with nothing selected.
+    #[test]
+    fn the_text_language_includes_the_decks_default_and_alt_lang() {
+        let mut s = Session::new();
+        s.execute("file.new", &json!({"eastAsian": "ja-JP"})).unwrap();
+        assert_eq!(selection_language(&s), (Some("ja-JP".to_string()), false), "nothing selected: the deck's default");
+        let id = text_shape(&mut s, "日本語abc");
+        s.execute("text.edit", &json!({"id": id.0, "at": [0, 1]})).unwrap();
+        let st = s.execute("format.state", &json!({})).unwrap();
+        assert_eq!((st["textLang"].as_str(), st["noProof"].as_bool()), (Some("ja-JP"), Some(false)));
+
+        let mut s = Session::with_new();
+        let id = text_shape(&mut s, "日本語abc");
+        assert_eq!(selection_language(&s).0, None, "no language anywhere");
+        s.edit(|doc, sel| {
+            let list = crate::shapes_mut(doc, sel).unwrap();
+            let sh = deckcraft_model::find_shape_mut(list, id).unwrap();
+            let r = &mut sh.text.as_mut().unwrap().paragraphs[0].runs[0].props;
+            r.lang = Some("en-US".into());
+            r.alt_lang = Some("ja-JP".into());
+            Ok(())
+        })
+        .unwrap();
+        s.execute("text.edit", &json!({"id": id.0, "at": [0, 2]})).unwrap();
+        assert_eq!(s.execute("format.state", &json!({})).unwrap()["textLang"], "ja-JP", "after 本: East Asian text");
+        s.execute("text.edit", &json!({"id": id.0, "at": [0, 5]})).unwrap();
+        assert_eq!(s.execute("format.state", &json!({})).unwrap()["textLang"], "en-US", "after b");
+        s.execute("text.select", &json!({"anchor": [0, 0], "caret": [0, 6]})).unwrap();
+        s.execute("format.language", &json!({"noProof": true})).unwrap();
+        assert_eq!(selection_language(&s), (Some("ja-JP".to_string()), true), "the first selected character, 日");
+    }
+
+    #[test]
+    fn the_font_list_has_the_theme_fonts_and_the_installed_families() {
+        let mut s = Session::with_new();
+        let v = s.execute("font.list", &json!({})).unwrap();
+        assert_eq!(v["eastAsian"], false);
+        let theme: Vec<crate::fonts::ThemeFontChoice> = serde_json::from_value(v["theme"].clone()).unwrap();
+        let refs: Vec<(&str, &str, &str)> = theme.iter().map(|t| (t.name.as_str(), t.reference.as_str(), t.role.as_str())).collect();
+        assert_eq!(refs, [("Inter", "+mj-lt", "headings"), ("Inter", "+mn-lt", "body")], "Latin only without East Asian editing");
+        let fonts: Vec<crate::fonts::FontChoice> = serde_json::from_value(v["fonts"].clone()).unwrap();
+        assert!(!fonts.is_empty());
+        assert!(fonts.iter().all(|f| !f.name.starts_with('.') && f.names.first() == Some(&f.english)), "hidden faces are left out");
+
+        // With East Asian editing, the theme's Asian text fonts: its Jpan font where it names no a:ea.
+        let mut s = Session::new();
+        s.execute("file.new", &json!({"eastAsian": "ja-JP"})).unwrap();
+        s.east_asian_editing = Some(deckcraft_fonts::CjkLocale::Japanese);
+        let v = s.execute("font.list", &json!({"lang": "ja", "fonts": false})).unwrap();
+        assert_eq!(v["eastAsian"], true);
+        assert_eq!(v["fonts"], json!([]));
+        let theme: Vec<crate::fonts::ThemeFontChoice> = serde_json::from_value(v["theme"].clone()).unwrap();
+        let ea: Vec<(&str, &str)> = theme.iter().filter(|t| t.east_asian).map(|t| (t.name.as_str(), t.reference.as_str())).collect();
+        assert_eq!(ea, [("BIZ UDPGothic", "+mj-ea"), ("BIZ UDPGothic", "+mn-ea")]);
+        s.execute("design.fonts", &json!({"majorEa": "テスト見出し"})).unwrap();
+        let v = s.execute("font.list", &json!({"theme": true, "fonts": false})).unwrap();
+        assert_eq!(v["theme"][2]["name"], "テスト見出し", "the theme's own a:ea first");
+        assert_eq!(v["theme"][3]["name"], "BIZ UDPGothic");
+        // eastAsian: false leaves them out.
+        let v = s.execute("font.list", &json!({"eastAsian": false, "fonts": false})).unwrap();
+        assert_eq!(v["theme"].as_array().map(Vec::len), Some(2));
+
+        for bad in [json!({"lang": 3}), json!({"lang": ""}), json!({"lang": "ja JP"}), json!({"eastAsian": "yes"}), json!({"fonts": 1})] {
+            assert!(s.execute("font.list", &bad).is_err(), "{bad}");
+        }
+    }
+
+    /// An installed Japanese font is listed by its Japanese name in a Japanese interface and by its
+    /// English name in an English one, and is an Asian text font. Skipped where none is installed.
+    #[test]
+    fn installed_japanese_fonts_are_listed_by_their_name_in_the_interface_language() {
+        let mut s = Session::with_new();
+        let list = |s: &mut Session, lang: &str| -> Vec<crate::fonts::FontChoice> {
+            serde_json::from_value(s.execute("font.list", &json!({"lang": lang, "theme": false})).unwrap()["fonts"].clone()).unwrap()
+        };
+        let (ja, en) = (list(&mut s, "ja"), list(&mut s, "en"));
+        let mut checked = 0;
+        for family in ["BIZ UDPGothic", "Hiragino Sans", "Hiragino Mincho ProN"] {
+            let Some(j) = ja.iter().find(|f| f.english == family && f.name != family) else { continue };
+            checked += 1;
+            assert!(j.east_asian, "{family}");
+            assert!(j.names.contains(&j.name) && j.names.contains(&family.to_string()), "{j:?}");
+            assert!(en.iter().any(|f| f.name == family && f.english == family), "{family} by its English name in English");
+            assert!(!en.iter().any(|f| f.name == j.name), "{} only in Japanese", j.name);
+        }
+        if checked == 0 {
+            eprintln!("skipped: no Japanese font with a Japanese name installed");
+        }
     }
 
     #[test]
