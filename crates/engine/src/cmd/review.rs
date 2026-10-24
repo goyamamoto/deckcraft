@@ -313,7 +313,8 @@ fn check_lang(doc: &deckcraft_model::Presentation, p: &Value) -> String {
             if found.is_none()
                 && let Some(t) = &sh.text
             {
-                found = t.paragraphs.iter().flat_map(|p| &p.runs).find_map(|r| r.props.lang.clone());
+                // East Asian runs (never checked) give the language typed alongside them.
+                found = t.paragraphs.iter().flat_map(|p| &p.runs).find_map(|r| crate::spell::latin_lang_of(&r.props));
             }
         });
     }

@@ -165,7 +165,7 @@ fn default_lang(st: &DocState) -> String {
             if found.is_none()
                 && let Some(t) = &sh.text
             {
-                found = t.paragraphs.iter().flat_map(|p| &p.runs).find_map(|r| r.props.lang.clone());
+                found = t.paragraphs.iter().flat_map(|p| &p.runs).find_map(|r| deckcraft_engine::spell::latin_lang_of(&r.props));
             }
         });
         if let Some(l) = found {
