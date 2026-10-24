@@ -1,8 +1,9 @@
 //! Finds interface text drawn without going through translation: the main window is laid out in
-//! the pseudo-language (`pseudo.rs`) on every ribbon tab, and visible words outside `⟦…⟧` marks are
-//! listed, also at a narrow width, where ribbon groups fold into buttons named by the group. The
-//! list is printed, not enforced, while most literals still wait for `tl!`; what is translated
-//! centrally (the tab strip, the status bar's counter) is enforced. Run it with
+//! the pseudo-language (`pseudo.rs`) on every ribbon tab, with each dialog and task pane open and
+//! in the Slide Sorter, and visible words outside `⟦…⟧` marks are listed, also at a narrow width,
+//! where ribbon groups fold into buttons named by the group. The list is printed, not enforced, while
+//! most literals still wait for `tl!`; what is translated centrally (the tab strip, the status
+//! bar's counter) is enforced. Run it with
 //! `cargo test -p deckcraft-ui-egui untranslated_interface_text -- --nocapture` to see the list
 //! and, with `CRAFT_I18N_DIR` set, the strings each language has no translation for.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -200,6 +201,113 @@ fn untranslated_dialog_text() {
         report.push_str(&format!("{text:?}  [{}]\n", ids.iter().copied().collect::<Vec<_>>().join(", ")));
     }
     eprintln!("{} texts in the dialogs are drawn untranslated (wrap them in tl!):\n{report}", found.len());
+}
+
+/// Names and text that belong to the document, which the panes show as they are: its title, shape
+/// names, alt text, comments, section, slide, master, layout and theme names, notes.
+fn doc_names(app: &SlideApp) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    let Some(d) = app.session.active() else { return out };
+    let mut add = |s: &str| {
+        let s = s.trim();
+        if !s.is_empty() {
+            out.insert(s.to_string());
+        }
+    };
+    add(&d.title());
+    for s in &d.doc.slides {
+        add(&s.name);
+        deckcraft_model::walk(&s.shapes, &mut |sh, _| {
+            add(&sh.name);
+            add(&sh.title);
+            add(&sh.descr);
+        });
+        for p in &s.notes.paragraphs {
+            add(&p.text());
+        }
+        let mut stack: Vec<&deckcraft_model::Comment> = s.comments.iter().collect();
+        while let Some(c) = stack.pop() {
+            add(&c.author);
+            add(&c.text);
+            stack.extend(c.replies.iter());
+        }
+    }
+    for sec in &d.doc.sections {
+        add(&sec.name);
+    }
+    for m in &d.doc.masters {
+        add(&m.name);
+        m.layouts.iter().for_each(|l| add(&l.name));
+    }
+    deckcraft_model::theme::builtin_themes().iter().for_each(|th| add(&th.name));
+    out
+}
+
+/// Lists the interface text the task panes (Format Shape on each of its tabs, Format Background,
+/// Animation, Selection, Comments, Design Ideas, Text Pane, Thesaurus, Revisions) and the Slide
+/// Sorter draw untranslated. Printed, not enforced, like the ribbon tabs' list.
+#[test]
+fn untranslated_interface_text_in_panes() {
+    let ctx = egui::Context::default();
+    let mut session = deckcraft_engine::Session::new();
+    deckcraft_engine::sample::open_sample(&mut session).unwrap();
+    let mut app = SlideApp::new(session, crate::Services::default());
+    frames(&ctx, &mut app, 3);
+    // A shape selected, so Format Shape shows its tabs.
+    let first = app.session.active().and_then(|d| d.current_slide().and_then(|s| s.shapes.first().map(|sh| sh.id.0)));
+    if let Some(id) = first {
+        app.run("edit.select", json!({ "ids": [id] })).unwrap();
+    }
+    let skip = doc_names(&app);
+    let fonts: BTreeSet<String> = deckcraft_fonts::FontDb::global().families().into_iter().collect();
+    pseudo::set(true);
+    let mut found: BTreeMap<String, BTreeSet<&str>> = BTreeMap::new();
+    let mut note = |drawn: &[String], surface: &'static str| {
+        for text in drawn.iter().filter(|t| english_words(t)) {
+            let plain = pseudo::unmarked(text);
+            let plain = plain.trim();
+            // A section's name with its slide count, and a length in points, are not words to
+            // translate.
+            let named = plain.rsplit_once("  (").map_or(plain, |(name, _)| name);
+            let measure = !english_words(plain.trim_end_matches("pt"));
+            if skip.contains(plain) || skip.contains(named) || measure || fonts.contains(plain) || plain == "DeckCraft" {
+                continue;
+            }
+            found.entry(plain.to_string()).or_default().insert(surface);
+        }
+    };
+    let surfaces = [
+        ("format/fill", "format", "fill"),
+        ("format/effects", "format", "effects"),
+        ("format/size", "format", "size"),
+        ("format/text", "format", "text"),
+        ("background", "background", ""),
+        ("animation", "animation", ""),
+        ("selection", "selection", ""),
+        ("comments", "comments", ""),
+        ("designer", "designer", ""),
+        ("smartart", "smartart", ""),
+        ("thesaurus", "thesaurus", ""),
+        ("revisions", "revisions", ""),
+    ];
+    for (surface, pane, tab) in surfaces {
+        app.ui.pane = Some(pane.into());
+        if !tab.is_empty() {
+            app.ui.format_tab = tab.into();
+        }
+        let drawn = frames(&ctx, &mut app, 2);
+        note(&drawn, surface);
+    }
+    app.ui.pane = None;
+    app.run("view.sorter", json!({})).unwrap();
+    let drawn = frames(&ctx, &mut app, 2);
+    note(&drawn, "sorter");
+    pseudo::set(false);
+    let mut report = String::new();
+    for (text, surfaces) in &found {
+        report.push_str(&format!("{text:?}  [{}]\n", surfaces.iter().copied().collect::<Vec<_>>().join(", ")));
+    }
+    eprintln!("{} interface texts in the task panes and the Slide Sorter are drawn untranslated (wrap them in tl!):\n{report}", found.len());
 }
 
 /// The missing-translation report (craft-i18n's integration recipe): the embedded catalogs'
