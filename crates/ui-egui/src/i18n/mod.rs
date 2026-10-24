@@ -307,22 +307,33 @@ pub fn label(s: &str) -> Cow<'_, str> {
 }
 
 /// A runtime message (status bar, toast) in the current language: its `@msg` row (or plain row),
-/// else the first `@msg` template whose `{placeholders}` match the text there (`Couldn't open
-/// {name}: {e}`), filled with what they matched, else the English. Messages are kept in English
-/// (the control channel and MCP read them) and translated only when painted.
+/// else the `@msg` template whose `{placeholders}` match the text there (`Couldn't open {name}:
+/// {e}`), filled with what they matched, else the English. When several match, the one with the
+/// most literal text wins (`{a}, {b} and {c} aren't installed…` over `{a} and {b} aren't
+/// installed…`), so the catalog's order doesn't matter. Messages are kept in English (the control
+/// channel and MCP read them) and translated only when painted.
 pub fn message(text: &str) -> Cow<'_, str> {
     let direct = tc("@msg", text);
     if direct != text {
         return Cow::Borrowed(direct);
     }
     let lang = current();
+    let mut best: Option<(usize, String, Vec<(String, String)>)> = None;
     for (template, translation) in msg_templates(lang) {
         if let Some(args) = match_template(&template, text) {
-            let args: Vec<(&str, &str)> = args.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
-            return Cow::Owned(fmt(&translation, &args));
+            let literal = text.len().saturating_sub(args.iter().map(|(_, v)| v.len()).sum());
+            if best.as_ref().is_none_or(|(l, ..)| literal > *l) {
+                best = Some((literal, translation, args));
+            }
         }
     }
-    Cow::Borrowed(text)
+    match best {
+        Some((_, translation, args)) => {
+            let args: Vec<(&str, &str)> = args.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+            Cow::Owned(fmt(&translation, &args))
+        }
+        None => Cow::Borrowed(text),
+    }
 }
 
 /// The `@msg` rows of `lang`'s catalogs (app catalog first, then the shared one; then the
