@@ -44,10 +44,15 @@ impl eframe::App for App {
     }
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
         // macOS: the committed text the input method asked to replace with this frame's
-        // composition (再変換), from the vendored winit (`deckcraft_ui_egui::ime`).
+        // composition or commit (再変換), from the vendored winit (`deckcraft_ui_egui::ime`).
+        // It belongs to this frame's events, which winit queues with it: a frame without them
+        // drops it, so a range left by one that never reached its commit can't make a later
+        // commit elsewhere (a full-width space, the Character Viewer) replace unrelated text.
         #[cfg(target_os = "macos")]
-        if raw.events.iter().any(|e| matches!(e, egui::Event::Ime(egui::ImeEvent::Preedit { .. }))) {
-            self.0.ime.replace = winit::platform::macos::take_ime_replacement_range();
+        {
+            let named = winit::platform::macos::take_ime_replacement_range();
+            let ime = raw.events.iter().any(|e| matches!(e, egui::Event::Ime(egui::ImeEvent::Preedit { .. } | egui::ImeEvent::Commit(_))));
+            self.0.ime.replace = named.filter(|_| ime);
         }
         self.0.raw_input_hook(raw);
     }

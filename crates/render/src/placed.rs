@@ -140,15 +140,16 @@ pub fn place_notes_text(pres: &Presentation, index: usize, frame: Rect, scale: f
 }
 
 /// A notes master for a deck that has none, or whose own lacks notes text styles: its shapes,
-/// theme and colours (else the first slide master's) with PowerPoint's default notes styles,
-/// 12 pt text in the theme's minor font and text colour, each level indented half an inch more.
+/// theme and colour map (else the first slide master's theme with the standard colour map) with
+/// PowerPoint's default notes styles, 12 pt text in the theme's minor font and text colour, each
+/// level indented half an inch more. PowerPoint's default notes master maps text to dk1 whatever
+/// the slide master does, so a dark design's swapped map (tx1=lt1) would print white notes on the
+/// white page; DeckCraft's pptx writer gives such a deck the standard map too.
 fn default_notes_master(pres: &Presentation, own: Option<&deckcraft_model::Master>) -> deckcraft_model::Master {
     use deckcraft_model::text::{Align, LevelStyle, ParaProps, RunProps};
     let mut m = match (own, pres.masters.first()) {
         (Some(m), _) => m.clone(),
-        (None, Some(slide_master)) => {
-            deckcraft_model::Master { theme: slide_master.theme.clone(), color_map: slide_master.color_map.clone(), ..Default::default() }
-        }
+        (None, Some(slide_master)) => deckcraft_model::Master { theme: slide_master.theme.clone(), ..Default::default() },
         (None, None) => deckcraft_model::Master::default(),
     };
     for level in 0..9u8 {

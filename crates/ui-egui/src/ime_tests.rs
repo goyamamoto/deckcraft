@@ -195,6 +195,13 @@ fn ime_allowed(h: &egui_kittest::Harness<'_, SlideApp>) -> bool {
     h.output().platform_output.ime.is_some()
 }
 
+/// Deliver `events` in one frame, as egui-winit does with the events the platform queues
+/// together (a dismissal and its commit); `Harness::event` runs a frame for each event.
+fn in_one_frame<const N: usize>(h: &mut egui_kittest::Harness<'_, SlideApp>, events: [Event; N]) {
+    h.input_mut().events.extend(events);
+    h.run_steps(1);
+}
+
 /// Committing the first clause of a multi-clause conversion: the input method commits it and
 /// marks the rest again (on macOS `insertText:` then `setMarkedText:`; the events in one frame or
 /// the next), and later commits the rest. Every clause reaches the slide, and the input method
@@ -391,14 +398,77 @@ fn ime_replaces_committed_text_named_while_composing_and_on_commit() {
     h.run_steps(1);
     assert_eq!(title_text(h.state()), "a日本ごb");
     h.state_mut().ime.replace = Some(1..4);
-    h.event(preedit(""));
-    h.event(commit("日本語"));
-    h.run_steps(1);
+    in_one_frame(&mut h, [preedit(""), commit("日本語")]);
     assert_eq!(title_text(h.state()), "a日本語b");
     assert!(h.state().ime.replace.is_none());
     assert_eq!(caret(h.state()), (0, 4), "the caret after the committed text");
     h.state_mut().run("edit.undo", json!({})).unwrap();
     assert_eq!(title_text(h.state()), "a日本b");
+}
+
+/// A commit naming the committed text it replaces with no composition (an input method that
+/// reconverts without marking first; the vendored winit hands over the range of
+/// `insertText:replacementRange:` with the lone `Commit`): it replaces that text, never adds to it.
+#[test]
+fn a_commit_without_a_composition_replaces_the_text_it_names() {
+    let mut h = editing_title("cafe");
+    assert_eq!(caret(h.state()), (0, 4));
+    let undo0 = undo_len(h.state());
+    h.state_mut().ime.replace = Some(3..4);
+    h.event(commit("é"));
+    h.run_steps(1);
+    assert_eq!(title_text(h.state()), "café", "not cafeé");
+    assert_eq!(caret(h.state()), (0, 4));
+    assert_eq!(undo_len(h.state()), undo0 + 1);
+}
+
+/// A range the input method named belongs to that frame's composition or commit: a dismissal
+/// naming one that no commit follows, or one named while the notes pane had the keyboard, is
+/// dropped with the frame, so a later commit (a full-width space typed with nothing marked)
+/// goes in at the caret instead of replacing text the user never selected.
+#[test]
+fn a_range_no_commit_took_never_reaches_a_later_commit() {
+    let mut h = editing_title("a日本b");
+    h.state_mut().run("text.select", json!({"anchor": [0, 1], "caret": [0, 3]})).unwrap();
+    h.run_steps(1);
+    // Reconverted, then dismissed naming a range, and nothing committed.
+    h.state_mut().ime.replace = Some(1..3);
+    h.event(preedit_at("にほん", 0..3));
+    h.run_steps(1);
+    assert_eq!(title_text(h.state()), "aにほんb");
+    h.state_mut().ime.replace = Some(1..4);
+    h.event(preedit(""));
+    h.run_steps(1);
+    assert_eq!(title_text(h.state()), "a日本b", "dismissed: the committed text is back");
+    assert!(h.state().ime.replace.is_none(), "dropped with the frame no commit followed in");
+    // The caret moves to the end, and a full-width space arrives alone.
+    h.state_mut().run("text.select", json!({"anchor": [0, 4], "caret": [0, 4]})).unwrap();
+    h.run_steps(1);
+    h.event(commit("\u{3000}"));
+    h.run_steps(1);
+    assert_eq!(title_text(h.state()), "a日本b\u{3000}", "at the caret, 日本 intact");
+
+    // Named while the notes pane has the keyboard: the slide never sees that frame's events, and
+    // the range doesn't wait for the slide's next commit either.
+    let id = egui::Id::new("notes_edit");
+    h.ctx.memory_mut(|m| m.request_focus(id));
+    h.run_steps(2);
+    assert!(h.ctx.memory(|m| m.has_focus(id)));
+    h.state_mut().ime.replace = Some(1..3);
+    h.event(preedit("の"));
+    h.run_steps(1);
+    assert!(h.state().ime.replace.is_none(), "not for the slide's text");
+    h.event(preedit(""));
+    h.event(commit("の"));
+    h.run_steps(1);
+    h.ctx.memory_mut(|m| m.surrender_focus(id));
+    let title = h.state().session.active().unwrap().doc.slides[0].shapes[0].id.0;
+    h.state_mut().run("text.edit", json!({"id": title})).unwrap();
+    h.state_mut().run("text.select", json!({"anchor": [0, 5], "caret": [0, 5]})).unwrap();
+    h.run_steps(2);
+    h.event(commit("\u{3000}"));
+    h.run_steps(1);
+    assert_eq!(title_text(h.state()), "a日本b\u{3000}\u{3000}", "at the caret, 日本 intact");
 }
 
 /// What the input method may read is gathered every frame the slide's text has the keyboard: the
