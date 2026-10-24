@@ -99,12 +99,15 @@ impl Default for PdfOptions {
     }
 }
 
-/// Paper sizes the Print page offers, as (id, label, width × height in points, portrait).
-pub const PAPERS: [(&str, &str, (f64, f64)); 4] = [
+/// Paper sizes the Print page offers, as (id, label, width × height in points, portrait). B4 and
+/// B5 are the Japanese (JIS) sizes, standard for notes and handouts printed in Japan.
+pub const PAPERS: [(&str, &str, (f64, f64)); 6] = [
     ("letter", "Letter (8.5 × 11 in)", (612.0, 792.0)),
     ("a4", "A4 (210 × 297 mm)", (595.28, 841.89)),
     ("legal", "Legal (8.5 × 14 in)", (612.0, 1008.0)),
     ("a3", "A3 (297 × 420 mm)", (841.89, 1190.55)),
+    ("b4", "B4 (JIS) (257 × 364 mm)", (728.5, 1031.81)),
+    ("b5", "B5 (JIS) (182 × 257 mm)", (515.91, 728.5)),
 ];
 
 /// The page size in points for a paper id from [`PAPERS`] (case-insensitive), turned on its side

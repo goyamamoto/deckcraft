@@ -36,8 +36,9 @@ fn size_button_sets_width_in_one_undo() {
     h.run_steps(2);
     let dlg = h.state().dialog.as_ref().unwrap();
     assert_eq!(dlg.id, "sizePosition");
-    assert_eq!(dlg.fields.get("w").map(String::as_str), Some("2.78"));
-    assert_eq!(dlg.fields.get("h").map(String::as_str), Some("1.39"));
+    // In inches with their mark (the tests' region is the United States).
+    assert_eq!(dlg.fields.get("w").map(String::as_str), Some("2.78\""));
+    assert_eq!(dlg.fields.get("h").map(String::as_str), Some("1.39\""));
     assert_eq!(dlg.fields.get("lock").map(String::as_str), Some("0"));
     h.state_mut().dialog.as_mut().unwrap().fields.insert("w".into(), "4".into());
     h.run_steps(1);
