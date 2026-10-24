@@ -1,6 +1,6 @@
 # UI parity with PowerPoint
 
-> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-25 · **Change:** minor (presentation windows: one window per presentation, New Window as a second window on one presentation, Arrange All, Cascade, Switch Windows; previous: trivial, scroll bars on the zoomed slide pane, #1157; previous: major, community PR wave 2026-10-14: 14 new dialogs (41 in all), Eyedropper, Export button, New Window, Grid Options, WordArt gallery and handles, Slide Sorter sections, Quick Access Toolbar, Format Background and Format Shape depth, rich-text clipboard; duplicated rows and headers folded; previous: minor, File tab / Backstage, #76) · **Target:** Microsoft PowerPoint for Mac 16.113 (Microsoft 365)
+> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-25 · **Change:** major (the native macOS menu bar; previous: minor, presentation windows: one window per presentation, New Window as a second window on one presentation, Arrange All, Cascade, Switch Windows; previous: trivial, scroll bars on the zoomed slide pane, #1157; previous: major, community PR wave 2026-10-14: 14 new dialogs (41 in all), Eyedropper, Export button, New Window, Grid Options, WordArt gallery and handles, Slide Sorter sections, Quick Access Toolbar, Format Background and Format Shape depth, rich-text clipboard; duplicated rows and headers folded; previous: minor, File tab / Backstage, #76) · **Target:** Microsoft PowerPoint for Mac 16.113 (Microsoft 365)
 > **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-22 · **Change:** trivial (group fill and outline edits reach members, #1079; scores unchanged) · **Target:** Microsoft PowerPoint for Mac 16.113 (Microsoft 365)
 
 How DeckCraft looks and feels next to PowerPoint: the shell, the ribbon, menus, panes, dialogs,
@@ -20,7 +20,7 @@ ends and are omitted from thumbnails, slide shows and exports.
 | Element | PowerPoint for Mac | DeckCraft | Gap |
 |---|---|---|---|
 | Title bar: AutoSave, Home, Save, Undo/Redo, document title, Share, search | yes | yes, plus Export; no Share (cloud) | #71 macOS window controls misaligned |
-| Native macOS menu bar (File, Edit, View, Insert, Format, Arrange, Tools, Slide Show, Window, Help) | yes | **no** (`menus::menu_tree()` is defined but not installed) | 3–5 h |
+| Native macOS menu bar (File, Edit, View, Insert, Format, Arrange, Tools, Slide Show, Window, Help) | yes | yes: DeckCraft, File, Edit, View, Insert, Format, Arrange, Tools, Slide Show, Window, Help from `menus::menu_tree()`, each item the ribbon's command with its key, checkmarks and enabled state; the Window menu lists the windows ([native-menus.md](native-menus.md)) | PowerPoint's menus hold more rows (chart types, the subtitle languages…): see [target-app-parity.md](target-app-parity.md) |
 | Menu-bar items with a DeckCraft equivalent | 217 app-specific items | 128 matched by name (59%, heuristic lower bound) | See [target-app-parity.md](target-app-parity.md) |
 | Ribbon tabs: Home, Insert, Draw, Design, Transitions, Animations, Slide Show, Record, Review, View | 10 | 10 | Record tab is a placeholder |
 | Colour menus: theme and standard colours, hex field, Eyedropper | yes (plus a More Colors dialog) | yes: theme and standard colours, hex field and an Eyedropper that takes the colour drawn under the pointer on the slide (#367) | More Colors dialog; Eyedropper only takes colours from the slide, not the rest of the screen |
@@ -154,18 +154,19 @@ consistency is open (#73, #56).
 
 | Work | Hours |
 |---|---|
-| Native macOS menu bar from `menu_tree()`, filled out to PowerPoint's menu items | 3–5 |
+| Menu bar rows PowerPoint has and DeckCraft doesn't (beyond the commands) | 2–4 |
 | Format Shape pane depth | 6–10 |
 | Missing dialogs (Print, Insert Object and the rest of PowerPoint's ~60) | 4–8 |
 | Window chrome and system appearance (#41, #71) | 3–5 |
 | Edit points UI, crop depth | 3–6 |
 | A screenshot comparison pass on the most-used tabs | 2–4 |
-| **Total** | **~21–38** |
+| **Total** | **~20–37** |
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-25 | major | Native macOS menu bar: PowerPoint for Mac's eleven menus alongside the ribbon, every row a command with its key equivalent, checkmarks and enabled state; the Window menu lists the windows ([native-menus.md](native-menus.md)) |
 | 2026-10-25 | minor | Presentation windows: one window per presentation (New, Open, Close, the close button and quitting as PowerPoint has them), View › New Window as a real second window with its own slide, Arrange All, Cascade, Switch Windows and Next Window; the control channel lists windows (`ui.windows`) and routes requests by `window`. Estimates drop the two window rows (~21–38 h) |
 | 2026-10-23 | trivial | Scroll bars on the zoomed slide pane (#1157) |
 | 2026-10-23 | minor | Shape Fill and Shape Outline (Home and Shape Format): the button applies the last colour picked from its menu, Accent 1 and Text 1 until one is picked. Line weight and dashes are not changed by the button; Font Color and Highlight stay as they were (#1080) |

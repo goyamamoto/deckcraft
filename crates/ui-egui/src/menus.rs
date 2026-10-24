@@ -187,8 +187,10 @@ pub fn menu_label<'a>(id: &str, label: &'a str) -> &'a str {
     if own == Some(label) { crate::i18n::tid(id, label) } else { tl!(label) }
 }
 
-/// The application menu tree: (menu, [(label, command id, shortcut)]), "-" = separator, in English.
-/// Used by the native macOS menu bar ([`menu_tree_shown`]) and as the parity catalogue's live side.
+/// The application menu tree: (menu, [(label, command id)]), "-" = separator, in English, in the
+/// order PowerPoint for Mac's menu bar has them (the native macOS menu bar adds the app menu and
+/// the Window menu's system rows, [`crate::native_menu`]). An id `dialog:<name>` opens that dialog
+/// (`app.dialog`). Also the parity catalogue's live side ([`menu_tree_shown`]).
 pub fn menu_tree() -> Vec<(&'static str, Vec<(&'static str, &'static str)>)> {
     vec![
         (
@@ -249,8 +251,6 @@ pub fn menu_tree() -> Vec<(&'static str, Vec<(&'static str, &'static str)>)> {
                 ("Zoom In", "view.zoomIn"),
                 ("Zoom Out", "view.zoomOut"),
                 ("Fit to Window", "view.fit"),
-                ("-", ""),
-                ("New Window", "view.newWindow"),
             ],
         ),
         (
@@ -312,6 +312,16 @@ pub fn menu_tree() -> Vec<(&'static str, Vec<(&'static str, &'static str)>)> {
             ],
         ),
         (
+            "Tools",
+            vec![
+                ("Spelling…", "review.spelling"),
+                ("Thesaurus…", "review.thesaurusPane"),
+                ("Language…", "dialog:language"),
+                ("-", ""),
+                ("AutoCorrect Options…", "dialog:autocorrect"),
+            ],
+        ),
+        (
             "Slide Show",
             vec![
                 ("Play from Start", "show.fromStart"),
@@ -331,8 +341,13 @@ pub fn menu_tree() -> Vec<(&'static str, Vec<(&'static str, &'static str)>)> {
                 ("Next Window", "window.next"),
             ],
         ),
-        ("Help", vec![("About DeckCraft", "app.about"), ("Command Palette", "app.palette")]),
+        ("Help", vec![("About DeckCraft", "app.about"), ("Command Palette", "app.palette"), ("Community Links", "app.links")]),
     ]
+}
+
+/// Whether `id` is a command the UI can run: an engine command or a UI command.
+pub fn is_known_command(id: &str) -> bool {
+    deckcraft_engine::find_command(id).is_some() || crate::UI_COMMANDS.iter().any(|c| c.0 == id)
 }
 
 #[cfg(test)]

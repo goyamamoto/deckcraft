@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~20 points and ~120–210 h away
 
-> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-25 · **Change:** minor (presentation windows: one window per presentation, New Window, Arrange All, Cascade, Switch Windows; P2 breadth 55% → 56%, breadth stays 84%; previous: minor, Japanese: interface catalogs through craft-i18n, Japanese interface, Japanese text laid out as PowerPoint for Mac lays it out; previous: trivial, progress log: scroll bars on the zoomed slide pane, #1157; previous: minor, native chart payloads stored in bounded ZIP members; previous: major, community PR wave 2026-10-14: ~60 landed items in the progress log, among them the Font, Paragraph, Photo Album, theme colour and font and Date and Time dialogs, presenter and show controls, the SmartArt Text Pane and PPTX corpus slices; breadth 84% after `cargo xtask parity`, ready stays ~55%, stage stays alpha; duplicated rows and headers folded; previous: minor, hours to ~95% per audience added) · **Target:** Microsoft PowerPoint for Mac 16.113 (Microsoft 365)
+> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-25 · **Change:** minor (the native macOS menu bar; presentation windows: one window per presentation, New Window, Arrange All, Cascade, Switch Windows; P2 breadth 55% → 56%, breadth stays 84%; previous: minor, Japanese: interface catalogs through craft-i18n, Japanese interface, Japanese text laid out as PowerPoint for Mac lays it out; previous: trivial, progress log: scroll bars on the zoomed slide pane, #1157; previous: minor, native chart payloads stored in bounded ZIP members; previous: major, community PR wave 2026-10-14: ~60 landed items in the progress log, among them the Font, Paragraph, Photo Album, theme colour and font and Date and Time dialogs, presenter and show controls, the SmartArt Text Pane and PPTX corpus slices; breadth 84% after `cargo xtask parity`, ready stays ~55%, stage stays alpha; duplicated rows and headers folded; previous: minor, hours to ~95% per audience added) · **Target:** Microsoft PowerPoint for Mac 16.113 (Microsoft 365)
 > **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-22 · **Change:** trivial (fill and outline edits reach group members, #1079; stage and scores unchanged) · **Target:** Microsoft PowerPoint for Mac 16.113 (Microsoft 365)
 > **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-20 · **Change:** trivial (empty chart number-format sections hide values; previous: minor, native chart payloads stored in bounded ZIP members; previous: major, community PR wave 2026-10-14: ~60 landed items in the progress log, among them the Font, Paragraph, Photo Album, theme colour and font and Date and Time dialogs, presenter and show controls, the SmartArt Text Pane and PPTX corpus slices; breadth 84% after `cargo xtask parity`, ready stays ~55%, stage stays alpha; duplicated rows and headers folded; previous: minor, hours to ~95% per audience added) · **Target:** Microsoft PowerPoint for Mac 16.113 (Microsoft 365)
 > **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-18 · **Change:** minor (Symbol-font characters (U+F0xx) remap to the installed Symbol face's real Unicode on macOS, so they draw from Symbol instead of a look-alike; previous: minor, native chart payloads stored in bounded ZIP members; previous: major, community PR wave 2026-10-14: ~60 landed items in the progress log, among them the Font, Paragraph, Photo Album, theme colour and font and Date and Time dialogs, presenter and show controls, the SmartArt Text Pane and PPTX corpus slices; breadth 84% after `cargo xtask parity`, ready stays ~55%, stage stays alpha; duplicated rows and headers folded; previous: minor, hours to ~95% per audience added) · **Target:** Microsoft PowerPoint for Mac 16.113 (Microsoft 365)
@@ -17,7 +17,7 @@ format plus PPTX), scriptable by agents (CLI, JSON control channel, MCP), and av
 
 | | Value | Kind |
 |---|---|---|
-| **Feature breadth** | **84%** weighted over 191 PowerPoint features (P0 92%, P1 82%, P2 56%) | measured: `cargo xtask parity` over [docs/parity-checklist.md](docs/parity-checklist.md) |
+| **Feature breadth** | **85%** weighted over 191 PowerPoint features (P0 92%, P1 84%, P2 56%) | measured: `cargo xtask parity` over [docs/parity-checklist.md](docs/parity-checklist.md) |
 | Menu-bar coverage | 59% of 217 app-specific PowerPoint menu items matched by name (lower bound) | measured: script over the PowerPoint menu dump and the 226 commands at d556ff9 (the registry has grown since; not re-measured) |
 | **Ready for real work** | **~55%** | estimated: weighted dimensions below |
 | Mainstream practitioner | ~53% | estimated: weekly-use areas × discounts for interaction (×0.92), stability (×0.92) and `.pptx` exchange (×0.88), [method](docs/target-app-parity.md#mainstream-practitioner-and-essentials-user) |
@@ -48,7 +48,7 @@ EMF/SVG pictures, the data-loss and startup-crash bugs (#60, #40, #59) and the b
 
 | Dimension | Ready | Hours to full | Doc |
 |---|---:|---|---|
-| Features (breadth 84% measured, with depth) | ~62% | 140–240 | [docs/parity-checklist.md](docs/parity-checklist.md) |
+| Features (breadth 85% measured, with depth) | ~62% | 140–240 | [docs/parity-checklist.md](docs/parity-checklist.md) |
 | UI/UX fidelity | ~60% | 30–50 | [docs/ui-parity.md](docs/ui-parity.md) |
 | File formats (PPTX, PDF, legacy, export) | ~58% | 60–110 | [docs/file-format-parity.md](docs/file-format-parity.md) |
 | Hardware (GPU raster, video decode, displays, pens) | ~40% | 25–45 | [docs/hardware-parity.md](docs/hardware-parity.md) |
@@ -135,6 +135,7 @@ app's JSON control channel (`deckcraft --control PORT`).
 
 | Date | What landed |
 |---|---|
+| 2026-10-25 | The native macOS menu bar, alongside the ribbon: DeckCraft, File, Edit, View, Insert, Format, Arrange, Tools, Slide Show, Window and Help as PowerPoint for Mac orders them, every row the ribbon's command with its key equivalent, checkmarks and enabled state; the Window menu lists the open windows; Quit asks about each window's unsaved changes (docs/native-menus.md) |
 | 2026-10-25 | Presentation windows, as PowerPoint has them: File › New and File › Open put each presentation in a window of its own (an empty window, or one with an untouched new presentation, takes an opened file; a file already open comes forward), File › Close closes the presentation's window and the last window stays on the start screen, the close button asks about that window's unsaved changes and quitting asks about each in turn; View › New Window opens a second window on the same presentation (`Presentation1:1` and `:2`, one undo history, each with its own slide); Arrange All, Cascade, Switch Windows and Next Window (⌘`); the control channel lists windows (`ui.windows`) and routes every request by `window` |
 | 2026-10-24 | Japanese interface: menus, ribbon, dialogs, panes, the File tab, the slide show and messages go through the craft-i18n catalogs (Japanese first, ~91% of ~1,625 strings; the rest is document content), the language follows the system or Preferences, and ribbon groups fold into drop-down buttons when a translation makes a tab too wide |
 | 2026-10-24 | Japanese text as PowerPoint for Mac lays it out (measured on our own probe decks): East Asian justification, kinsoku with the deck's own lists, hanging punctuation, theme `Jpan` fonts and shared-character font slots, no kana kerning, `ja-JP` date fields with era dates, East Asian numbering, `eaVert` and stacked vertical text, macOS IME reconversion, Change Case and Find by character width, Japanese font names, centimetres and A4/JIS paper |
@@ -266,6 +267,7 @@ app's JSON control channel (`deckcraft --control PORT`).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-25 | minor | Progress log: the native macOS menu bar. Checklist row Native menu bar M → D: P1 breadth 82% → 84%, headline breadth 84% → 85% |
 | 2026-10-25 | minor | Progress log: presentation windows (one per presentation, New Window, Arrange All, Cascade, Switch Windows). Checklist row New window / arrange windows P → D: P2 breadth 55% → 56%, headline breadth stays 84% |
 | 2026-10-22 | trivial | Progress log: Animation Pane ▸ Play From. Scores unchanged |
 | 2026-10-23 | trivial | Progress log: scroll bars on the zoomed slide pane (#1157). Scores and milestone names unchanged |

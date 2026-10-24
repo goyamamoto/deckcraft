@@ -1,19 +1,19 @@
 # PowerPoint feature checklist
 
-> **Generated:** 2026-10-25 (New window / arrange windows re-scored D: one window per presentation, New Window, Arrange All, Cascade, Switch Windows; East Asian text re-scored D after measuring Japanese layout against PowerPoint for Mac; bullets/numbering remain D after empty-line marker review; summary by `cargo xtask parity`; rows re-scored by the 2026-10-14 community PR wave, duplicate Thesaurus, AutoCorrect, Artistic effects and Corrections rows folded; Preview in editor re-scored 2026-10-13; earlier rows re-scored 2026-10-10 against PowerPoint for Mac 16.113.4; video/animated GIF row re-scored 2026-10-11, #171) · **Target:** Microsoft PowerPoint for Mac 16.113 (Microsoft 365)
+> **Generated:** 2026-10-25 (Native menu bar re-scored D: PowerPoint for Mac's menus from `menu_tree()`, every row a command; New window / arrange windows re-scored D: one window per presentation, New Window, Arrange All, Cascade, Switch Windows; East Asian text re-scored D after measuring Japanese layout against PowerPoint for Mac; bullets/numbering remain D after empty-line marker review; summary by `cargo xtask parity`; rows re-scored by the 2026-10-14 community PR wave, duplicate Thesaurus, AutoCorrect, Artistic effects and Corrections rows folded; Preview in editor re-scored 2026-10-13; earlier rows re-scored 2026-10-10 against PowerPoint for Mac 16.113.4; video/animated GIF row re-scored 2026-10-11, #171) · **Target:** Microsoft PowerPoint for Mac 16.113 (Microsoft 365)
 
 The summary between `<!-- SUMMARY -->
-**Weighted breadth parity: 84%** over 191 features.
+**Weighted breadth parity: 85%** over 191 features.
 
 | Priority | Features | Done | Partial | Missing | Parity |
 |---|---|---|---|---|---|
 | P0 | 72 | 61 | 11 | 0 | 92% |
-| P1 | 65 | 46 | 15 | 4 | 82% |
+| P1 | 65 | 47 | 15 | 3 | 84% |
 | P2 | 54 | 18 | 24 | 12 | 56% |
 
 | Area | Parity |
 |---|---|
-| Application shell | 81% |
+| Application shell | 88% |
 | Files | 75% |
 | Slides | 92% |
 | Views | 100% |
@@ -46,7 +46,7 @@ Open P0 items: Contextual tabs (Shape Format, Picture Format, Table Design/Layou
 | Application shell | Ribbon with Home/Insert/Draw/Design/Transitions/Animations/Slide Show/Review/View tabs | P0 | D |
 | Application shell | Contextual tabs (Shape Format, Picture Format, Table Design/Layout, Chart Design) | P0 | P |
 | Application shell | Quick Access toolbar / title bar commands | P1 | D |
-| Application shell | Native menu bar (macOS) with every command | P1 | M |
+| Application shell | Native menu bar (macOS) with every command | P1 | D |
 | Application shell | Command palette / Tell me search | P1 | D |
 | Application shell | Keyboard shortcuts for every common command | P0 | D |
 | Application shell | Status bar (slide counter, notes, comments, views, zoom) | P0 | D |
