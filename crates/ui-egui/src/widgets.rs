@@ -3,7 +3,9 @@
 //!
 //! The widgets take English labels and tooltips and draw them in the interface language
 //! ([`crate::i18n`]), measuring the translated text; their accessible names are what is drawn.
-//! Callers keep passing English (and the English goes on to the Quick Access Toolbar and commands).
+//! Callers keep passing English (and the English goes on to the Quick Access Toolbar and commands);
+//! the `_shown` variants take text already translated (a label with a runtime value, a command's
+//! label with its shortcut). Ribbon groups shrink to fit the window ([`crate::ribbon_fit`]).
 
 use deckcraft_color::{ColorScheme, Rgba, SchemeSlot};
 use deckcraft_model::ColorRef;
@@ -38,13 +40,25 @@ pub fn big_button(ui: &mut Ui, icon: Icon, label: &str, enabled: bool) -> Respon
 /// Large button; with `split`, the label row is a separate dropdown target (returns its response).
 /// `label` is English, with `\n` where it breaks; the translation is wrapped by [`wrap_label`].
 pub fn big_button_ex(ui: &mut Ui, icon: Icon, label: &str, enabled: bool, split: bool, selected: bool) -> (Response, Option<Response>) {
+    let label = crate::i18n::label(label);
+    big_button_paint(ui, icon, &label, enabled, split, selected, false)
+}
+
+/// A large button showing `shown` as given, already in the interface language: for a label with a
+/// runtime value (Slides Per Page: 3).
+pub fn big_button_shown(ui: &mut Ui, icon: Icon, shown: &str, enabled: bool) -> Response {
+    big_button_paint(ui, icon, shown, enabled, false, false, false).0
+}
+
+/// Draws a large button labelled `label` (already translated). `menu` draws a drop-down chevron
+/// after the label of a button that only opens a menu.
+fn big_button_paint(ui: &mut Ui, icon: Icon, label: &str, enabled: bool, split: bool, selected: bool, menu: bool) -> (Response, Option<Response>) {
     let t = Tokens::get(ui.ctx());
     let font = theme::font(11.0);
-    let label = crate::i18n::label(label);
-    let label = label.as_ref();
+    let chevron_after = split || menu;
     let lines: Vec<&str> = wrap_label(label);
     let text_w = lines.iter().map(|l| ui.fonts_mut(|f| f.layout_no_wrap(l.to_string(), font.clone(), t.text).size().x)).fold(0.0f32, f32::max);
-    let w = (text_w + 10.0 + if split && lines.len() == 1 { 10.0 } else { 0.0 }).max(40.0);
+    let w = (text_w + 10.0 + if chevron_after && lines.len() == 1 { 10.0 } else { 0.0 }).max(40.0);
     let (rect, resp) = ui.allocate_exact_size(vec2(w, RIBBON_H - 2.0), if enabled { Sense::click() } else { Sense::hover() });
     // Named for screen readers and UI tests ("Ink to\nShape" reads "Ink to Shape").
     let spoken = label.replace('\n', " ");
@@ -73,10 +87,10 @@ pub fn big_button_ex(ui: &mut Ui, icon: Icon, label: &str, enabled: bool, split:
     for (i, l) in lines.iter().enumerate() {
         let last = i + 1 == lines.len();
         let label_w = ui.fonts_mut(|f| f.layout_no_wrap(l.to_string(), font.clone(), col).size().x);
-        let extra = if split && last { 9.0 } else { 0.0 };
+        let extra = if chevron_after && last { 9.0 } else { 0.0 };
         let x = rect.center().x - (label_w + extra) / 2.0;
         painter.text(pos2(x, y), Align2::LEFT_TOP, l, font.clone(), col);
-        if split && last {
+        if chevron_after && last {
             chevron(&painter, pos2(x + label_w + 5.0, y + 7.0), 3.0, col);
         }
         y += 12.5;
@@ -92,6 +106,10 @@ fn wrap_label(label: &str) -> Vec<&str> {
         return vec![a, b];
     }
     if label_width(label) <= 8 {
+        return vec![label];
+    }
+    // One katakana word (アクション, オーディオ) reads badly broken; up to six letters it stays whole.
+    if label_width(label) <= 12 && label.chars().all(|c| matches!(c, '\u{30A0}'..='\u{30FF}')) {
         return vec![label];
     }
     let words: Vec<&str> = label.split(' ').collect();
@@ -134,8 +152,9 @@ fn cjk_break(label: &str) -> Option<usize> {
     if !label.chars().any(crate::i18n::is_cjk) {
         return None;
     }
-    // No line starts with these (kinsoku).
-    const NO_START: &str = "、。，．,.・：；:;？！?!）)」』】〕］]｝}〉》ー…‥ぁぃぅぇぉっゃゅょゎァィゥェォッャュョヮヵヶ々ゝゞヽヾ%％";
+    // No line starts with these (kinsoku), nor, in a label, with ん/ン, which ends a syllable
+    // (スクリーン|ショット, not スクリー|ンショット).
+    const NO_START: &str = "、。，．,.・：；:;？！?!）)」』】〕］]｝}〉》ー…‥ぁぃぅぇぉっゃゅょゎァィゥェォッャュョヮヵヶ々ゝゞヽヾ%％んン";
     // No line ends with these.
     const NO_END: &str = "（(「『【〔［[｛{〈《";
     let script = |c: char| match c {
@@ -173,10 +192,35 @@ pub fn small_button(ui: &mut Ui, icon: Icon, label: &str, enabled: bool, selecte
 }
 
 pub fn small_button_ex(ui: &mut Ui, icon: Icon, label: &str, enabled: bool, selected: bool, split: bool) -> (Response, Option<Response>) {
+    small_button_paint(ui, icon, tl!(label), enabled, selected, split, None)
+}
+
+/// A small ribbon button with the tooltip `tip` (already in the interface language: a command's
+/// label with its shortcut).
+pub fn small_button_tip(ui: &mut Ui, icon: Icon, label: &str, tip: &str, enabled: bool) -> Response {
+    small_button_paint(ui, icon, tl!(label), enabled, false, false, Some(tip)).0
+}
+
+/// Draws a small button labelled `label` (already translated). In a compact ribbon group
+/// ([`crate::ribbon_fit`]) the button shows only its icon; its name stays in the tooltip and for
+/// screen readers. `tip` is the tooltip; without one a compact button shows its label there.
+fn small_button_paint(
+    ui: &mut Ui,
+    icon: Icon,
+    label: &str,
+    enabled: bool,
+    selected: bool,
+    split: bool,
+    tip: Option<&str>,
+) -> (Response, Option<Response>) {
     let t = Tokens::get(ui.ctx());
-    let label = tl!(label);
     let font = theme::font(12.0);
-    let tw = if label.is_empty() { 0.0 } else { ui.fonts_mut(|f| f.layout_no_wrap(label.to_string(), font.clone(), t.text).size().x) + 5.0 };
+    let label_w = if label.is_empty() { 0.0 } else { ui.fonts_mut(|f| f.layout_no_wrap(label.to_string(), font.clone(), t.text).size().x) + 5.0 };
+    let compact = crate::ribbon_fit::compact(ui);
+    if !compact {
+        crate::ribbon_fit::add_saving(ui, label_w);
+    }
+    let tw = if compact { 0.0 } else { label_w };
     let arrow_w = if split { 12.0 } else { 0.0 };
     let w = 24.0 + tw + arrow_w;
     let (rect, resp) = ui.allocate_exact_size(vec2(w, 22.0), if enabled { Sense::click() } else { Sense::hover() });
@@ -203,13 +247,19 @@ pub fn small_button_ex(ui: &mut Ui, icon: Icon, label: &str, enabled: bool, sele
         painter.rect_filled(Rect::from_min_max(pos2(rect.max.x - arrow_w, rect.min.y), rect.max), CornerRadius::same(4), c);
     }
     icons::paint(&painter, Rect::from_center_size(pos2(rect.min.x + 12.0, rect.center().y), vec2(17.0, 17.0)), icon, t.text, !enabled);
-    if !label.is_empty() {
+    if !label.is_empty() && !compact {
         painter.text(pos2(rect.min.x + 24.0, rect.center().y), Align2::LEFT_CENTER, label, font, if enabled { t.text } else { t.text_faint });
     }
     if split {
         chevron(&painter, pos2(rect.max.x - 6.0, rect.center().y), 2.8, t.text_dim);
     }
-    (if split { main_resp } else { resp }, arrow_resp)
+    let main = if split { main_resp } else { resp };
+    let main = match tip {
+        Some(tip) => main.on_hover_text(tip),
+        None if compact && !label.is_empty() => main.on_hover_text(label),
+        None => main,
+    };
+    (main, arrow_resp)
 }
 
 /// A menu choice ticked in the icon column (Align to Slide…), its text lined up with the
@@ -239,8 +289,13 @@ pub fn check_item_shown(ui: &mut Ui, label: &str, enabled: bool, on: bool) -> Re
 
 /// A square icon toggle (B, I, U, alignment…), named by its English `tip`.
 pub fn icon_toggle(ui: &mut Ui, icon: Icon, tip: &str, enabled: bool, on: bool) -> Response {
+    icon_toggle_shown(ui, icon, tl!(tip), enabled, on)
+}
+
+/// [`icon_toggle`] named by `tip` as given, already in the interface language (a command's label
+/// with its shortcut).
+pub fn icon_toggle_shown(ui: &mut Ui, icon: Icon, tip: &str, enabled: bool, on: bool) -> Response {
     let t = Tokens::get(ui.ctx());
-    let tip = tl!(tip);
     let (rect, resp) = ui.allocate_exact_size(vec2(24.0, 22.0), if enabled { Sense::click() } else { Sense::hover() });
     let painter = ui.painter_at(rect);
     if let Some(c) = bg(ui, &resp, on, &t) {
@@ -279,14 +334,75 @@ pub fn color_split(ui: &mut Ui, icon: Icon, tip: &str, color: Color32, enabled: 
     (main.on_hover_text(tl!(tip)), arrow)
 }
 
-/// A ribbon group: contents, then a thin vertical separator.
-pub fn group<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
-    let r = ui.horizontal_top(|ui| {
-        ui.spacing_mut().item_spacing = vec2(1.0, 1.0);
-        add(ui)
-    });
+/// A ribbon group: contents, then a thin vertical separator. `title` (English) names the group.
+/// When the window is too narrow for the tab ([`crate::ribbon_fit`]) the group's small buttons drop
+/// their labels, or the whole group folds into one drop-down button showing its title and `icon`.
+pub fn group(ui: &mut Ui, title: &str, icon: Icon, add: impl FnOnce(&mut Ui)) {
+    let start = ui.cursor().min.x;
+    let position = crate::ribbon_fit::position(ui.ctx());
+    let level = crate::ribbon_fit::level(ui.ctx(), title);
+    if level == crate::ribbon_fit::COLLAPSED {
+        collapsed_group(ui, title, position, icon, add);
+    } else {
+        // Not folded: a drop-down left open while it was folded doesn't come back by itself.
+        let open_id = collapsed_open_id(ui, title, position);
+        ui.data_mut(|d| d.remove::<bool>(open_id));
+        ui.horizontal_top(|ui| {
+            ui.spacing_mut().item_spacing = vec2(1.0, 1.0);
+            crate::ribbon_fit::set_compact(ui, level == crate::ribbon_fit::COMPACT);
+            add(ui);
+            crate::ribbon_fit::end_compact(ui.ctx());
+        });
+    }
     separator(ui);
-    r.inner
+    // Up to where the next group starts.
+    let width = ui.cursor().min.x - start + ui.spacing().item_spacing.x;
+    crate::ribbon_fit::record(ui.ctx(), title, level, width);
+}
+
+/// Where a folded group remembers whether its drop-down is open.
+fn collapsed_open_id(ui: &Ui, title: &str, position: usize) -> egui::Id {
+    ui.id().with(("collapsed_group", title, position))
+}
+
+/// A group folded into one drop-down button (the window is too narrow): the button shows the
+/// group's icon and title, and its drop-down holds the whole group as designed. The drop-down
+/// stays open while it is used: only a click outside it, or on the button, closes it; clicks in the
+/// menus and lists its controls open (layouts, colours, font sizes) count as inside.
+fn collapsed_group(ui: &mut Ui, title: &str, position: usize, icon: Icon, add: impl FnOnce(&mut Ui)) {
+    let shown = crate::i18n::label(title);
+    let open_id = collapsed_open_id(ui, title, position);
+    let was_open = ui.data(|d| d.get_temp::<bool>(open_id)).unwrap_or(false);
+    let (resp, _) = big_button_paint(ui, icon, &shown, true, false, was_open, true);
+    let resp = resp.on_hover_text(shown.replace('\n', " "));
+    let mut open = was_open;
+    if resp.clicked() {
+        open = !open;
+    } else if open && ui.input(|i| i.pointer.any_click()) {
+        // Popups (the drop-down, its controls' menus and lists) sit above the ribbon; a click on
+        // the window below them is outside.
+        let pos = ui.input(|i| i.pointer.interact_pos());
+        let layer = pos.and_then(|p| ui.ctx().layer_id_at(p));
+        if !layer.is_some_and(|l| matches!(l.order, egui::Order::Foreground | egui::Order::Tooltip)) {
+            open = false;
+        }
+    }
+    // Esc closes an open list inside first, then the drop-down.
+    let child_open = egui::Popup::is_any_open(ui.ctx());
+    let mut visible = open;
+    if open {
+        egui::Popup::menu(&resp).open_bool(&mut visible).close_behavior(egui::PopupCloseBehavior::IgnoreClicks).show(|ui| {
+            ui.horizontal_top(|ui| {
+                ui.set_min_height(RIBBON_H);
+                ui.spacing_mut().item_spacing = vec2(1.0, 1.0);
+                add(ui);
+            });
+        });
+        if !visible && child_open && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            visible = true;
+        }
+    }
+    ui.data_mut(|d| d.insert_temp(open_id, visible));
 }
 
 pub fn separator(ui: &mut Ui) {
@@ -300,7 +416,10 @@ pub fn rows<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     ui.vertical(|ui| {
         ui.spacing_mut().item_spacing = vec2(1.0, 0.0);
         ui.add_space(0.0);
-        add(ui)
+        crate::ribbon_fit::begin_column(ui);
+        let r = add(ui);
+        crate::ribbon_fit::end_column(ui);
+        r
     })
     .inner
 }
@@ -460,8 +579,9 @@ pub fn color_grid(ui: &mut Ui, scheme: &ColorScheme, none_label: Option<&str>) -
     out
 }
 
-/// A row of gallery tiles drawn by `paint_tile`, with English tooltips from `tip`; returns the
-/// clicked index.
+/// A row of gallery tiles drawn by `paint_tile`, with tooltips from `tip` shown as given (the
+/// caller translates interface vocabulary such as transition names; theme names are the
+/// document's and stay as they are); returns the clicked index.
 pub fn gallery(
     ui: &mut Ui,
     n: usize,
@@ -483,7 +603,7 @@ pub fn gallery(
         if sel {
             painter.rect_stroke(rect.expand(1.0), CornerRadius::same(4), Stroke::new(1.5, t.accent), egui::StrokeKind::Inside);
         }
-        if resp.on_hover_text(tl!(&tip(i)).to_string()).clicked() {
+        if resp.on_hover_text(tip(i)).clicked() {
             clicked = Some(i);
         }
     }
@@ -686,6 +806,9 @@ mod tests {
     #[test]
     fn cjk_labels_wrap_between_characters() {
         assert_eq!(wrap_label("貼り付け"), ["貼り付け"], "four characters fit on one line");
+        assert_eq!(wrap_label("オーディオ"), ["オーディオ"], "a short katakana word stays whole");
+        assert_eq!(wrap_label("アクション"), ["アクション"]);
+        assert_eq!(wrap_label("スクリーンショット"), ["スクリーン", "ショット"], "a long one still breaks, not before ン");
         assert_eq!(wrap_label("新しいスライド"), ["新しい", "スライド"]);
         assert_eq!(wrap_label("スライド ショー"), ["スライド", "ショー"], "a space still wins");
         for label in ["スライドショーの設定", "アニメーションウィンドウ", "フォント（詳細）…", "PDFとして書き出し", "図形の書式設定"]
