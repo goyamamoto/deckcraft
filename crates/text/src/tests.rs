@@ -1502,6 +1502,11 @@ fn east_asian_vertical_text_marks_cjk_upright() {
     let l = lay(&p, &sh, 300.0, 600.0);
     assert!(l.runs.iter().all(|r| !r.upright));
     assert!(is_upright('あ') && is_upright('、') && is_upright('Ａ') && !is_upright('A') && !is_upright('1'));
+    // PowerPoint for Mac stands brackets, the wave dash and the prolonged sound mark upright in
+    // their horizontal forms too, as it does 「 」 、 。.
+    for c in ['（', '）', '〜', 'ー', '「', '」', '。', '！', '？'] {
+        assert!(is_upright(c), "{c}");
+    }
 }
 
 #[test]

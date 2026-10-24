@@ -114,6 +114,8 @@ fn a_runs_tradition_comes_from_its_language_then_the_system_then_its_paragraph()
     assert_eq!(run_traditions(Some("ja-JP"), None, None, None), (J, J));
     assert_eq!(run_traditions(Some("en-US"), Some("ja-JP"), None, None), (J, J));
     assert_eq!(run_traditions(Some("ja-JP"), Some("en-US"), k, k), (J, J));
+    // A Chinese run keeps its own tradition on a Japanese system too, where PowerPoint falls back
+    // to a Japanese face (a deliberate difference, see `run_traditions`).
     assert_eq!(run_traditions(Some("zh-CN"), None, J, None), (s, s));
     assert_eq!(run_traditions(Some("ko-KR"), None, None, None), (k, k));
     // An en-US run's kanji fall back to the system's tradition, never to the theme font.
