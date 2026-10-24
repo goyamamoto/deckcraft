@@ -619,7 +619,7 @@ pub(crate) fn east_asian_props(props: &RunProps, inherited: Option<&str>, lang: 
 /// The language the text being edited inherits where its runs name none: from its paragraph,
 /// its list styles or the deck's default (`a:defPPr`). `None` for notes and where nothing names
 /// one.
-fn inherited_lang(s: &Session) -> Option<String> {
+pub(crate) fn inherited_lang(s: &Session) -> Option<String> {
     let st = s.doc().ok()?;
     let t = st.selection.text.as_ref().filter(|t| !t.notes)?;
     let sh = st.shape(t.shape)?;

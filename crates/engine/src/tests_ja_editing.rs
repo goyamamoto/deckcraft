@@ -188,20 +188,35 @@ fn the_east_asian_editing_language_names_han_text() {
     assert_eq!(runs(&s, id)[1], run("。", Some("ja-JP"), Some("de-DE")));
 }
 
+/// Give `s`'s deck the default language `lang` (`a:defPPr`).
+fn deck_default(s: &mut Session, lang: &str) {
+    let lang = lang.to_string();
+    s.edit(|doc, _| {
+        let run = deckcraft_model::text::RunProps { lang: Some(lang), ..Default::default() };
+        doc.default_text_style.default = Some(deckcraft_model::text::LevelStyle { run, ..Default::default() });
+        Ok(())
+    })
+    .unwrap();
+}
+
+/// Change Case with a bare caret converts the word it is in, the East Asian word of untagged text
+/// in a Japanese deck (the word double-click selects) too.
+#[test]
+fn change_case_at_a_caret_converts_the_japanese_word() {
+    let (mut s, id) = editing("", None);
+    deck_default(&mut s, "ja-JP");
+    s.execute("text.insert", &json!({"text": "カタカナです"})).unwrap();
+    s.execute("text.select", &json!({"anchor": [0, 1], "caret": [0, 1]})).unwrap();
+    s.execute("format.case", &json!({"mode": "halfWidth"})).unwrap();
+    assert_eq!(runs(&s, id), vec![run("ｶﾀｶﾅです", None, None)]);
+    assert_eq!(sel(&s), ((0, 0), (0, 0)), "the caret goes to the word's start");
+}
+
 /// Runs without a language of their own are in the deck's default language (`a:defPPr`): Han
 /// text typed into a Chinese deck's text stays in it, and Japanese typed into a German deck's
 /// text takes German as its alternative.
 #[test]
 fn typed_text_inherits_the_decks_default_language() {
-    let deck_default = |s: &mut Session, lang: &str| {
-        let lang = lang.to_string();
-        s.edit(|doc, _| {
-            let run = deckcraft_model::text::RunProps { lang: Some(lang), ..Default::default() };
-            doc.default_text_style.default = Some(deckcraft_model::text::LevelStyle { run, ..Default::default() });
-            Ok(())
-        })
-        .unwrap();
-    };
     let (mut s, id) = editing("x", None);
     deck_default(&mut s, "zh-CN");
     s.execute("text.insert", &json!({"text": "汉字"})).unwrap();
