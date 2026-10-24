@@ -66,6 +66,56 @@ fn insert_opens_the_dialog_and_ok_inserts_one_field() {
 }
 
 #[test]
+fn japanese_lists_the_thirteen_formats_and_inserts_a_ja_jp_era_date() {
+    let mut h = harness();
+    h.get_by_label("Date & Time").click();
+    h.run_steps(2);
+    // An English row first, so switching languages keeps the type.
+    let now = deckcraft_text::datetime::DateTime::now_local().unwrap();
+    let english = deckcraft_text::datetime::field_text("datetime4", Some("en-US"), now).unwrap();
+    h.get_by_label(&english).click();
+    h.run_steps(1);
+    assert!(h.query_by_label("Calendar type:").is_none(), "English has no calendar choice");
+    h.get_by_label("English (United States)").click();
+    h.run_steps(2);
+    h.get_by_label("Japanese").click();
+    h.run_steps(2);
+    let d = h.state().dialog.as_ref().unwrap();
+    assert_eq!((d.fields.get("language").map(String::as_str), d.fields.get("format").map(String::as_str)), (Some("ja-JP"), Some("datetime4")));
+    // Every type has its Japanese text, listed in type order.
+    let rows = crate::dialogs::date_rows("ja-JP");
+    assert_eq!(rows.iter().map(|(k, _)| *k).collect::<Vec<_>>(), crate::dialogs::DATE_KINDS);
+    for kind in ["datetime2", "datetime3", "datetime4", "datetime6", "datetime7"] {
+        let sample = deckcraft_text::datetime::field_text(kind, Some("ja-JP"), now).unwrap();
+        assert!(h.query_by_label(&sample).is_some(), "{kind}: {sample}");
+    }
+    // 2026年10月24日 is a Western-calendar date; picking the Japanese era picks its first format.
+    let _ = h.get_by_label("Calendar type:");
+    h.get_by_label("Gregorian").click_accesskit();
+    h.run_steps(2);
+    h.get_by_label("Japanese era").click_accesskit();
+    h.run_steps(2);
+    assert_eq!(h.state().dialog.as_ref().unwrap().fields.get("format").map(String::as_str), Some("datetime3"));
+    let era = deckcraft_text::datetime::field_text("datetime3", Some("ja-JP"), now).unwrap();
+    assert!(era.starts_with("令和"), "{era}");
+    h.get_by_label("OK").click();
+    h.run_steps(2);
+    assert!(h.state().dialog.is_none());
+    let run = date_run(&h).unwrap();
+    assert!(matches!(run.kind, RunKind::Field { ref field } if field == "datetime3"), "{run:?}");
+    assert_eq!(run.text, era);
+    assert_eq!((run.props.lang.as_deref(), run.props.alt_lang.as_deref()), (Some("ja-JP"), Some("en-US")));
+}
+
+#[test]
+fn the_dialog_opens_in_japanese_when_the_system_edits_in_japanese() {
+    use deckcraft_fonts::CjkLocale;
+    assert_eq!(crate::dialogs::date_lang_for(Some(CjkLocale::Japanese)), "ja-JP");
+    assert_eq!(crate::dialogs::date_lang_for(Some(CjkLocale::Korean)), "en-US");
+    assert_eq!(crate::dialogs::date_lang_for(None), "en-US");
+}
+
+#[test]
 fn cancel_closes_the_dialog_without_a_date() {
     let mut h = harness();
     h.get_by_label("Date & Time").click();
