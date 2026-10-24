@@ -102,6 +102,18 @@ pub fn japanese_ui_fonts(bold: bool) -> Vec<&'static CraftFont> {
     v
 }
 
+/// The font in `data` (face `index` of a collection): its ascent, descent (negative) and line gap
+/// as fractions of its em, read as skrifa reads them (and so as egui lays interface text out with
+/// them); `None` when there is no such font.
+pub fn em_metrics(data: &[u8], index: u32) -> Option<(f32, f32, f32)> {
+    use skrifa::MetadataProvider;
+    let f = skrifa::FontRef::from_index(data, index).ok()?;
+    let m = f.metrics(skrifa::instance::Size::unscaled(), skrifa::instance::LocationRef::default());
+    let upem = f32::from(m.units_per_em.max(1));
+    let (a, d, l) = (m.ascent / upem, m.descent / upem, m.leading / upem);
+    (a.is_finite() && d.is_finite() && l.is_finite()).then_some((a, d, l))
+}
+
 /// The default theme's font.
 pub const DEFAULT_FAMILY: &str = "Inter";
 

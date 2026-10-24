@@ -197,6 +197,27 @@ pub fn font_definitions(extra: &[std::sync::Arc<deckcraft_fonts::FontFace>]) -> 
     bold.extend(defs.families.get(&FontFamily::Proportional).cloned().unwrap_or_default());
     defs.families.insert(FontFamily::Name("bold".into()), bold);
     add_fallback_faces(&mut defs, extra);
+    // A Chinese, Japanese or Korean interface without Inter (a build without craft-fonts) puts its
+    // East Asian face first: its own Latin letters, digits and brackets then go with its kana and
+    // kanji, where egui's Ubuntu Light drew them thin and apart from the Japanese text.
+    if !names.iter().any(|(fam, _, _)| *fam == "Inter") && crate::i18n::current().uses_cjk() {
+        let cjk = extra.iter().find(|f| ['あ', '漢', '한'].iter().any(|c| f.covers(*c)) && ['A', '1', '('].iter().all(|c| f.covers(*c)));
+        if let Some(f) = cjk {
+            let name = format!("fallback {} {} {}", f.family, f.style, f.id());
+            for family in [FontFamily::Proportional, FontFamily::Name("bold".into())] {
+                if let Some(list) = defs.families.get_mut(&family) {
+                    list.retain(|n| *n != name);
+                    list.insert(0, name.clone());
+                }
+            }
+            if let Some(d) = defs.font_data.get_mut(&name) {
+                let mut data = (**d).clone();
+                data.tweak.y_offset_factor = 0.0;
+                *d = std::sync::Arc::new(data);
+            }
+        }
+    }
+    align_baselines(&mut defs);
     // The Japanese interface face (the first one when Inter isn't embedded) hints its en and em
     // dashes, bars thinner than a pixel, down to nothing, so they drew as gaps in interface text;
     // unhinted, they draw.
@@ -222,6 +243,43 @@ pub fn add_fallback_faces(defs: &mut FontDefinitions, faces: &[std::sync::Arc<de
         defs.font_data.insert(name.clone(), std::sync::Arc::new(data));
         for list in defs.families.values_mut() {
             list.push(name.clone());
+        }
+    }
+}
+
+/// Puts every fallback face's baseline on its family's first face's. egui centres a fallback
+/// face's line (ascent, descent and line gap) in the first face's, so a face with other vertical
+/// metrics sits higher or lower: Japanese in Hiragino or BIZ UDPGothic next to Latin in Inter or
+/// Ubuntu drew above the Latin baseline, and the half-width brackets and dots of 英語 (米国) and
+/// フォント… looked dropped. Each fallback face gets the shift that undoes the centring, worked out
+/// against the proportional family's first face (the interface text); that face itself is never
+/// moved.
+fn align_baselines(defs: &mut FontDefinitions) {
+    let metrics = |defs: &FontDefinitions, name: &str| {
+        defs.font_data.get(name).and_then(|d| deckcraft_fonts::em_metrics(&d.font, d.index)).map(|(a, d, l)| (a, a - d + l))
+    };
+    let mut families: Vec<FontFamily> = defs.families.keys().filter(|f| **f != FontFamily::Proportional).cloned().collect();
+    families.push(FontFamily::Proportional);
+    let anchor = defs.families.get(&FontFamily::Proportional).and_then(|l| l.first()).cloned();
+    for family in families {
+        let Some(list) = defs.families.get(&family).cloned() else { continue };
+        let Some(((ascent, height), rest)) = list.split_first().and_then(|(first, rest)| Some((metrics(defs, first)?, rest))) else {
+            continue;
+        };
+        for name in rest {
+            if Some(name) == anchor.as_ref() {
+                continue;
+            }
+            let Some((a, h)) = metrics(defs, name) else { continue };
+            let shift = (ascent - a) - 0.5 * (height - h);
+            if let Some(d) = defs.font_data.get_mut(name)
+                && shift.is_finite()
+                && (d.tweak.y_offset_factor - shift).abs() > 1e-4
+            {
+                let mut data = (**d).clone();
+                data.tweak.y_offset_factor = shift;
+                *d = std::sync::Arc::new(data);
+            }
         }
     }
 }
@@ -261,6 +319,32 @@ mod tests {
         let mut o = ctx.run_ui(Default::default(), |_| {});
         o.textures_delta.clear();
         out
+    }
+
+    #[test]
+    fn fallback_faces_share_the_interface_baseline() {
+        // egui centres a fallback face's line in the first face's, so a face with other vertical
+        // metrics (Hiragino or BIZ UDPGothic beside Inter or Ubuntu) drew off the baseline. Every
+        // fallback face is shifted back onto it; the first face never moves.
+        let defs = super::font_definitions(&[]);
+        let list = defs.families.get(&egui::FontFamily::Proportional).unwrap().clone();
+        let tweak = |n: &str| defs.font_data.get(n).unwrap().tweak.y_offset_factor;
+        assert_eq!(tweak(&list[0]), 0.0);
+        let ctx = egui::Context::default();
+        ctx.set_fonts(defs.clone());
+        let mut o = ctx.run_ui(Default::default(), |_| {});
+        o.textures_delta.clear();
+        // 'A' comes from the first face, the emoji from a fallback one.
+        let size = 13.0;
+        let (a, e) = ctx.fonts_mut(|f| {
+            let g = f.layout_no_wrap("A\u{1F600}".to_string(), egui::FontId::proportional(size), egui::Color32::WHITE);
+            let glyphs: Vec<_> = g.rows.iter().flat_map(|r| r.glyphs.clone()).collect();
+            (glyphs[0].pos.y, glyphs[1].pos.y)
+        });
+        let fallback = list.iter().skip(1).find(|n| defs.font_data.get(*n).is_some_and(|d| deckcraft_fonts::em_metrics(&d.font, d.index).is_some()));
+        let shift = fallback.map(|n| tweak(n)).unwrap();
+        assert!(shift != 0.0, "the emoji face's metrics differ from the first face's");
+        assert!((e + shift * size - a).abs() <= 1.0, "baselines: {a} vs {e} + {}", shift * size);
     }
 
     #[test]
