@@ -254,7 +254,8 @@ fn check(ui: &mut Ui, d: &mut Dialog, label: &str, key: &str, default: bool) -> 
 }
 
 fn num(d: &mut Dialog, key: &str, default: f64) -> f64 {
-    d.get(key, "").trim().trim_end_matches(['"', '%', ' ']).parse::<f64>().ok().filter(|v| v.is_finite()).unwrap_or(default)
+    let text = d.get(key, "");
+    crate::widgets::ascii_number_text(&text).trim().trim_end_matches(['"', '%', ' ']).parse::<f64>().ok().filter(|v| v.is_finite()).unwrap_or(default)
 }
 
 fn album_items(d: &Dialog) -> Option<Vec<Value>> {
@@ -1182,35 +1183,7 @@ fn body(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             ok || cancel
         }
         "sizePosition" => size_position_dialog(app, ui, d),
-        "headerFooter" => {
-            let hf = app.session.active().map(|s| s.doc.header_footer.clone()).unwrap_or_default();
-            let date = check(ui, d, "Date and time", "date", hf.date);
-            field(ui, d, "  Fixed date (empty = update automatically):", "dateText", &hf.date_text);
-            let num_on = check(ui, d, "Slide number", "num", hf.slide_number);
-            let foot = check(ui, d, "Footer", "footer", hf.footer);
-            field(ui, d, "  Footer text:", "footerText", &hf.footer_text);
-            let hide = check(ui, d, "Don't show on title slide", "hide", hf.hide_on_title);
-            ui.add_space(6.0);
-            let mut apply_all = false;
-            let mut apply = false;
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                apply_all = ui.button("Apply to All").clicked();
-                apply = ui.button("Apply").clicked();
-                if ui.button("Cancel").clicked() {
-                    d.fields.insert("cancel".into(), "1".into());
-                }
-            });
-            if apply || apply_all {
-                let dt = d.get("dateText", "");
-                let ft = d.get("footerText", "");
-                run(
-                    app,
-                    "design.headerFooter",
-                    json!({"date": date, "dateText": dt, "slideNumber": num_on, "footer": foot, "footerText": ft, "hideOnTitle": hide, "all": apply_all}),
-                );
-            }
-            apply || apply_all || d.fields.contains_key("cancel")
-        }
+        "headerFooter" => header_footer_dialog(app, ui, d),
         "hyperlink" => {
             let seed = hyperlink_seed_of(app.session.active());
             let slide_default = seed.slide.to_string();
@@ -1384,7 +1357,7 @@ fn body(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             let tab = d.get("tab", if numbered { "numbered" } else { "bulleted" });
             ui.horizontal(|ui| {
                 for (k, l) in [("bulleted", "Bulleted"), ("numbered", "Numbered")] {
-                    if ui.selectable_label(tab == k, l).clicked() {
+                    if ui.selectable_label(tab == k, tl!(l)).clicked() {
                         d.fields.insert("tab".into(), k.into());
                     }
                 }
@@ -1392,27 +1365,23 @@ fn body(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             ui.separator();
             let style_key = if tab == "numbered" { "scheme" } else { "char" };
             let current = d.get(style_key, if tab == "numbered" { "arabicPeriod" } else { "•" });
-            let styles: &[(&str, &str)] = if tab == "numbered" {
-                &[
-                    ("arabicPeriod", "1. 2. 3."),
-                    ("arabicParenR", "1) 2) 3)"),
-                    ("romanUcPeriod", "I. II. III."),
-                    ("romanLcPeriod", "i. ii. iii."),
-                    ("alphaUcPeriod", "A. B. C."),
-                    ("alphaLcParenR", "a) b) c)"),
-                    ("alphaLcPeriod", "a. b. c."),
-                ]
+            // Numbered: the Numbering gallery (format.numberingSchemes), with the East Asian schemes
+            // (① ② ③, １． ２． ３．, 一． 二． 三．) when editing in an East Asian language.
+            let styles: Vec<(String, String)> = if tab == "numbered" {
+                let gallery = crate::ribbon::numbering_gallery(app);
+                crate::ribbon::note_samples(app, ui.ctx(), &gallery);
+                gallery
             } else {
-                &[("•", "•"), ("○", "○"), ("■", "■"), ("□", "□"), ("◆", "◆"), ("➢", "➢"), ("✓", "✓"), ("–", "–"), ("★", "★")]
+                ["•", "○", "■", "□", "◆", "➢", "✓", "–", "★"].iter().map(|c| (c.to_string(), c.to_string())).collect()
             };
             egui::Grid::new("bullet-styles").show(ui, |ui| {
                 for (i, (k, l)) in styles.iter().enumerate() {
                     let r = ui.add_sized(
                         vec2(if tab == "numbered" { 88.0 } else { 44.0 }, 40.0),
-                        egui::Button::selectable(current == *k, egui::RichText::new(*l).size(16.0)),
+                        egui::Button::selectable(current == *k, egui::RichText::new(l.as_str()).size(16.0)),
                     );
                     if r.clicked() {
-                        d.fields.insert(style_key.into(), (*k).into());
+                        d.fields.insert(style_key.into(), k.clone());
                     }
                     if (i + 1) % if tab == "numbered" { 4 } else { 5 } == 0 {
                         ui.end_row();
@@ -1420,11 +1389,11 @@ fn body(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 }
             });
             if tab == "bulleted" {
-                field(ui, d, "Custom character:", "custom", "");
+                field(ui, d, tl!("Custom character:"), "custom", "");
             } else {
-                field(ui, d, "Start at:", "start", "1");
+                field(ui, d, tl!("Start at:"), "start", "1");
             }
-            field(ui, d, "Size (% of text):", "size", "100");
+            field(ui, d, tl!("Size (% of text):"), "size", "100");
             let colors = [
                 ("", "Automatic"),
                 ("tx1", "Text"),
@@ -1437,19 +1406,19 @@ fn body(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             ];
             let color = d.get("color", "");
             ui.horizontal(|ui| {
-                ui.add_sized(vec2(120.0, 20.0), egui::Label::new("Color:"));
+                ui.add_sized(vec2(120.0, 20.0), egui::Label::new(tl!("Color:")));
                 egui::ComboBox::from_id_salt("bullet-color")
-                    .selected_text(colors.iter().find(|c| c.0 == color).map_or("Automatic", |c| c.1))
+                    .selected_text(tl!(colors.iter().find(|c| c.0 == color).map_or("Automatic", |c| c.1)))
                     .show_ui(ui, |ui| {
                         for (k, l) in colors {
-                            if ui.selectable_label(color == k, l).clicked() {
+                            if ui.selectable_label(color == k, tl!(l)).clicked() {
                                 d.fields.insert("color".into(), k.into());
                             }
                         }
                     });
             });
             ui.horizontal(|ui| {
-                if ui.button("None").on_hover_text("Remove bullets and numbering").clicked() {
+                if ui.button(tl!("None")).on_hover_text(tl!("Remove bullets and numbering")).clicked() {
                     d.fields.insert("none".into(), "1".into());
                 }
             });
@@ -1459,7 +1428,8 @@ fn body(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 run(app, if tab == "numbered" { "format.numbering" } else { "format.bullets" }, json!({"on": false}));
             } else if ok {
                 let mut p = json!({"on": true});
-                if let Some(size) = d.get("size", "100").trim().trim_end_matches('%').parse::<f64>().ok().filter(|v| v.is_finite()) {
+                let size = d.get("size", "100");
+                if let Some(size) = crate::widgets::parse_number(size.trim().trim_end_matches(['%', '％'])) {
                     p["size"] = json!(size.clamp(25.0, 400.0));
                 }
                 if !color.is_empty() {
@@ -1467,7 +1437,8 @@ fn body(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 }
                 if tab == "numbered" {
                     p["scheme"] = json!(d.get("scheme", "arabicPeriod"));
-                    p["start"] = json!(d.get("start", "1").trim().parse::<u64>().unwrap_or(1).clamp(1, 32767));
+                    let start = crate::widgets::parse_number(&d.get("start", "1")).filter(|v| v.fract() == 0.0).unwrap_or(1.0);
+                    p["start"] = json!(start.clamp(1.0, 32767.0) as u64);
                     run(app, "format.numbering", p);
                 } else {
                     let custom = d.get("custom", "");
@@ -2332,6 +2303,7 @@ fn field_of(d: &Dialog, key: &str) -> String {
 }
 
 fn parse_shown(s: &str) -> Option<f64> {
+    let s = crate::widgets::ascii_number_text(s);
     let t = s.trim().trim_end_matches(['%', '"']).trim();
     if t.is_empty() {
         return None;
@@ -2704,6 +2676,175 @@ fn date_time_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     cancel
 }
 
+/// The automatic date the Header & Footer dialog starts from: the current slide's date field (its
+/// type and language), else the deck's last format; Japanese when editing in Japanese.
+fn header_footer_date_seed(app: &SlideApp) -> (String, String) {
+    use deckcraft_model::text::RunKind;
+    let Some(st) = app.session.active() else { return ("datetime1".into(), date_lang_for(app.session.east_asian_editing).into()) };
+    let field = st
+        .doc
+        .slides
+        .get(st.selection.slide)
+        .and_then(|sl| sl.shapes.iter().find(|x| x.ph_type() == Some(deckcraft_model::PhType::Date)))
+        .and_then(|sh| sh.text.as_ref())
+        .and_then(|t| {
+            t.paragraphs.iter().flat_map(|p| &p.runs).find_map(|r| match &r.kind {
+                RunKind::Field { field } if DATE_KINDS.contains(&field.as_str()) => Some((field.clone(), r.props.lang.clone())),
+                _ => None,
+            })
+        });
+    let saved = &st.doc.header_footer.date_format;
+    let kind = match &field {
+        Some((kind, _)) => kind.clone(),
+        None if DATE_KINDS.contains(&saved.as_str()) => saved.clone(),
+        None => "datetime1".into(),
+    };
+    let lang = field
+        .and_then(|(_, lang)| lang)
+        .and_then(|l| DATE_LANGS.iter().find(|(k, _)| k.eq_ignore_ascii_case(&l)).map(|(k, _)| (*k).to_string()))
+        .unwrap_or_else(|| date_lang_for(app.session.east_asian_editing).to_string());
+    (kind, lang)
+}
+
+/// The automatic date's format, language and (for Japanese) calendar, as Insert ▸ Date and Time
+/// offers them: the formats are the chosen language's, computed for now.
+fn date_format_picker(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) {
+    use deckcraft_text::datetime::calendar_of;
+    let lang = d.get("dateLang", "en-US");
+    let rows = date_rows(&lang);
+    let samples: String = rows.iter().map(|(_, s)| s.as_str()).collect();
+    let borrowed = app.ui_fonts.faces.len();
+    app.ui_fonts.note(ui.ctx(), &samples);
+    if app.ui_fonts.faces.len() != borrowed {
+        ui.ctx().request_repaint();
+    }
+    if !rows.iter().any(|(k, _)| *k == d.get("dateFormat", "datetime1"))
+        && let Some((k, _)) = rows.first()
+    {
+        d.fields.insert("dateFormat".into(), (*k).to_string());
+    }
+    let format = d.get("dateFormat", "datetime1");
+    let shown = rows.iter().find(|(k, _)| *k == format).map_or_else(|| format.clone(), |(_, s)| s.clone());
+    egui::Grid::new("hf-date-format").num_columns(2).show(ui, |ui| {
+        let l = ui.label(tl!("Format:"));
+        egui::ComboBox::from_id_salt("hf-date-format-combo")
+            .selected_text(shown.as_str())
+            .width(240.0)
+            .show_ui(ui, |ui| {
+                for (kind, sample) in &rows {
+                    if ui.selectable_label(format == *kind, sample).clicked() {
+                        d.fields.insert("dateFormat".into(), (*kind).to_string());
+                    }
+                }
+            })
+            .response
+            .labelled_by(l.id);
+        ui.end_row();
+        let lang_label = DATE_LANGS.iter().find(|(k, _)| *k == lang).map_or("English (United States)", |(_, l)| *l);
+        let l = ui.label(tl!("Language:"));
+        egui::ComboBox::from_id_salt("hf-date-lang")
+            .selected_text(tl!(lang_label))
+            .width(240.0)
+            .show_ui(ui, |ui| {
+                for (k, l) in DATE_LANGS {
+                    if ui.selectable_label(lang == *k, tl!(l)).clicked() {
+                        d.fields.insert("dateLang".into(), (*k).to_string());
+                    }
+                }
+            })
+            .response
+            .labelled_by(l.id);
+        ui.end_row();
+        if lang == "ja-JP" {
+            let calendar = calendar_of(&format, Some(&lang));
+            let shown = DATE_CALENDARS.iter().find(|(c, _)| *c == calendar).map_or("Gregorian", |(_, l)| *l);
+            let l = ui.label(tl!("Calendar type:"));
+            egui::ComboBox::from_id_salt("hf-date-calendar")
+                .selected_text(tl!(shown))
+                .width(240.0)
+                .show_ui(ui, |ui| {
+                    for (c, l) in DATE_CALENDARS {
+                        // The field type alone carries the calendar: picking one picks its first format.
+                        if ui.selectable_label(calendar == c, tl!(l)).clicked()
+                            && calendar != c
+                            && let Some((k, _)) = rows.iter().find(|(k, _)| calendar_of(k, Some(&lang)) == c)
+                        {
+                            d.fields.insert("dateFormat".into(), (*k).to_string());
+                        }
+                    }
+                })
+                .response
+                .labelled_by(l.id);
+            ui.end_row();
+        }
+    });
+}
+
+/// Insert ▸ Header & Footer. The date is automatic, a field in a format and language picked as in
+/// Insert ▸ Date and Time (the Japanese formats, era dates included, when editing in Japanese), or
+/// fixed text. Apply sets the current slide, Apply to All every slide.
+fn header_footer_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
+    let hf = app.session.active().map(|s| s.doc.header_footer.clone()).unwrap_or_default();
+    ui.set_min_width(440.0);
+    if !d.fields.contains_key("dateFormatSeed") {
+        let (kind, lang) = header_footer_date_seed(app);
+        d.fields.insert("dateFormat".into(), kind.clone());
+        d.fields.insert("dateFormatSeed".into(), kind);
+        d.fields.insert("dateLang".into(), lang.clone());
+        d.fields.insert("dateLangSeed".into(), lang);
+    }
+    let date = check(ui, d, tl!("Date and time"), "date", hf.date);
+    let auto = d.get("dateMode", if hf.date_text.is_empty() { "auto" } else { "fixed" }) == "auto";
+    ui.add_enabled_ui(date, |ui| {
+        ui.indent("hf-date", |ui| {
+            if ui.radio(auto, tl!("Update automatically")).clicked() {
+                d.fields.insert("dateMode".into(), "auto".into());
+            }
+            ui.add_enabled_ui(auto, |ui| ui.indent("hf-date-auto", |ui| date_format_picker(app, ui, d)));
+            if ui.radio(!auto, tl!("Fixed")).clicked() {
+                d.fields.insert("dateMode".into(), "fixed".into());
+            }
+            ui.add_enabled_ui(!auto, |ui| {
+                let mut v = d.get("dateText", &hf.date_text);
+                ui.indent("hf-date-fixed", |ui| ui.add(egui::TextEdit::singleline(&mut v).desired_width(240.0)));
+                d.fields.insert("dateText".into(), v);
+            });
+        });
+    });
+    let num_on = check(ui, d, tl!("Slide number"), "num", hf.slide_number);
+    let foot = check(ui, d, tl!("Footer"), "footer", hf.footer);
+    field(ui, d, tl!("  Footer text:"), "footerText", &hf.footer_text);
+    let hide = check(ui, d, tl!("Don't show on title slide"), "hide", hf.hide_on_title);
+    ui.add_space(6.0);
+    let mut apply_all = false;
+    let mut apply = false;
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        apply_all = ui.button(tl!("Apply to All")).clicked();
+        apply = ui.button(tl!("Apply")).clicked();
+        if ui.button(tl!("Cancel")).clicked() {
+            d.fields.insert("cancel".into(), "1".into());
+        }
+    });
+    if apply || apply_all {
+        let auto = d.get("dateMode", if hf.date_text.is_empty() { "auto" } else { "fixed" }) == "auto";
+        let dt = if auto { String::new() } else { d.get("dateText", &hf.date_text) };
+        let ft = d.get("footerText", "");
+        let mut p =
+            json!({"date": date, "dateText": dt, "slideNumber": num_on, "footer": foot, "footerText": ft, "hideOnTitle": hide, "all": apply_all});
+        // A changed format or language reaches the dates already there; unchanged, they keep theirs.
+        let (format, lang) = (d.get("dateFormat", "datetime1"), d.get("dateLang", "en-US"));
+        if auto && (format != d.get("dateFormatSeed", "") || lang != d.get("dateLangSeed", "")) {
+            p["dateFormat"] = json!(format);
+            p["dateLanguage"] = json!(lang);
+        }
+        if let Err(e) = app.run("design.headerFooter", p) {
+            app.set_status(e);
+            return false;
+        }
+    }
+    apply || apply_all || d.fields.contains_key("cancel")
+}
+
 fn format_spacing(v: f64) -> String {
     if !v.is_finite() {
         return "6".into();
@@ -2904,7 +3045,7 @@ fn labeled_text(ui: &mut Ui, d: &mut Dialog, label: &str, key: &str, width: f32)
 }
 
 fn finite_pt(text: &str) -> Option<f64> {
-    text.trim().trim_end_matches("pt").trim().parse::<f64>().ok().filter(|v| v.is_finite())
+    crate::widgets::ascii_number_text(text).trim().trim_end_matches("pt").trim().parse::<f64>().ok().filter(|v| v.is_finite())
 }
 
 /// Home › Font › Font…, the shape menu and Cmd+T. One OK applies every field together.
@@ -3075,6 +3216,70 @@ fn seed_paragraph_fields(d: &mut Dialog) {
     seed_once(d, "spaceAfterSeed", pt_text(d.params.get("spaceAfter"), 0.0));
     seed_once(d, "lineKind", json_text(d.params.get("lineKind"), "multiple"));
     seed_once(d, "lineValue", pt_text(d.params.get("lineValue"), 1.0));
+    seed_once(d, "page", json_text(d.params.get("page"), "indents"));
+    // Asian Typography, as the paragraph has it. The seeds are what the dialog opened with (kept
+    // across a trip to Tabs…): OK sends only the options that were changed.
+    for (key, default) in ASIAN_TYPOGRAPHY_DEFAULTS {
+        let value = json_text(d.params.get(key), default);
+        seed_once(d, &format!("{key}Seed"), json_text(d.params.get(format!("{key}Seed").as_str()), &value));
+        seed_once(d, key, value);
+    }
+}
+
+/// The paragraph's Asian Typography options (`format.paragraphDialog` keys) and the dialog's value
+/// for each when the paragraph doesn't say (PowerPoint's defaults): `1`/`0` for the switches.
+const ASIAN_TYPOGRAPHY_DEFAULTS: [(&str, &str); 4] = [("eaLnBrk", "1"), ("latinLnBrk", "0"), ("hangingPunct", "1"), ("fontAlgn", "auto")];
+
+/// The Asian Typography options changed since the dialog opened, as `format.paragraphDialog` params.
+fn asian_typography_params(d: &mut Dialog) -> serde_json::Map<String, Value> {
+    let mut out = serde_json::Map::new();
+    for (key, default) in ASIAN_TYPOGRAPHY_DEFAULTS {
+        let value = d.get(key, default);
+        if value == d.get(&format!("{key}Seed"), default) {
+            continue;
+        }
+        let v = if key == "fontAlgn" { json!(value) } else { json!(value == "1") };
+        out.insert(key.to_string(), v);
+    }
+    out
+}
+
+/// Text alignment's choices on the Asian Typography page, as (`fontAlgn`, English label): how
+/// characters of different sizes on a line line up.
+const FONT_ALIGNS: [(&str, &str); 5] = [("auto", "Auto"), ("t", "Top"), ("ctr", "Center"), ("base", "Baseline"), ("b", "Bottom")];
+
+/// The Paragraph dialog's pages: Indents and Spacing, and with East Asian editing Asian
+/// Typography. Returns whether the Asian Typography page is showing.
+fn paragraph_pages(app: &SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
+    if !crate::ribbon::east_asian(app) {
+        return false;
+    }
+    let page = d.get("page", "indents");
+    ui.horizontal(|ui| {
+        for (k, l) in [("indents", "Indents and Spacing"), ("asian", "Asian Typography")] {
+            if ui.selectable_label(page == k, tl!(l)).clicked() {
+                d.fields.insert("page".into(), k.into());
+            }
+        }
+    });
+    ui.separator();
+    d.get("page", "indents") == "asian"
+}
+
+/// Paragraph ▸ Asian Typography: East Asian line breaking (kinsoku), Latin words breaking at any
+/// letter, hanging punctuation, and how characters of different sizes line up.
+fn asian_typography_page(ui: &mut Ui, d: &mut Dialog) {
+    ui.label(egui::RichText::new(tl!("Line breaking")).strong());
+    check(ui, d, tl!("Apply Asian line-breaking rules (kinsoku)"), "eaLnBrk", true);
+    check(ui, d, tl!("Let Latin words break at any letter"), "latinLnBrk", false);
+    check(ui, d, tl!("Hang punctuation past the line end"), "hangingPunct", true);
+    ui.add_space(6.0);
+    let choices: Vec<(&str, &str)> = FONT_ALIGNS.iter().map(|(k, l)| (*k, crate::i18n::tc("anchor", l))).collect();
+    ui.horizontal(|ui| {
+        ui.add_sized(vec2(110.0, 20.0), egui::Label::new(tl!("Text alignment:")));
+        choice(ui, d, "paragraph_font_align", "fontAlgn", &choices);
+    });
+    ui.add_space(6.0);
 }
 
 fn paragraph_return_params(d: &mut Dialog) -> Value {
@@ -3100,6 +3305,15 @@ fn paragraph_return_params(d: &mut Dialog) -> Value {
         "lineValue": line_value,
         "tabs": d.params.get("tabs").cloned().unwrap_or_else(|| json!([])),
         "defaultTab": d.params.get("defaultTab").cloned().unwrap_or_else(|| json!(72.0)),
+        "page": d.get("page", "indents"),
+        "eaLnBrk": d.get("eaLnBrk", "1") == "1",
+        "eaLnBrkSeed": d.get("eaLnBrkSeed", "1") == "1",
+        "latinLnBrk": d.get("latinLnBrk", "0") == "1",
+        "latinLnBrkSeed": d.get("latinLnBrkSeed", "0") == "1",
+        "hangingPunct": d.get("hangingPunct", "1") == "1",
+        "hangingPunctSeed": d.get("hangingPunctSeed", "1") == "1",
+        "fontAlgn": d.get("fontAlgn", "auto"),
+        "fontAlgnSeed": d.get("fontAlgnSeed", "auto"),
     })
 }
 
@@ -3116,56 +3330,60 @@ fn line_preset_label(kind: &str, value: &str) -> &'static str {
     }
 }
 
-/// Home › Paragraph launcher. One OK applies alignment, indentation and spacing together.
+/// Home › Paragraph launcher. One OK applies alignment, indentation and spacing together, and
+/// with East Asian editing the Asian Typography page's options.
 fn paragraph_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     ui.set_min_width(460.0);
     seed_paragraph_fields(d);
+    if paragraph_pages(app, ui, d) {
+        asian_typography_page(ui, d);
+        return paragraph_dialog_buttons(app, ui, d);
+    }
+    let aligns: Vec<(&str, &str)> = [
+        ("left", "Left"),
+        ("center", "Center"),
+        ("right", "Right"),
+        ("justify", "Justify"),
+        ("justLow", "Justify low"),
+        ("distributed", "Distributed"),
+    ]
+    .into_iter()
+    .map(|(k, l)| (k, crate::i18n::tc("align", l)))
+    .collect();
     ui.horizontal(|ui| {
-        ui.add_sized(vec2(110.0, 20.0), egui::Label::new("Alignment"));
-        choice(
-            ui,
-            d,
-            "paragraph_align",
-            "align",
-            &[
-                ("left", "Left"),
-                ("center", "Center"),
-                ("right", "Right"),
-                ("justify", "Justify"),
-                ("justLow", "Justify low"),
-                ("distributed", "Distributed"),
-            ],
-        );
+        ui.add_sized(vec2(110.0, 20.0), egui::Label::new(tl!("Alignment")));
+        choice(ui, d, "paragraph_align", "align", &aligns);
     });
-    ui.label(egui::RichText::new("Indentation").strong());
+    ui.label(egui::RichText::new(tl!("Indentation")).strong());
     ui.horizontal(|ui| {
-        let _ = labeled_text(ui, d, "Before text", "before", 64.0);
+        let _ = labeled_text(ui, d, tl!("Before text"), "before", 64.0);
         ui.label("in");
         ui.add_space(12.0);
-        let _ = labeled_text(ui, d, "After text", "after", 64.0);
+        let _ = labeled_text(ui, d, tl!("After text"), "after", 64.0);
         ui.label("in");
     });
     ui.horizontal(|ui| {
-        ui.add_sized(vec2(110.0, 20.0), egui::Label::new("Special"));
-        choice(ui, d, "paragraph_special", "special", &[("none", "None"), ("first", "First line"), ("hanging", "Hanging")]);
+        ui.add_sized(vec2(110.0, 20.0), egui::Label::new(tl!("Special")));
+        choice(ui, d, "paragraph_special", "special", &[("none", tl!("None")), ("first", tl!("First line")), ("hanging", tl!("Hanging"))]);
         ui.add_space(8.0);
-        let _ = labeled_text(ui, d, "By", "by", 64.0);
+        let _ = labeled_text(ui, d, tl!("By"), "by", 64.0);
         ui.label("in");
     });
-    ui.label(egui::RichText::new("Spacing").strong());
+    ui.label(egui::RichText::new(tl!("Spacing")).strong());
     ui.horizontal(|ui| {
-        let _ = labeled_text(ui, d, "Spacing before", "spaceBefore", 64.0);
+        let _ = labeled_text(ui, d, tl!("Spacing before"), "spaceBefore", 64.0);
         ui.label("pt");
         ui.add_space(12.0);
-        let _ = labeled_text(ui, d, "Spacing after", "spaceAfter", 64.0);
+        let _ = labeled_text(ui, d, tl!("Spacing after"), "spaceAfter", 64.0);
         ui.label("pt");
     });
     let mut picked: Option<(&'static str, Option<&'static str>)> = None;
     ui.horizontal(|ui| {
-        ui.add_sized(vec2(110.0, 20.0), egui::Label::new("Line spacing"));
+        ui.add_sized(vec2(110.0, 20.0), egui::Label::new(tl!("Line spacing")));
         let kind = d.get("lineKind", "multiple");
         let value = d.get("lineValue", "1");
-        egui::ComboBox::from_id_salt("paragraph_line").selected_text(line_preset_label(&kind, &value)).width(140.0).show_ui(ui, |ui| {
+        let shown = |label: &str| crate::i18n::tc("lineSpacing", label).to_string();
+        egui::ComboBox::from_id_salt("paragraph_line").selected_text(shown(line_preset_label(&kind, &value))).width(140.0).show_ui(ui, |ui| {
             for (label, k, v) in [
                 ("Single", "multiple", Some("1")),
                 ("1.5 lines", "multiple", Some("1.5")),
@@ -3173,13 +3391,13 @@ fn paragraph_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 ("Multiple", "multiple", None),
                 ("Exactly", "exactly", None),
             ] {
-                if ui.selectable_label(line_preset_label(&kind, &value) == label, label).clicked() {
+                if ui.selectable_label(line_preset_label(&kind, &value) == label, shown(label)).clicked() {
                     picked = Some((k, v));
                 }
             }
         });
         ui.add_space(8.0);
-        let _ = labeled_text(ui, d, "At", "lineValue", 64.0);
+        let _ = labeled_text(ui, d, tl!("At"), "lineValue", 64.0);
     });
     if let Some((kind, value)) = picked {
         d.fields.insert("lineKind".into(), kind.into());
@@ -3191,9 +3409,14 @@ fn paragraph_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             d.fields.insert("lineValue".into(), "1".into());
         }
     }
+    paragraph_dialog_buttons(app, ui, d)
+}
+
+/// The Paragraph dialog's Tabs…, OK and Cancel, on either page: OK applies both pages in one step.
+fn paragraph_dialog_buttons(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     let mut open_tabs = false;
     ui.horizontal(|ui| {
-        if ui.button("Tabs…").clicked() {
+        if ui.button(tl!("Tabs…")).clicked() {
             open_tabs = true;
         }
     });
@@ -3249,6 +3472,9 @@ fn paragraph_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             params["lineSpacingPt"] = json!(line_value);
         } else {
             params["lineSpacing"] = json!(line_value);
+        }
+        if let Some(o) = params.as_object_mut() {
+            o.extend(asian_typography_params(d));
         }
         if app.run("format.paragraphDialog", params).is_err() {
             return false;
@@ -3353,7 +3579,7 @@ fn find_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     // "Find what:" has the keyboard when the dialog opens, so Ctrl+F and typing finds (#951).
     let mut what = d.get("text", "");
     ui.horizontal(|ui| {
-        ui.add_sized(vec2(120.0, 20.0), egui::Label::new("Find what:"));
+        ui.add_sized(vec2(120.0, 20.0), egui::Label::new(tl!("Find what:")));
         let r = ui.add(egui::TextEdit::singleline(&mut what).desired_width(180.0));
         // Enter finds the next match and leaves the keyboard here, so the search can be changed.
         if !d.fields.contains_key("focused") || (r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
@@ -3363,22 +3589,25 @@ fn find_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     });
     d.fields.insert("text".into(), what);
     if replace_mode {
-        field(ui, d, "Replace with:", "with", "");
+        field(ui, d, tl!("Replace with:"), "with", "");
     }
-    let case = check(ui, d, "Match case", "matchCase", false);
-    let whole = check(ui, d, "Find whole words only", "wholeWords", false);
+    let case = check(ui, d, tl!("Match case"), "matchCase", false);
+    let whole = check(ui, d, tl!("Find whole words only"), "wholeWords", false);
+    // With East Asian editing, as in PowerPoint: unticked (the default), ＡＢＣ finds ABC and ｶﾅ
+    // finds カナ.
+    let width = crate::ribbon::east_asian(app) && check(ui, d, tl!("Match half-width and full-width forms"), "matchWidth", false);
     let text = d.get("text", "");
-    let q = json!({"text": text, "matchCase": case, "wholeWords": whole});
+    let q = json!({"text": text, "matchCase": case, "wholeWords": whole, "matchWidth": width});
     let mut close = false;
     let mut find_next = false;
     ui.add_space(6.0);
     ui.horizontal(|ui| {
         let has = !text.is_empty();
-        if ui.add_enabled(has, egui::Button::new("Find Next")).clicked() || (has && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
+        if ui.add_enabled(has, egui::Button::new(tl!("Find Next"))).clicked() || (has && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
             find_next = true;
         }
         if replace_mode {
-            if ui.add_enabled(has, egui::Button::new("Replace")).clicked() {
+            if ui.add_enabled(has, egui::Button::new(tl!("Replace"))).clicked() {
                 let cur: Option<Value> = serde_json::from_str(&d.get("cur", "")).ok();
                 if let Some(at) = cur {
                     let mut p = q.clone();
@@ -3391,27 +3620,30 @@ fn find_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 }
                 find_next = true;
             }
-            if ui.add_enabled(has, egui::Button::new("Replace All")).clicked() {
+            if ui.add_enabled(has, egui::Button::new(tl!("Replace All"))).clicked() {
                 let mut p = q.clone();
                 p["with"] = json!(d.get("with", ""));
                 let msg = match app.session.execute("text.replace", &p) {
-                    Ok(v) => format!("Replaced {} occurrence(s).", v.get("replaced").and_then(Value::as_u64).unwrap_or(0)),
-                    Err(_) => format!("DeckCraft can't find “{text}”."),
+                    Ok(v) => crate::i18n::fmt(
+                        tl!("Replaced {count} occurrence(s)."),
+                        &[("count", &v.get("replaced").and_then(Value::as_u64).unwrap_or(0).to_string())],
+                    ),
+                    Err(_) => crate::i18n::fmt(tl!("DeckCraft can't find “{text}”."), &[("text", &text)]),
                 };
                 d.fields.insert("status".into(), msg);
                 d.fields.remove("cur");
             }
-        } else if ui.button("Replace…").clicked() {
+        } else if ui.button(tl!("Replace…")).clicked() {
             d.fields.insert("replace".into(), "1".into());
         }
-        if ui.button("Close").clicked() {
+        if ui.button(tl!("Close")).clicked() {
             close = true;
         }
     });
     if find_next {
         let list = app.session.execute("text.find", &q).ok().and_then(|v| v.as_array().cloned()).unwrap_or_default();
         if list.is_empty() {
-            d.fields.insert("status".into(), format!("DeckCraft can't find “{text}”."));
+            d.fields.insert("status".into(), crate::i18n::fmt(tl!("DeckCraft can't find “{text}”."), &[("text", &text)]));
             d.fields.remove("cur");
         } else {
             let n = d.get("next", "0").parse::<usize>().unwrap_or(0) % list.len();
@@ -3422,10 +3654,15 @@ fn find_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             }
             d.fields.insert("cur".into(), m.to_string());
             d.fields.insert("next".into(), (n + 1).to_string());
-            let where_ = if m.get("shape").is_some_and(Value::is_null) { " (notes)" } else { "" };
+            let template = if m.get("shape").is_some_and(Value::is_null) {
+                tl!("Match {n} of {count} on slide {slide} (notes).")
+            } else {
+                tl!("Match {n} of {count} on slide {slide}.")
+            };
+            let slide = m.get("slide").and_then(Value::as_u64).unwrap_or(0).saturating_add(1);
             d.fields.insert(
                 "status".into(),
-                format!("Match {} of {} on slide {}{where_}.", n + 1, list.len(), m.get("slide").and_then(Value::as_u64).unwrap_or(0) + 1),
+                crate::i18n::fmt(template, &[("n", &(n + 1).to_string()), ("count", &list.len().to_string()), ("slide", &slide.to_string())]),
             );
         }
     }

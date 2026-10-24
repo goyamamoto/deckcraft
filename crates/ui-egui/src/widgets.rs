@@ -215,8 +215,13 @@ pub fn small_button_ex(ui: &mut Ui, icon: Icon, label: &str, enabled: bool, sele
 /// A menu choice ticked in the icon column (Align to Slide…), its text lined up with the
 /// [`small_button`] items around it.
 pub fn check_item(ui: &mut Ui, label: &str, enabled: bool, on: bool) -> Response {
+    check_item_shown(ui, tl!(label), enabled, on)
+}
+
+/// [`check_item`] showing `label` as given: for a label already translated in a context of its
+/// own ([`crate::i18n::tc`]).
+pub fn check_item_shown(ui: &mut Ui, label: &str, enabled: bool, on: bool) -> Response {
     let t = Tokens::get(ui.ctx());
-    let label = tl!(label);
     let font = theme::font(12.0);
     let tw = ui.fonts_mut(|f| f.layout_no_wrap(label.to_string(), font.clone(), t.text).size().x) + 5.0;
     let (rect, resp) = ui.allocate_exact_size(vec2(24.0 + tw, 22.0), if enabled { Sense::click() } else { Sense::hover() });
@@ -489,7 +494,9 @@ pub fn gallery(
 pub fn spinner(ui: &mut Ui, id: &str, value: f64, step: f64, suffix: &str, width: f32) -> Option<f64> {
     let t = Tokens::get(ui.ctx());
     let key = ui.id().with(id);
-    let mut text: String = ui.data_mut(|d| d.get_temp::<String>(key)).unwrap_or_else(|| fmt_num(value, suffix));
+    // What is being typed, kept while the field has the keyboard.
+    let typing = ui.data_mut(|d| d.get_temp::<String>(key));
+    let mut text: String = typing.clone().unwrap_or_else(|| fmt_num(value, suffix));
     let mut out = None;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
@@ -499,9 +506,11 @@ pub fn spinner(ui: &mut Ui, id: &str, value: f64, step: f64, suffix: &str, width
         } else {
             ui.data_mut(|d| d.remove::<String>(key));
         }
-        if r.lost_focus() {
-            let num: String = text.chars().filter(|c| c.is_ascii_digit() || *c == '.' || *c == '-').collect();
-            if let Ok(v) = num.parse::<f64>() {
+        // egui reports a lost focus on two frames running; only the one that still has what was
+        // typed commits it (the other would commit the value shown again).
+        if r.lost_focus() && typing.is_some() {
+            let num: String = ascii_number_text(&text).chars().filter(|c| c.is_ascii_digit() || *c == '.' || *c == '-').collect();
+            if let Some(v) = num.parse::<f64>().ok().filter(|v| v.is_finite()) {
                 out = Some(v);
             }
         }
@@ -522,6 +531,32 @@ pub fn spinner(ui: &mut Ui, id: &str, value: f64, step: f64, suffix: &str, width
         }
     });
     out
+}
+
+/// What was typed into a number field, in ASCII. A Japanese input method in kana mode commits
+/// full-width forms (`１８`, `－１．５`, `２４ｐｔ`, `５０％`): the full-width ASCII block
+/// (U+FF01–FF5E) becomes ASCII, the ideographic space a space and the minus sign (U+2212) and
+/// the small and full-width hyphen-minus forms `-`, so every number field reads them as typed.
+pub fn ascii_number_text(s: &str) -> std::borrow::Cow<'_, str> {
+    if s.is_ascii() {
+        return std::borrow::Cow::Borrowed(s);
+    }
+    std::borrow::Cow::Owned(
+        s.chars()
+            .map(|c| match c {
+                '\u{FF01}'..='\u{FF5E}' => char::from_u32(c as u32 - 0xFEE0).unwrap_or(c),
+                '\u{3000}' => ' ',
+                '\u{2212}' | '\u{FE63}' => '-',
+                _ => c,
+            })
+            .collect(),
+    )
+}
+
+/// A number typed into a field ([`ascii_number_text`] forms accepted, spaces around it ignored);
+/// `None` unless it is a finite number.
+pub fn parse_number(s: &str) -> Option<f64> {
+    ascii_number_text(s).trim().parse::<f64>().ok().filter(|v| v.is_finite())
 }
 
 pub fn fmt_num(v: f64, suffix: &str) -> String {
@@ -681,5 +716,49 @@ mod tests {
         let stored = Some(("old".to_string(), "old plus typing".to_string()));
         assert_eq!(text_draft(stored, "undone"), "undone");
         assert_eq!(text_draft(None, "fresh"), "fresh");
+    }
+
+    /// Numbers typed through a Japanese input method in kana mode arrive full-width.
+    #[test]
+    fn number_fields_read_full_width_digits_signs_and_units() {
+        assert_eq!(ascii_number_text("１８"), "18");
+        assert_eq!(ascii_number_text("－１．５ｐｔ"), "-1.5pt");
+        assert_eq!(ascii_number_text("\u{2212}2\u{3000}"), "-2 ");
+        assert_eq!(ascii_number_text("５０％"), "50%");
+        assert!(matches!(ascii_number_text("12.5"), std::borrow::Cow::Borrowed(_)));
+        assert_eq!(parse_number(" １２．５ "), Some(12.5));
+        assert_eq!(parse_number("\u{3000}－３\u{3000}"), Some(-3.0));
+        assert_eq!(parse_number("十八"), None);
+        assert_eq!(parse_number(""), None);
+        assert_eq!(parse_number("ｉｎｆ"), None);
+        assert_eq!(parse_number(&"９".repeat(400)), None);
+    }
+
+    /// The ribbon's number boxes (the Format pane's margins…) commit full-width digits, once.
+    #[test]
+    fn spinner_commits_full_width_digits() {
+        let got = RefCell::new(Vec::new());
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(200.0, 60.0)).build_ui(|ui| {
+            if let Some(v) = spinner(ui, "size", 12.0, 1.0, " pt", 60.0) {
+                got.borrow_mut().push(v);
+            }
+        });
+        h.run();
+        h.get_by_role(Role::TextInput).click();
+        h.run();
+        h.key_press(egui::Key::End);
+        for _ in 0.."12 pt".len() {
+            h.key_press(egui::Key::Backspace);
+        }
+        h.run();
+        assert_eq!(h.get_by_role(Role::TextInput).value().as_deref(), Some(""));
+        // What a Japanese input method commits in kana mode.
+        h.event(egui::Event::Text("１８ｐｔ".into()));
+        h.run();
+        assert!(got.borrow().is_empty(), "nothing commits while typing");
+        h.key_press(egui::Key::Enter);
+        h.run();
+        // egui reports the lost focus on two frames; the value shown again isn't committed after it.
+        assert_eq!(*got.borrow(), vec![18.0]);
     }
 }

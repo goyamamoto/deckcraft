@@ -2922,3 +2922,37 @@ fn notes_stay_dark_under_a_dark_slide_master() {
     let c = colours(&p);
     assert!(!c.is_empty() && c.iter().all(|&c| c == white), "the notes master's own map: {c:?}");
 }
+
+/// Notes drawn for a print preview or the Notes Page view are the notes the PDF prints: laid out
+/// by the text engine in the notes area (wrapped in it), at the asked pixel density.
+#[test]
+fn notes_text_renders_wrapped_in_its_frame() {
+    let mut p = Presentation::default();
+    std::sync::Arc::make_mut(&mut p.slides[0]).notes = TextBody::from_text("Speaker notes that run long enough to wrap onto more than one line here");
+    let frame = Rect::new(72.0, 400.0, 272.0, 600.0);
+    let img = render_notes_text(&p, 0, frame, 1.0, 2.0).expect("an image of the notes");
+    assert_eq!((img.width, img.height), (400, 400));
+    // Ink rows: dark pixels, in more than one band (the text wrapped).
+    let inked: Vec<u32> =
+        (0..img.height).filter(|&y| (0..img.width).any(|x| img.straight_at(x, y).is_some_and(|px| px[3] > 128 && px[0] < 128))).collect();
+    assert!(!inked.is_empty(), "the notes are drawn");
+    let bands = inked.windows(2).filter(|w| w[1] > w[0] + 1).count() + 1;
+    assert!(bands >= 2, "the notes wrap in a 200 pt frame: {bands} line(s)");
+    // The corner stays clear: the image is the notes over transparency.
+    assert_eq!(img.straight_at(img.width - 1, img.height - 1).map(|px| px[3]), Some(0));
+    // Twice the density, twice the pixels.
+    let big = render_notes_text(&p, 0, frame, 1.0, 4.0).expect("notes");
+    assert_eq!((big.width, big.height), (800, 800));
+    // Nothing to draw, or nothing to draw into.
+    assert!(render_notes_text(&p, 1, frame, 1.0, 2.0).is_none(), "no such slide");
+    for bad in [Rect::new(0.0, 0.0, 0.0, 10.0), Rect::new(0.0, 0.0, f64::NAN, 10.0)] {
+        assert!(render_notes_text(&p, 0, bad, 1.0, 2.0).is_none());
+    }
+    assert!(render_notes_text(&p, 0, frame, 1.0, f64::INFINITY).is_none());
+    assert!(render_notes_text(&p, 0, frame, f64::NAN, 2.0).is_some(), "a bad scale falls back to 1");
+    // A huge density is capped at the largest pixmap.
+    let capped = render_notes_text(&p, 0, frame, 1.0, 1.0e6).expect("notes");
+    assert!(capped.width <= MAX_SIDE && capped.height <= MAX_SIDE);
+    std::sync::Arc::make_mut(&mut p.slides[0]).notes = TextBody::default();
+    assert!(render_notes_text(&p, 0, frame, 1.0, 2.0).is_none(), "no notes");
+}

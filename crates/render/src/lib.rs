@@ -2403,6 +2403,37 @@ pub fn render_shapes(pres: &Presentation, slide: &Slide, ids: &[ShapeId], scale:
     })
 }
 
+/// Slide `index`'s notes drawn as Notes Pages print them ([`place_notes_text`]: the notes master's
+/// body, styles and theme fonts, wrapped by the text engine) onto a transparent image of the notes
+/// `frame` (page points, `scale` page points per notes-page point) at `px_per_pt` pixels per page
+/// point, so a print preview or the Notes Page view shows what the PDF prints. `None` when the slide
+/// has no notes or the sizes are unusable; a panic draws nothing (logged), never a crash.
+pub fn render_notes_text(pres: &Presentation, index: usize, frame: Rect, scale: f64, px_per_pt: f64) -> Option<Image> {
+    if !(px_per_pt.is_finite() && px_per_pt > 0.0 && frame.is_finite() && frame.width() > 0.0 && frame.height() > 0.0) {
+        return None;
+    }
+    let k = px_per_pt.min(MAX_SIDE as f64 / frame.width().max(frame.height()));
+    let w = (frame.width() * k).ceil().clamp(1.0, MAX_SIDE as f64) as u16;
+    let h = (frame.height() * k).ceil().clamp(1.0, MAX_SIDE as f64) as u16;
+    let local = Rect::new(0.0, 0.0, frame.width(), frame.height());
+    let placed = place_notes_text(pres, index, local, scale)?;
+    let scale = if scale.is_finite() && scale > 1e-6 { scale } else { 1.0 };
+    let tr = Rect::new(0.0, 0.0, frame.width() / scale, frame.height() / scale);
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut ctx = RenderContext::new_with(w, h, vello_cpu::RenderSettings { num_threads: 0, ..Default::default() });
+        draw_layout(&mut ctx, &placed.layout, tr, Affine::scale(k * scale));
+        RENDERER.with(|r| r.borrow_mut().finish(ctx, w, h))
+    })) {
+        Ok(img) => Some(img),
+        Err(_) => {
+            log::error!("rendering the notes of slide {index} panicked; showing none");
+            note_panic();
+            RENDERER.with(|r| *r.borrow_mut() = Renderer::default());
+            None
+        }
+    }
+}
+
 /// Render one shape alone onto a transparent canvas (drag previews, copy as picture).
 pub fn render_shape(pres: &Presentation, slide: &Slide, id: ShapeId, scale: f64) -> Option<Image> {
     let rctx = Ctx::for_slide(pres, slide)?;
