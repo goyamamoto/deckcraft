@@ -25,12 +25,21 @@ application a `Window`, and one window takes keyboard input at a time):
 - `attributedSubstringForProposedRange:actualRange:` answers the requested slice of the reported
   text, clamped, and fills `actualRange`.
 - `markedRange` lies at `marked_location` in the reported text: the replacement range's start
-  when the input method named one, else the selection's start when the marked text began.
-- `setMarkedText:…replacementRange:` (and `insertText:replacementRange:` while marked text
-  exists) records a replacement range that isn't `NSNotFound`;
+  when the input method named one (mapped through the marked text it replaces, which
+  `setMarkedText:` reads at its old place before moving it), else the selection's start when
+  the marked text began.
+- `setMarkedText:…replacementRange:`, and `insertText:replacementRange:` in each branch that
+  commits — with marked text or without (an input method that reconverts without marking
+  first) — records a replacement range that isn't `NSNotFound`;
   `winit::platform::macos::take_ime_replacement_range()` hands it to the application, which
-  selects that text before applying the `Ime::Preedit` that follows, so the composition takes
-  its place (`deckcraft_ui_egui::ime`, `text.compose`).
+  selects that text before applying the `Ime::Preedit` or `Ime::Commit` that follows in the same
+  frame, so the composition or the commit takes its place (`deckcraft_ui_egui::ime`,
+  `text.compose`). A commit naming a range with no marked text used to update the reported
+  text as if the range was replaced while the application inserted at the caret. The
+  application keeps the range for that frame only (`ImeState::replace`; the desktop app takes
+  it every frame): one no commit took — a dismissal naming a range with nothing committed
+  after it, or one named while an interface text field had the keyboard — is never applied to
+  a later commit (a full-width space, the Character Viewer) elsewhere.
 
 The store follows the input method's own edits at once, before the application reports the
 text again at the next frame (`ImeSurroundingText::apply`, `WinitView::ime_update_surrounding`):
@@ -44,7 +53,11 @@ before the caret again would otherwise read the dismissed suggestion as committe
   `selectedRange` within it. A range reaching into the marked text counts it as the committed
   text it stands for (`ImeMarked::replaced`: a reconverted selection, or nothing), as the
   application's `committed_range` does. Empty marked text takes the marked text out and selects
-  what it stood for, as `text.compose` puts a replaced selection back.
+  what it stood for, as `text.compose` puts a replaced selection back. The marked text being
+  replaced is read where it lies before the view moves it to a named range: moved first, live
+  conversion re-marking the words before its marked text (ご marked after 日本, then 日本ご
+  marked again) took the wrong text out of the store and recorded the wrong committed text, so
+  a suggestion taken back right after read as committed text with committed text missing.
 - `insertText:` while marked puts the committed text in place of the marked text (or the named
   range), the caret after it, and drops the marked text at once (winit kept it until the next
   key event, so `selectedRange` still answered within it).

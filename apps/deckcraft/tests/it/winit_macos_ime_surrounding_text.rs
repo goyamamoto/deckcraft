@@ -21,6 +21,26 @@ fn winit_answers_the_input_method_from_the_reported_surrounding_text() {
         view.contains("self.ime_update_surrounding(replaces, &string.to_string(), Some(selected_range));"),
         "setMarkedText updates the surrounding text"
     );
+    // setMarkedText reads the marked text it replaces at its old place (`ime_marked`) and only
+    // then moves it to a named range: moved first, live conversion re-marking the words before
+    // its marked text spliced the wrong text out of the store and recorded the wrong
+    // `ImeMarked::replaced` (a dismissal then read committed text as gone, the suggestion as kept).
+    let set_marked = &view[view.find("fn set_marked_text(").unwrap()..view.find("fn unmark_text(").unwrap()];
+    let update = set_marked.find("self.ime_update_surrounding(replaces").unwrap();
+    let moved = set_marked
+        .find("self.ivars().marked_location.set(replacement_range.location as usize);")
+        .expect("without reported text the marked text lies where the named range starts");
+    assert!(update < moved, "the marked text moves to the named range after the store has read it");
+    assert!(
+        !set_marked[..update].contains("marked_location.set(start);\n            } else if !had_marked_text"),
+        "nothing moves the marked text to the named range before the store has read it"
+    );
+    // A commit naming the text it replaces hands the application the range in every committing
+    // branch of insertText — with marked text or without (an input method that reconverts without
+    // marking first) — so the slide replaces what the store says was replaced.
+    let insert = &view[view.find("fn insert_text(").unwrap()..view.find("fn do_command_by_selector(").unwrap()];
+    assert_eq!(insert.matches("self.ime_record_replacement(replacement_range);").count(), 3, "each commit branch records the range");
+    assert!(!insert.contains("&& unsafe { self.hasMarkedText() } {\n                let start"), "not only while marked text exists");
     assert!(view.contains("self.ime_update_surrounding(range, &committed, None);"), "unmarkText commits the marked text");
     assert!(view.contains("self.queue_event(WindowEvent::Ime(Ime::Commit(committed)));"), "unmarkText commits the marked text");
     assert!(
@@ -75,6 +95,10 @@ fn winit_answers_the_input_method_from_the_reported_surrounding_text() {
     let main = std::fs::read_to_string(root.join("apps/deckcraft/src/main.rs")).unwrap();
     assert!(main.contains("winit::platform::macos::set_ime_surrounding_text("));
     assert!(main.contains("winit::platform::macos::take_ime_replacement_range()"));
+    // The range belongs to the frame whose Preedit or Commit came with it: taken every frame (a
+    // commit-only frame carries one too), never left for a later commit elsewhere.
+    assert!(main.contains("egui::ImeEvent::Preedit { .. } | egui::ImeEvent::Commit(_)"), "a commit-only frame takes the range named with it");
+    assert!(main.contains("self.0.ime.replace = named.filter("), "every frame replaces the last frame's range");
 }
 
 /// The text the input method reads right after it changed the marked text, before the next

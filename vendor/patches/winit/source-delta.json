@@ -9,7 +9,7 @@
         "01"
       ],
       "pristine_sha256": "c6685a9e320715b00124d66eb5e9be088cf1f165678e832a86459f0026d215e9",
-      "vendor_sha256": "a02ed3858b62cff6cbadc544520782e74ae3d091de6238277b4d492087641a28"
+      "vendor_sha256": "19eb2666730850cbfb64358862b77740c7f570b335c6e89837cfb644217b97cb"
     },
     {
       "path": "src/platform_impl/macos/mod.rs",
@@ -25,7 +25,7 @@
         "01"
       ],
       "pristine_sha256": "de63351d7a757d58883600c3f1702fc369cb77b2ae323a4efca7cb520e9da90e",
-      "vendor_sha256": "ee8e0c3417021a2774bfb391b091e37cf5cbb09639f988bd67516f4d1ad16718"
+      "vendor_sha256": "47cd1cab9f05593196e1e726ccd9277278dd0f20a459e3c6ec51a60f9f9042cc"
     }
   ]
 }

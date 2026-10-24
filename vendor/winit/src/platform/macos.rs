@@ -530,8 +530,9 @@ pub fn set_ime_surrounding_text(text: Option<ImeSurroundingText>) {
 }
 
 /// The range of the reported text (UTF-16 code units) that the input method asked to replace
-/// with the marked text of the next [`Ime::Preedit`](crate::event::Ime::Preedit) event, if it
-/// named one (reconverting committed text); taken once.
+/// with the marked text of the next [`Ime::Preedit`](crate::event::Ime::Preedit) event or the
+/// text of the next [`Ime::Commit`](crate::event::Ime::Commit), if it named one (reconverting
+/// committed text); taken once. The event arrives in the same frame.
 pub fn take_ime_replacement_range() -> Option<std::ops::Range<usize>> {
     crate::platform_impl::take_ime_replacement_range()
 }
