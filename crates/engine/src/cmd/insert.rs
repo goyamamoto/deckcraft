@@ -1394,6 +1394,15 @@ struct DateOpts {
     sample: String,
 }
 
+/// Put the date's run in `lang`. A Japanese date (any East Asian language) also gets
+/// `altLang="en-US"`, the pair PowerPoint writes on Japanese text (`lang="ja-JP"
+/// altLang="en-US"`); other languages drop an alternate language taken over from the
+/// surrounding text.
+fn set_date_lang(props: &mut deckcraft_model::text::RunProps, lang: &str) {
+    props.lang = Some(lang.to_string());
+    props.alt_lang = deckcraft_fonts::CjkLocale::from_lang(lang).map(|_| "en-US".to_string());
+}
+
 /// `true` when the call carries a format, update flag or language (apply it). Empty params open
 /// the dialog instead.
 fn date_time_apply(p: &Value) -> bool {
@@ -1436,7 +1445,8 @@ fn date_opts(p: &Value) -> Result<DateOpts> {
 }
 
 /// The text `format` shows now in `lang`. Errors when that language has no names for the format
-/// (month names and AM/PM are English only). An empty string where there is no clock (wasm).
+/// (month and day names and AM/PM exist in English and Japanese). An empty string where there is
+/// no clock (wasm).
 fn date_sample(format: &str, lang: Option<&str>) -> Result<String> {
     use deckcraft_text::datetime::{DateTime, field_text};
     let probe = DateTime::new(2026, 10, 9, 20, 5, 7);
@@ -1501,7 +1511,7 @@ fn write_date_placeholder(s: &mut Session, o: &DateOpts) -> Result<bool> {
         };
         let mut props = sh.text.as_ref().and_then(|t| t.paragraphs.first()).and_then(|p| p.runs.first()).map(|r| r.props.clone()).unwrap_or_default();
         if let Some(lang) = lang {
-            props.lang = Some(lang);
+            set_date_lang(&mut props, &lang);
         }
         let kind = if update { RunKind::Field { field: format } } else { RunKind::Text };
         let para = deckcraft_model::Paragraph { runs: vec![deckcraft_model::Run { text: sample, props, kind }], ..Default::default() };
@@ -1535,8 +1545,8 @@ fn insert_plain(s: &mut Session, text: &str, lang: Option<&str>) -> Result<()> {
         let (a, b) = t.ordered();
         let at = deckcraft_model::edit::delete(body, a, b);
         let mut props = deckcraft_model::edit::props_at(body, at);
-        if let Some(lang) = lang.clone() {
-            props.lang = Some(lang);
+        if let Some(lang) = &lang {
+            set_date_lang(&mut props, lang);
         }
         let c = deckcraft_model::edit::insert(body, at, &text, Some(props));
         t.anchor = c;
@@ -1554,7 +1564,7 @@ fn stamp_caret_lang(s: &mut Session, lang: &str) -> Result<()> {
         for r in &mut p.runs {
             let n = r.char_len();
             if n > 0 && at < t.caret.1 && t.caret.1 <= at + n {
-                r.props.lang = Some(lang);
+                set_date_lang(&mut r.props, &lang);
                 return;
             }
             at += n;
@@ -1974,6 +1984,53 @@ mod tests {
         s.execute("edit.undo", &json!({})).unwrap();
         let run = date_run(&s).unwrap();
         assert!(matches!(run.kind, RunKind::Field { .. }), "one undo restores the field");
+    }
+
+    #[test]
+    fn a_japanese_date_at_the_caret_is_a_ja_jp_field_with_its_latin_alt_language() {
+        let mut s = session();
+        edit_title(&mut s);
+        let now = deckcraft_text::datetime::DateTime::now_local().unwrap();
+        let expect = deckcraft_text::datetime::field_text("datetime2", Some("ja-JP"), now).unwrap();
+        let v = s.execute("insert.dateTime", &json!({"format": "datetime2", "language": "ja"})).unwrap();
+        assert_eq!(v["text"], expect.as_str());
+        let title = s.doc().unwrap().current_slide().unwrap().shapes[0].text.clone().unwrap();
+        let run = title.paragraphs[0].runs.iter().find(|r| matches!(r.kind, RunKind::Field { .. })).cloned().unwrap();
+        assert!(matches!(run.kind, RunKind::Field { ref field } if field == "datetime2"), "{run:?}");
+        assert_eq!(run.text, expect);
+        assert!(run.text.contains('年') && run.text.ends_with(')'), "{run:?}");
+        assert_eq!((run.props.lang.as_deref(), run.props.alt_lang.as_deref()), (Some("ja-JP"), Some("en-US")));
+        // The text before the date keeps its own language.
+        assert_ne!(title.paragraphs[0].runs[0].props.lang.as_deref(), Some("ja-JP"));
+        // Not updating: plain Japanese text, tagged the same way.
+        let expect = deckcraft_text::datetime::field_text("datetime7", Some("ja-JP"), now).unwrap();
+        s.execute("insert.dateTime", &json!({"format": "datetime7", "update": false, "language": "ja-JP"})).unwrap();
+        let title = s.doc().unwrap().current_slide().unwrap().shapes[0].text.clone().unwrap();
+        let run = title.paragraphs[0].runs.iter().find(|r| r.text.ends_with(expect.as_str())).cloned().unwrap();
+        assert_eq!(run.kind, RunKind::Text);
+        assert!(run.text.starts_with("令和"), "{run:?}");
+        assert_eq!((run.props.lang.as_deref(), run.props.alt_lang.as_deref()), (Some("ja-JP"), Some("en-US")));
+    }
+
+    #[test]
+    fn every_format_is_available_in_japanese_and_another_language_drops_the_alt_language() {
+        let mut s = session();
+        let now = deckcraft_text::datetime::DateTime::now_local().unwrap();
+        for format in super::DATE_FORMATS {
+            let v = s.execute("insert.dateTime", &json!({"format": format, "language": "ja-JP"})).unwrap();
+            assert_eq!(v["where"], "footer", "{format}");
+            let run = date_run(&s).unwrap();
+            assert!(matches!(run.kind, RunKind::Field { ref field } if field == format), "{run:?}");
+            assert_eq!((run.props.lang.as_deref(), run.props.alt_lang.as_deref()), (Some("ja-JP"), Some("en-US")), "{format}");
+        }
+        let era = deckcraft_text::datetime::field_text("datetime3", Some("ja-JP"), now).unwrap();
+        s.execute("insert.dateTime", &json!({"format": "datetime3", "language": "ja-JP"})).unwrap();
+        assert_eq!(date_run(&s).unwrap().text, era);
+        // English over the Japanese footer: en-US, with no alternate language left behind.
+        s.execute("insert.dateTime", &json!({"format": "datetime4", "language": "en-US"})).unwrap();
+        let run = date_run(&s).unwrap();
+        assert_eq!((run.props.lang.as_deref(), run.props.alt_lang.as_deref()), (Some("en-US"), None));
+        assert_eq!(run.text, deckcraft_text::datetime::field_text("datetime4", Some("en-US"), now).unwrap());
     }
 }
 
