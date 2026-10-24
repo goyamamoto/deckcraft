@@ -3,8 +3,13 @@
 //! DrawingML gives every run three typefaces: `a:latin`, `a:ea` (East Asian) and `a:cs` (complex
 //! script: Arabic, Hebrew, Thai, Indic…). Which one a character uses follows its Unicode script
 //! (UAX #24). Characters with no script of their own (Common and Inherited: spaces, digits,
-//! punctuation, combining marks) take the script and slot of the text around them, so a space or
-//! a parenthesis between two Arabic words is shaped with them.
+//! punctuation, combining marks) take the script of the text around them, so a space or a
+//! parenthesis between two Arabic words is shaped with them. Their slot follows what PowerPoint
+//! does with the characters Latin and East Asian fonts share ([`slot_class`]): ASCII and most
+//! shared punctuation take the Latin font next to Japanese, full-width forms and some symbols the
+//! East Asian one, and a few depend on the run's language or East Asian font.
+
+use crate::cjk::CjkLocale;
 
 /// An ISO 15924 script tag, e.g. `*b"Arab"`.
 pub type ScriptTag = [u8; 4];
@@ -120,17 +125,96 @@ pub fn slot_of_script(s: ScriptTag) -> FontSlot {
     }
 }
 
-/// The slot of `c` on its own: `None` for characters that take their neighbours' slot. CJK
-/// punctuation and full-width forms are East Asian although their script is Common.
-pub fn slot_of(c: char) -> Option<FontSlot> {
-    if let Some(s) = script_of(c) {
-        return Some(slot_of_script(s));
-    }
+/// How a character's slot is decided ([`slot_class`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SlotClass {
+    /// This slot, whatever the text around it.
+    Own(FontSlot),
+    /// The Latin slot, unless the text before it (after it, at the start) is complex script, whose
+    /// font and shaping it then shares: digits and punctuation between Arabic words stay Arabic.
+    Latin,
+    /// The slot of the text before it (after it, at the start): combining marks, joiners,
+    /// controls and the symbols not classified.
+    Inherit,
+}
+
+/// How the slot of `c` is decided in a run whose `lang` is Chinese, Japanese or Korean
+/// (`lang_is_cjk`) and which has an East Asian font (`has_ea_font`: an `a:ea` typeface, or the
+/// theme's font for the run's East Asian language), as PowerPoint for Mac draws the characters
+/// Latin and East Asian fonts share:
+/// - full-width and half-width forms (Ａ ａ １ （ ｶ), CJK punctuation (、 。 「 and the ideographic
+///   space), enclosed and squared CJK, circled numbers (① ②), geometric shapes and miscellaneous
+///   symbols (■ □ ▲ ○ ● ◎ ◇ ★ ☆ ♪ ♀) and ™ take the East Asian font;
+/// - the single and double curly quotes do so only in a run whose language is East Asian (its
+///   `lang`; `altLang` doesn't count), and × ÷ ° ± § ¨ ´ only in a run that has an East Asian font;
+/// - ASCII digits, punctuation and spaces, the rest of Latin-1 (© ® ¥ £ ¢ µ ¶ ·), dashes, the
+///   ellipses, bullets, daggers, primes, ※ ‰, currency signs, letterlike symbols (℃ № ℡), Roman
+///   numerals, arrows, mathematical operators and box drawing take the Latin font, even between
+///   kanji: in 第1章 the 1 is drawn with the Latin font, and in 日本(Japan) both parentheses;
+/// - letters take their script's slot (Greek and Cyrillic are Latin).
+pub fn slot_class(c: char, lang_is_cjk: bool, has_ea_font: bool) -> SlotClass {
     let cp = c as u32;
-    if (0x3000..=0x303F).contains(&cp) || (0xFF00..=0xFFEF).contains(&cp) || (0x3200..=0x33FF).contains(&cp) {
-        return Some(FontSlot::EastAsian);
+    let ea_if = |on: bool| if on { SlotClass::Own(FontSlot::EastAsian) } else { SlotClass::Latin };
+    // Full-width Latin letters are Latin script but East Asian text.
+    if (0xFF01..=0xFFEF).contains(&cp) {
+        return SlotClass::Own(FontSlot::EastAsian);
     }
-    None
+    if let Some(s) = script_of(c) {
+        return SlotClass::Own(slot_of_script(s));
+    }
+    match cp {
+        // CJK symbols and punctuation, enclosed CJK letters, CJK compatibility (㎡ ㈱), vertical
+        // and compatibility forms; circled numbers, geometric shapes, miscellaneous symbols, ™.
+        0x3000..=0x303F | 0x3200..=0x33FF | 0xFE10..=0xFE1F | 0xFE30..=0xFE4F | 0x2460..=0x24FF | 0x25A0..=0x26FF | 0x2122 => {
+            SlotClass::Own(FontSlot::EastAsian)
+        }
+        0x2018 | 0x2019 | 0x201C | 0x201D => ea_if(lang_is_cjk),
+        0x00A7 | 0x00A8 | 0x00B0 | 0x00B1 | 0x00B4 | 0x00D7 | 0x00F7 => ea_if(has_ea_font),
+        // ASCII and Latin-1 punctuation, symbols and spaces; the spaces, dashes and punctuation of
+        // General Punctuation; super- and subscripts; currency; letterlike symbols; number forms;
+        // arrows; mathematical operators; box drawing.
+        0x0020..=0x007E
+        | 0x00A0..=0x00BF
+        | 0x2000..=0x200A
+        | 0x2010..=0x2027
+        | 0x202F..=0x205F
+        | 0x2070..=0x20CF
+        | 0x2100..=0x22FF
+        | 0x2500..=0x257F => SlotClass::Latin,
+        _ => SlotClass::Inherit,
+    }
+}
+
+/// The slot `c` takes next to Latin or East Asian text in such a run ([`slot_class`]); `None`
+/// for characters that take the slot of the text before them. Complex-script text around a
+/// Latin-class character still draws it in the complex-script font ([`resolve_in`]).
+pub fn slot_of_in(c: char, lang_is_cjk: bool, has_ea_font: bool) -> Option<FontSlot> {
+    match slot_class(c, lang_is_cjk, has_ea_font) {
+        SlotClass::Own(s) => Some(s),
+        SlotClass::Latin => Some(FontSlot::Latin),
+        SlotClass::Inherit => None,
+    }
+}
+
+/// The slot of `c` whatever the text around it: `None` for characters whose slot depends on
+/// their neighbours. CJK punctuation and full-width forms are East Asian although their script is
+/// Common (or, for the full-width letters, Latin).
+pub fn slot_of(c: char) -> Option<FontSlot> {
+    match slot_class(c, false, false) {
+        SlotClass::Own(s) => Some(s),
+        SlotClass::Latin | SlotClass::Inherit => None,
+    }
+}
+
+/// The East Asian tradition the characters of a text tell by themselves: Japanese for kana,
+/// Korean for Hangul, whichever comes first; `None` when there is neither (Han characters are
+/// shared by all four traditions).
+pub fn tradition_of_text(chars: impl IntoIterator<Item = char>) -> Option<CjkLocale> {
+    chars.into_iter().find_map(|c| match script_of(c).as_ref() {
+        Some(b"Hira" | b"Kana") => Some(CjkLocale::Japanese),
+        Some(b"Hang") => Some(CjkLocale::Korean),
+        _ => None,
+    })
 }
 
 /// A default BCP 47 language for a script (shaping picks `locl` forms by language).
@@ -146,16 +230,45 @@ pub fn default_language(s: ScriptTag) -> Option<&'static str> {
     })
 }
 
-/// Resolve every character's script and slot, giving Common/Inherited characters the value of the
-/// preceding character with one (or, at the start, the following one; Latin when there is none).
+/// Resolve every character's script and slot in text whose runs have no East Asian language or
+/// font ([`resolve_in`]).
 pub fn resolve(chars: &[char]) -> Vec<(Option<ScriptTag>, FontSlot)> {
-    let own: Vec<(Option<ScriptTag>, Option<FontSlot>)> = chars.iter().map(|c| (script_of(*c), slot_of(*c))).collect();
-    let first = own.iter().find_map(|(s, sl)| sl.map(|sl| (*s, sl))).unwrap_or((None, FontSlot::Latin));
-    let mut prev = first;
+    resolve_in(chars, |_| (false, false))
+}
+
+/// Resolve every character's script and slot. `run_of(i)` tells, for character `i`, whether its
+/// run's language is Chinese, Japanese or Korean and whether the run has an East Asian font
+/// ([`slot_class`]). A character with a slot of its own keeps it; the others take the script and
+/// slot of the preceding character with one (at the start, of the following one; Latin when there
+/// is none), except that Latin-class characters next to East Asian text are Latin text.
+pub fn resolve_in(chars: &[char], run_of: impl Fn(usize) -> (bool, bool)) -> Vec<(Option<ScriptTag>, FontSlot)> {
+    let own: Vec<(Option<ScriptTag>, SlotClass)> = chars
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
+            let (cjk, ea) = run_of(i);
+            (script_of(*c), slot_class(*c, cjk, ea))
+        })
+        .collect();
+    let first = own
+        .iter()
+        .find_map(|(s, cl)| match cl {
+            SlotClass::Own(sl) => Some((*s, *sl)),
+            _ => None,
+        })
+        .unwrap_or((None, FontSlot::Latin));
+    // The last character with a slot of its own, and the last one resolved.
+    let (mut strong, mut prev) = (first, first);
     own.into_iter()
-        .map(|(s, sl)| {
-            if let Some(sl) = sl {
-                prev = (s, sl);
+        .map(|(s, cl)| {
+            match cl {
+                SlotClass::Own(sl) => {
+                    strong = (s, sl);
+                    prev = strong;
+                }
+                SlotClass::Latin if strong.1 == FontSlot::EastAsian => prev = (Some(LATIN), FontSlot::Latin),
+                SlotClass::Latin => prev = strong,
+                SlotClass::Inherit => {}
             }
             prev
         })
@@ -223,6 +336,114 @@ mod tests {
         assert_eq!(r[0].1, FontSlot::ComplexScript);
         assert!(resolve(&[]).is_empty());
         assert_eq!(resolve(&['1'])[0], (None, FontSlot::Latin));
+    }
+
+    /// The slots of `text` in runs with an East Asian `lang` (`cjk`) and font (`ea`).
+    fn slots(text: &str, cjk: bool, ea: bool) -> Vec<FontSlot> {
+        let chars: Vec<char> = text.chars().collect();
+        resolve_in(&chars, |_| (cjk, ea)).into_iter().map(|r| r.1).collect()
+    }
+
+    fn slots_str(text: &str, cjk: bool, ea: bool) -> String {
+        slots(text, cjk, ea)
+            .into_iter()
+            .map(|s| match s {
+                FontSlot::Latin => 'L',
+                FontSlot::EastAsian => 'E',
+                FontSlot::ComplexScript => 'C',
+            })
+            .collect()
+    }
+
+    #[test]
+    fn ascii_next_to_japanese_takes_the_latin_slot() {
+        // PowerPoint draws the 1 of 第1章 and both parentheses of 日本(Japan) in the Latin font,
+        // and the digits of a date as well, whatever the run's language.
+        for cjk in [false, true] {
+            assert_eq!(slots_str("第1章", cjk, true), "ELE");
+            assert_eq!(slots_str("日本(Japan)", cjk, true), "EELLLLLLL");
+            assert_eq!(slots_str("2024年10月", cjk, true), "LLLLELLE");
+            assert_eq!(slots_str("日本 語", cjk, true), "EELE");
+            // CJK punctuation and the ideographic space stay East Asian.
+            assert_eq!(slots_str("日本、語。\u{3000}「a」", cjk, true), "EEEEEEELE");
+        }
+        // Such digits are shaped as Latin text, not with the kanji's script.
+        let chars: Vec<char> = "第1章".chars().collect();
+        assert_eq!(resolve_in(&chars, |_| (true, true))[1], (Some(LATIN), FontSlot::Latin));
+        // A combining mark follows the character it sits on.
+        assert_eq!(slots_str("漢1\u{20E3}", true, true), "ELL");
+        assert_eq!(slots_str("漢\u{3099}", true, true), "EE");
+    }
+
+    #[test]
+    fn full_width_forms_take_the_east_asian_slot() {
+        for c in "ＰｏｗｅｒＰｏｉｎｔ１２３（）！～￥ｶ".chars() {
+            assert_eq!(slot_of(c), Some(FontSlot::EastAsian), "{c:?}");
+        }
+        // The letters are still Latin script, for shaping.
+        assert_eq!(script_of('Ａ'), Some(LATIN));
+        assert_eq!(slots_str("ＰｏｗｅｒＰｏｉｎｔ", false, false), "EEEEEEEEEE");
+        assert_eq!(slots_str("PowerＰｏｗｅｒ", false, false), "LLLLLEEEEE");
+    }
+
+    #[test]
+    fn shared_characters_follow_powerpoints_table() {
+        // Curly quotes: East Asian in an East Asian language only.
+        for c in ['‘', '’', '“', '”'] {
+            assert_eq!(slot_of_in(c, true, false), Some(FontSlot::EastAsian), "{c:?}");
+            assert_eq!(slot_of_in(c, false, true), Some(FontSlot::Latin), "{c:?}");
+        }
+        // × ÷ ° ± § ¨ ´: East Asian whenever the run has an East Asian font.
+        for c in ['×', '÷', '°', '±', '§', '¨', '´'] {
+            assert_eq!(slot_of_in(c, false, true), Some(FontSlot::EastAsian), "{c:?}");
+            assert_eq!(slot_of_in(c, true, false), Some(FontSlot::Latin), "{c:?}");
+        }
+        // Geometric shapes, miscellaneous symbols, circled numbers and ™: always East Asian.
+        for c in "■□▲△○●◎◇◆★☆♪♂♀①②⑳™".chars() {
+            assert_eq!(slot_of_in(c, false, false), Some(FontSlot::EastAsian), "{c:?}");
+            assert_eq!(slot_of(c), Some(FontSlot::EastAsian), "{c:?}");
+        }
+        // The rest: Latin even in a Japanese run with an East Asian font (Greek, Cyrillic and
+        // Latin letters by their script, the others unless complex script surrounds them).
+        for c in "′″…‥—―–‐•·¶†‡※℃№℡ⅠⅡ©®¥€£¢‰\u{212B}µ→⇒∀≠─│!?#%&@ \u{A0}".chars() {
+            assert_eq!(slot_of_in(c, true, true), Some(FontSlot::Latin), "{c:?}");
+            assert_eq!(slot_of(c), None, "{c:?} depends on the text around it");
+        }
+        for c in ['α', 'Ж', 'Å'] {
+            assert_eq!(slot_of_in(c, true, true), Some(FontSlot::Latin), "{c:?}");
+            assert_eq!(slot_of(c), Some(FontSlot::Latin), "{c:?}");
+        }
+        // Not classified: the character before decides.
+        assert_eq!(slot_of_in('\u{0301}', true, true), None);
+        assert_eq!(slot_of_in('\u{200D}', true, true), None);
+        // In text: a quoted English word in a Japanese run keeps both quotes in one font.
+        assert_eq!(slots_str("と“Hi”", true, false), "EELLE");
+        assert_eq!(slots_str("と“Hi”", false, true), "ELLLL");
+        assert_eq!(slots_str("※注意…", true, true), "LEEL");
+        assert_eq!(slots_str("Step ①", false, false), "LLLLLE");
+        assert_eq!(slots_str("10×20", true, true), "LLELL");
+        assert_eq!(slots_str("10×20", true, false), "LLLLL");
+    }
+
+    #[test]
+    fn complex_script_still_takes_shared_characters() {
+        // Latin-class characters between Arabic words are shaped and drawn with them, also in a
+        // run that has an East Asian font.
+        assert_eq!(slots_str("سنة 2024 …", false, true), "CCCCCCCCCC");
+        assert_eq!(slots_str("“س”", false, false), "CCC");
+        // An East Asian language makes the quotes East Asian, whatever they enclose.
+        assert_eq!(slots_str("“س”", true, false), "ECE");
+    }
+
+    #[test]
+    fn kana_and_hangul_tell_the_tradition() {
+        assert_eq!(tradition_of_text("漢字とかな".chars()), Some(CjkLocale::Japanese));
+        assert_eq!(tradition_of_text("カタカナ".chars()), Some(CjkLocale::Japanese));
+        assert_eq!(tradition_of_text("ｶﾀｶﾅ".chars()), Some(CjkLocale::Japanese));
+        assert_eq!(tradition_of_text("한국어".chars()), Some(CjkLocale::Korean));
+        assert_eq!(tradition_of_text("漢字".chars()), None);
+        assert_eq!(tradition_of_text("abc".chars()), None);
+        assert_eq!(tradition_of_text("".chars()), None);
     }
 
     #[test]
