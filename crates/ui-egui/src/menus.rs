@@ -321,6 +321,16 @@ pub fn menu_tree() -> Vec<(&'static str, Vec<(&'static str, &'static str)>)> {
                 ("Set Up Show…", "show.setup"),
             ],
         ),
+        (
+            "Window",
+            vec![
+                ("New Window", "view.newWindow"),
+                ("Arrange All", "view.arrangeAll"),
+                ("Cascade", "view.cascade"),
+                ("-", ""),
+                ("Next Window", "window.next"),
+            ],
+        ),
         ("Help", vec![("About DeckCraft", "app.about"), ("Command Palette", "app.palette")]),
     ]
 }

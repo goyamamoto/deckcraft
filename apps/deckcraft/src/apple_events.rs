@@ -9,7 +9,7 @@
 //! registered before Finder's launch event that leaves winit's delegate alone, behind a safe
 //! main-thread API.
 
-use deckcraft_ui_egui::SlideApp;
+use deckcraft_ui_egui::windows::Host;
 use fmv_macos_events::{Event, Inbox, Registration};
 
 /// Keeps the Apple-event handlers registered; hold it until the event loop returns.
@@ -34,19 +34,20 @@ impl AppleEvents {
     }
 }
 
-/// Open the documents and act on the quit requests that arrived since the last frame.
-pub fn poll(inbox: &Inbox, app: &mut SlideApp, ctx: &egui::Context) {
+/// Open the documents and act on the quit requests that arrived since the last frame. A
+/// presentation opens like File › Open: in a window of its own, or the active window when that
+/// shows nothing yet (`Host::open_paths`); quitting closes every window, asking about unsaved
+/// changes in each.
+pub fn poll(inbox: &Inbox, ctx: &egui::Context) {
     for e in inbox.drain() {
         match e {
             Event::Open(paths) => {
-                for p in paths.iter().filter_map(|p| p.to_str()) {
-                    if let Err(e) = app.open_path(p) {
-                        log::error!("{p}: {e}");
-                        app.set_status(format!("Couldn't open {p}: {e}"));
-                    }
-                }
+                let paths: Vec<String> = paths.iter().filter_map(|p| p.to_str()).map(str::to_string).collect();
+                Host::with(|h| h.open_paths(paths, ctx));
             }
-            Event::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            Event::Quit => {
+                Host::with(|h| h.request_quit(ctx));
+            }
         }
     }
 }

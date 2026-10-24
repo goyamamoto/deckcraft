@@ -30,6 +30,7 @@ pub mod text;
 pub mod three_d;
 pub mod transition;
 pub mod units;
+pub mod window;
 pub mod zoom;
 
 use deckcraft_geom::Xfrm;
@@ -192,6 +193,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(zoom::specs());
         v.extend(compress::specs());
         v.extend(units::specs());
+        v.extend(window::specs());
         v
     })
 }

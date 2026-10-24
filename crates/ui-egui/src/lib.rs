@@ -50,6 +50,7 @@ pub mod toast;
 pub mod uifonts;
 pub mod units;
 pub mod widgets;
+pub mod windows;
 
 use std::collections::HashMap;
 use std::sync::mpsc::{Receiver, Sender};
@@ -60,6 +61,49 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 pub use control::{ControlRequest, ControlResponse};
+
+thread_local! {
+    /// The window whose frame is running, set by [`windows::Host`]; 0 outside a window host.
+    static WINDOW_SALT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Marks the window whose frame runs next, so [`wid`] keeps its widgets' state apart from the
+/// other windows'. 0 is no window host (the web app, tests, the CLI).
+pub(crate) fn set_window_salt(window: u64) {
+    WINDOW_SALT.set(window);
+}
+
+/// The window whose frame is running (0 outside a window host): the presenter and extra viewports
+/// each window opens are named by it.
+pub fn window_salt() -> u64 {
+    WINDOW_SALT.get()
+}
+
+/// An [`egui::Id`] for a fixed name, kept apart per presentation window: egui has one `Memory` for
+/// every viewport, so a scroll offset, an open menu or a text box's state filed under a plain
+/// `Id::new(name)` would be shared between the windows ([`windows`]). Outside a window host it is
+/// `Id::new(name)` itself.
+pub(crate) fn wid(name: impl std::hash::Hash + std::fmt::Debug) -> egui::Id {
+    match WINDOW_SALT.get() {
+        0 => egui::Id::new(name),
+        salt => egui::Id::new(name).with(("deckcraft-window", salt)),
+    }
+}
+
+/// `ui.screenshot` tokens, one sequence for the process: a screenshot's event may reach another
+/// window's frame first ([`windows::Host`] passes it on by its viewport).
+static SHOT_TOKENS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// A screenshot event's token and picture.
+pub(crate) fn screenshot_event(e: &egui::Event) -> Option<(u64, std::sync::Arc<egui::ColorImage>)> {
+    match e {
+        egui::Event::Screenshot { user_data, image, .. } => {
+            let token = user_data.data.as_ref().and_then(|d| d.downcast_ref::<u64>()).copied()?;
+            Some((token, image.clone()))
+        }
+        _ => None,
+    }
+}
 
 pub type ReadFn = Box<dyn Fn(&str) -> Result<Vec<u8>, String>>;
 pub type WriteFn = Box<dyn FnMut(&str, &[u8]) -> Result<(), String>>;
@@ -512,7 +556,6 @@ pub struct SlideApp {
     pending_urls: Vec<String>,
     /// Text for the system clipboard from a Copy or Cut command, handed over on the next frame.
     pending_copy: Option<String>,
-    shot_token: u64,
     queued_shots: Vec<(u64, f64, u32)>,
     pending_shots: Vec<(u64, Option<String>, Sender<ControlResponse>, f64)>,
     styled: bool,
@@ -554,6 +597,14 @@ pub struct SlideApp {
     next_file_id: u64,
     /// Picks and drops whose bytes have not arrived yet.
     pending_files: Vec<PendingFile>,
+    /// What this window asks of the window host ([`windows::Host`]): a presentation for a window
+    /// of its own, another window to the front, the windows arranged. Drained after each frame.
+    pub(crate) window_requests: Vec<windows::WindowRequest>,
+    /// Control requests the window host routed to this window, answered from its own frame.
+    pub(crate) control_inbox: Vec<ControlRequest>,
+    /// View › New Window: this window's number among the windows on its presentation (the
+    /// title's `:2`); `None` for the only window on it.
+    pub view_number: Option<u32>,
 }
 
 fn grid_options_touched(p: &Value) -> bool {
@@ -602,7 +653,6 @@ impl SlideApp {
             backstage: None,
             pending_urls: vec![],
             pending_copy: None,
-            shot_token: 0,
             queued_shots: vec![],
             pending_shots: vec![],
             styled: false,
@@ -626,6 +676,9 @@ impl SlideApp {
             twisting: false,
             next_file_id: 1,
             pending_files: Vec::new(),
+            window_requests: Vec::new(),
+            control_inbox: Vec::new(),
+            view_number: None,
         }
     }
 
@@ -700,11 +753,23 @@ impl SlideApp {
     /// Run a command by id (UI commands here, everything else in the engine). Errors show in the
     /// status bar and are returned.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        // A file already open in another window comes to the front instead of opening twice.
+        if id == "file.open"
+            && let Some(path) = params.get("path").and_then(Value::as_str)
+            && let Some(open) = self.window_showing(path)
+        {
+            self.window_requests.push(windows::WindowRequest::Focus(open));
+            return Ok(json!({"window": open, "alreadyOpen": true}));
+        }
         let r = if UI_COMMANDS.iter().any(|c| c.0 == id) {
             self.run_ui(id, &params)
         } else {
             self.session.execute(id, &params).map_err(|e| e.to_string())
         };
+        if id == "file.close" && r.is_ok() {
+            self.after_close();
+        }
+        self.settle_documents();
         match &r {
             // Copy and Cut from the ribbon, menus, the slide's context menu or the control channel
             // put the text on the system clipboard, as Ctrl+C and Ctrl+X do (#431).
@@ -763,11 +828,192 @@ impl SlideApp {
     /// changes (Save, Don't Save, Cancel), as PowerPoint does.
     pub fn close_presentation(&mut self) {
         match self.session.active() {
-            None => {}
+            // A window showing nothing (the start screen) while other windows are open: it closes.
+            None => self.after_close(),
             Some(d) if d.is_dirty() => self.dialog = Some(dialogs::Dialog::new("close")),
             Some(_) => {
                 let _ = self.run("file.close", json!({}));
             }
+        }
+    }
+
+    /// After File › Close took the presentation out of this window: with other windows open the
+    /// window closes with it, as PowerPoint closes a presentation's window; the last window stays
+    /// and shows the start screen. The other windows on the same presentation (View › New Window)
+    /// close too.
+    fn after_close(&mut self) {
+        let w = &self.session.windows;
+        if !w.host || self.session.active().is_some() {
+            return;
+        }
+        if w.others_on_this_document().next().is_some() {
+            self.window_requests.push(windows::WindowRequest::CloseDocumentWindows);
+        }
+        if w.others().next().is_some() {
+            self.window_requests.push(windows::WindowRequest::Close);
+        }
+    }
+
+    /// With a window host (the desktop app), a session holds one presentation: one that was just
+    /// added (New, Open, a drop, a recovered file) goes to a window of its own, as PowerPoint opens
+    /// each presentation in one, and this window keeps the one it showed. A file opened into a
+    /// window showing an untouched new presentation (no file, no change) takes that window itself
+    /// and the blank one goes, as Office replaces its untouched Presentation1; New beside an
+    /// untouched one opens a window all the same (Presentation2 beside Presentation1). A file
+    /// also open in another window brings that window forward instead. Several presentations in
+    /// one session (recovered files, the command line) spread over windows in their order.
+    pub(crate) fn settle_documents(&mut self) {
+        if !self.session.windows.host {
+            return;
+        }
+        while self.session.documents().len() > 1 {
+            let n = self.session.documents().len();
+            let extra = 1;
+            let path = self.session.documents().get(extra).and_then(|d| d.path.clone());
+            if let Some(open) = path.as_deref().and_then(|p| self.window_showing(p)) {
+                // The copy just read is dropped (a fresh presentation, with no recovery entry).
+                let _ = self.session.take_document(extra);
+                self.window_requests.push(windows::WindowRequest::Focus(open));
+                continue;
+            }
+            let blank = self.session.documents().first().is_some_and(|d| d.path.is_none() && !d.is_dirty());
+            if n == 2 && path.is_some() && blank {
+                self.session.close_document(0);
+                continue;
+            }
+            let Some(doc) = self.session.take_document(extra) else { return };
+            self.window_requests.push(windows::WindowRequest::Adopt(Box::new(doc)));
+            // The window keeps its own presentation and comes back from the File tab, as opening
+            // from the Open dialog does.
+            self.backstage = None;
+        }
+    }
+
+    /// The other window already showing the file at `path`, if any (the paths as given, or the
+    /// same file by its real path).
+    pub(crate) fn window_showing(&self, path: &str) -> Option<u64> {
+        if !self.session.windows.host {
+            return None;
+        }
+        let real = std::fs::canonicalize(path).ok();
+        self.session
+            .windows
+            .others()
+            .find(|w| {
+                w.path.as_deref().is_some_and(|p| p == path || real.as_ref().is_some_and(|r| std::fs::canonicalize(p).ok().as_ref() == Some(r)))
+            })
+            .map(|w| w.id)
+    }
+
+    /// Whether this window may take a new or opened presentation itself: it shows nothing, or an
+    /// untouched new presentation (no file, no unsaved change).
+    pub fn window_reusable(&self) -> bool {
+        match self.session.documents() {
+            [] => true,
+            [d] => d.path.is_none() && !d.is_dirty(),
+            _ => false,
+        }
+    }
+
+    /// The window's close button: with unsaved changes the window asks first (Save, Don't Save,
+    /// Cancel) and may not close yet; true once it may.
+    pub fn close_requested(&mut self) -> bool {
+        if self.quit_confirmed {
+            return true;
+        }
+        if self.session.documents().iter().any(|d| d.is_dirty()) {
+            self.show = None;
+            if self.dialog.as_ref().is_none_or(|d| d.id != "quit") {
+                self.dialog = Some(dialogs::Dialog::new("quit"));
+            }
+            return false;
+        }
+        true
+    }
+
+    /// The name the window shows: the presentation's, else the app's.
+    pub fn title_stem(&self) -> String {
+        self.session.active().map(|d| d.title()).unwrap_or_else(|| "DeckCraft".into())
+    }
+
+    /// The window's title: the presentation's name, numbered when several windows show it
+    /// (`Presentation1:2`), and the app's name after it.
+    pub fn window_title(&self) -> String {
+        let stem = self.title_stem();
+        match (self.session.active(), self.view_number) {
+            (Some(_), Some(n)) => format!("{stem}:{n} - DeckCraft"),
+            (Some(_), None) => format!("{stem} - DeckCraft"),
+            (None, _) => stem,
+        }
+    }
+
+    /// Whether the window waits on work it polls for, so the host wakes it: a presentation being
+    /// read in the background, control requests routed here.
+    pub fn waits_on_background(&self) -> bool {
+        self.opening.is_some() || !self.control_inbox.is_empty() || !self.pending_shots.is_empty() || !self.queued_shots.is_empty()
+    }
+
+    /// View › New Window: the windows on one presentation take turns holding the session and what
+    /// goes with the presentation (a file being read, files picked for it); each window keeps its
+    /// own interface state.
+    pub(crate) fn swap_document_state(&mut self, other: &mut SlideApp) {
+        std::mem::swap(&mut self.session, &mut other.session);
+        std::mem::swap(&mut self.opening, &mut other.opening);
+        std::mem::swap(&mut self.pending_files, &mut other.pending_files);
+        std::mem::swap(&mut self.fonts_noted, &mut other.fonts_noted);
+        std::mem::swap(&mut self.last_recovery, &mut other.last_recovery);
+        self.anim_preview = None;
+        other.anim_preview = None;
+    }
+
+    /// The app moved to another window (the first window took over a closed window's
+    /// presentation): what was its old window's is reset.
+    pub(crate) fn rehomed(&mut self) {
+        self.canvas_rect = None;
+        self.canvas_region = None;
+        self.slide_rect = None;
+        self.thumb_drag = None;
+        self.restyle = true;
+    }
+
+    /// Take the settings the user changed in another window ([`windows::Host`]): the appearance,
+    /// the interface size and language, the recent list, the Quick Access Toolbar, smart guides,
+    /// the editing preferences. What is this window's own stays: its ribbon tab, view, zoom, panes.
+    pub fn adopt_settings(&mut self, ui: &UiState, prefs: &deckcraft_engine::Prefs) {
+        if self.ui.brightness != ui.brightness {
+            self.ui.brightness = ui.brightness;
+            self.restyle = true;
+        }
+        self.ui.ui_scale = ui.ui_scale;
+        self.ui.language = ui.language.clone();
+        self.ui.recent = ui.recent.clone();
+        self.ui.qat = ui.qat.clone();
+        self.ui.smart_guides = ui.smart_guides;
+        self.ui.presenter_view = ui.presenter_view;
+        self.session.prefs = prefs.clone();
+    }
+
+    /// The settings every window shares, as text, to notice a change ([`Self::adopt_settings`]).
+    pub(crate) fn shared_settings(&self) -> String {
+        let u = &self.ui;
+        serde_json::to_string(&json!({
+            "brightness": u.brightness,
+            "uiScale": u.ui_scale,
+            "language": u.language,
+            "recent": u.recent,
+            "qat": u.qat,
+            "smartGuides": u.smart_guides,
+            "presenterView": u.presenter_view,
+            "prefs": self.session.prefs,
+        }))
+        .unwrap_or_default()
+    }
+
+    /// Take the interface faces another window borrowed ([`windows::Host`] pools them), so the
+    /// fonts this window installs cover every window's text.
+    pub(crate) fn adopt_faces(&mut self, faces: &[std::sync::Arc<deckcraft_fonts::FontFace>]) {
+        if self.ui_fonts.adopt(faces) {
+            self.styled = false;
         }
     }
 
@@ -996,7 +1242,18 @@ impl SlideApp {
                 self.restyle = true;
             }
             "view.grayscale" => self.ui.grayscale = self.flag(p, self.ui.grayscale),
-            "view.newWindow" => return doc_window::command(self, p),
+            "view.newWindow" => {
+                // With a window host, a real second window on the presentation (`windows`);
+                // without one, the extra viewport drawn by `doc_window`.
+                if self.session.windows.host {
+                    if self.session.active().is_none() {
+                        return Err("New Window needs an open presentation".into());
+                    }
+                    self.window_requests.push(windows::WindowRequest::NewWindow);
+                    return Ok(json!({"pending": "window"}));
+                }
+                return doc_window::command(self, p);
+            }
             "show.start" => {
                 if let Some(name) = p.get("custom").and_then(Value::as_str).filter(|s| !s.is_empty()) {
                     self.start_custom_show(name, false);
@@ -1285,8 +1542,13 @@ impl SlideApp {
     }
 
     pub fn open_path(&mut self, path: &str) -> Result<(), String> {
+        if let Some(open) = self.window_showing(path) {
+            self.window_requests.push(windows::WindowRequest::Focus(open));
+            return Ok(());
+        }
         self.session.execute("file.open", &json!({"path": path})).map_err(|e| e.to_string())?;
         self.note_recent(path);
+        self.settle_documents();
         Ok(())
     }
 
@@ -1457,6 +1719,18 @@ impl SlideApp {
                         self.media.request(uid, &doc, slide, &action, shape, ms, owner);
                     }
                 }
+                // View › Window: carried out by the window host (`windows`).
+                UiRequest::Window { action, window } => match action.as_str() {
+                    "arrangeAll" => self.window_requests.push(windows::WindowRequest::ArrangeAll),
+                    "cascade" => self.window_requests.push(windows::WindowRequest::Cascade),
+                    "switch" | "next" => {
+                        if let Some(to) = window {
+                            self.window_requests.push(windows::WindowRequest::Focus(to));
+                        }
+                    }
+                    "newWindow" => self.window_requests.push(windows::WindowRequest::NewWindow),
+                    _ => {}
+                },
             }
         }
     }
@@ -1681,13 +1955,10 @@ impl SlideApp {
         }
         self.collect_screenshots(ctx);
         self.issue_screenshots(ctx);
-        // Closing the window with unsaved changes asks first.
-        if ctx.input(|i| i.viewport().close_requested()) && !self.quit_confirmed && self.session.documents().iter().any(|d| d.is_dirty()) {
+        // Closing the window with unsaved changes asks first. A window host asks for its windows
+        // itself ([`windows::Host`]), one at a time when the app quits.
+        if !self.session.windows.host && ctx.input(|i| i.viewport().close_requested()) && !self.close_requested() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            self.show = None;
-            if self.dialog.as_ref().is_none_or(|d| d.id != "quit") {
-                self.dialog = Some(dialogs::Dialog::new("quit"));
-            }
         }
         // AutoRecover: unsaved presentations are written to the recovery folder periodically.
         if self.session.recovery_dir.is_some() && now - self.last_recovery > (self.session.prefs.recovery_minutes * 60.0).max(10.0) {
@@ -1709,6 +1980,7 @@ impl SlideApp {
             }
         }
         canvas::trackpad_twist(self, ctx);
+        self.settle_documents();
     }
 
     /// Borrow faces for interface text in scripts the interface fonts lack (#101): the open
@@ -2043,26 +2315,42 @@ impl SlideApp {
     }
 
     fn drain_control(&mut self, ctx: &egui::Context) {
+        // Requests the window host routed here, then this window's own channel.
+        for req in std::mem::take(&mut self.control_inbox) {
+            self.control_request(ctx, &req);
+        }
         let Some(rx) = self.control_rx.take() else { return };
         while let Ok(req) = rx.try_recv() {
-            // A request whose sender gave up waiting (reply timeout) must not run late (#719).
-            if !req.take() {
-                continue;
-            }
-            let reply = req.reply.clone();
-            match control::handle(self, ctx, &req) {
-                control::Outcome::Done(v) => {
-                    let _ = reply.send(v);
-                }
-                control::Outcome::Screenshot { path } => {
-                    self.shot_token += 1;
-                    let token = self.shot_token;
-                    self.queued_shots.push((token, now_ms() + 120.0, 0));
-                    self.pending_shots.push((token, path, reply, now_ms() + 8000.0));
-                }
-            }
+            self.control_request(ctx, &req);
         }
         self.control_rx = Some(rx);
+    }
+
+    pub(crate) fn control_request(&mut self, ctx: &egui::Context, req: &ControlRequest) {
+        // A request whose sender gave up waiting (reply timeout) must not run late (#719).
+        if !req.take() {
+            return;
+        }
+        let reply = req.reply.clone();
+        match control::handle(self, ctx, req) {
+            control::Outcome::Done(v) => {
+                let _ = reply.send(v);
+            }
+            control::Outcome::Screenshot { path } => {
+                let token = SHOT_TOKENS.fetch_add(1, std::sync::atomic::Ordering::Relaxed).wrapping_add(1);
+                self.queued_shots.push((token, now_ms() + 120.0, 0));
+                self.pending_shots.push((token, path, reply, now_ms() + 8000.0));
+            }
+        }
+    }
+
+    /// A screenshot this window asked for (`ui.screenshot`) came back: answer the request waiting
+    /// for `token`. False when no request of this window waits for it.
+    pub(crate) fn screenshot_arrived(&mut self, token: u64, image: &egui::ColorImage) -> bool {
+        let Some(i) = self.pending_shots.iter().position(|(t, ..)| *t == token) else { return false };
+        let (_, path, reply, _) = self.pending_shots.remove(i);
+        let _ = reply.send(control::save_screenshot(self, image, path.as_deref()));
+        true
     }
 
     fn issue_screenshots(&mut self, ctx: &egui::Context) {
@@ -2085,24 +2373,9 @@ impl SlideApp {
         if self.pending_shots.is_empty() {
             return;
         }
-        let events: Vec<_> = ctx.input(|i| {
-            i.raw
-                .events
-                .iter()
-                .filter_map(|e| match e {
-                    egui::Event::Screenshot { user_data, image, .. } => {
-                        let token = user_data.data.as_ref().and_then(|d| d.downcast_ref::<u64>()).copied()?;
-                        Some((token, image.clone()))
-                    }
-                    _ => None,
-                })
-                .collect()
-        });
+        let events: Vec<_> = ctx.input(|i| i.raw.events.iter().filter_map(screenshot_event).collect());
         for (token, image) in events {
-            if let Some(i) = self.pending_shots.iter().position(|(t, ..)| *t == token) {
-                let (_, path, reply, _) = self.pending_shots.remove(i);
-                let _ = reply.send(control::save_screenshot(self, &image, path.as_deref()));
-            }
+            self.screenshot_arrived(token, &image);
         }
         let now = now_ms();
         self.pending_shots.retain(|(_, _, reply, deadline)| {
@@ -3193,7 +3466,7 @@ mod tests {
             SlideApp::new(session, Services::default()),
         );
         harness.run_steps(2);
-        let id = egui::Id::new("notes_edit");
+        let id = crate::wid("notes_edit");
         let caret = |h: &mut egui_kittest::Harness<'_, SlideApp>, at: usize| {
             let mut st = egui::TextEdit::load_state(&h.ctx, id).unwrap_or_default();
             st.cursor.set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(at))));

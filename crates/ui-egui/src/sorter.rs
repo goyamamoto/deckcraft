@@ -393,7 +393,7 @@ pub(crate) fn notes_picture(
     if slide.notes.is_empty() {
         return None;
     }
-    let id = egui::Id::new("deckcraft.notes-pictures");
+    let id = crate::wid("deckcraft.notes-pictures");
     let key = [frame.x0, frame.y0, frame.x1, frame.y1, scale, px_per_pt].map(f64::to_bits);
     let same = |p: &NotesPicture| {
         std::sync::Arc::ptr_eq(&p.slide, &slide)
@@ -421,7 +421,7 @@ pub(crate) fn notes_picture(
 /// How many notes pictures [`notes_picture`] holds (tests).
 #[cfg(test)]
 pub(crate) fn notes_pictures_held(ctx: &egui::Context) -> usize {
-    ctx.data_mut(|d| d.get_temp::<Vec<NotesPicture>>(egui::Id::new("deckcraft.notes-pictures"))).map_or(0, |v| v.len())
+    ctx.data_mut(|d| d.get_temp::<Vec<NotesPicture>>(crate::wid("deckcraft.notes-pictures"))).map_or(0, |v| v.len())
 }
 
 /// Notes Page: the slide on top and its notes underneath, on a page.
@@ -468,8 +468,8 @@ pub fn notes_page(app: &mut SlideApp, ui: &mut Ui) {
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(notes_rect));
     // A draft belongs to this document and to the notes it started from (#413): another document,
     // a reorder or an undo that changes them drops it.
-    let id = egui::Id::new(("notespage", st.uid, idx));
-    let edit_id = egui::Id::new(("notespage-edit", idx));
+    let id = crate::wid(("notespage", st.uid, idx));
+    let edit_id = crate::wid(("notespage-edit", idx));
     let focused = child.ctx().memory(|m| m.has_focus(edit_id));
     let notes_of = |app: &SlideApp| app.session.active().and_then(|st| st.doc.slides.get(idx)).map(|s| s.notes.clone()).unwrap_or_default();
     let notes = notes_of(app);
@@ -534,7 +534,7 @@ pub fn outline_pane(app: &mut SlideApp, ui: &mut Ui) {
                 let origin = ui.cursor().top();
                 let margin = 300.0;
                 for (i, s) in doc.slides.iter().enumerate() {
-                    let hid = egui::Id::new(("ol-height", s.id.0));
+                    let hid = crate::wid(("ol-height", s.id.0));
                     let known: Option<f32> = ui.data(|d| d.get_temp(hid));
                     let h = known.unwrap_or_else(|| outline_estimate(s));
                     let y = ui.cursor().top() - origin;
@@ -575,7 +575,7 @@ fn outline_slide(app: &mut SlideApp, ui: &mut Ui, t: &Tokens, i: usize, s: &deck
         ui.label(egui::RichText::new(format!("{}", i + 1)).color(t.text_dim));
         let (r, _) = ui.allocate_exact_size(vec2(14.0, 10.0), Sense::hover());
         ui.painter().rect_stroke(r, CornerRadius::same(1), Stroke::new(1.0, if i == cur { t.accent } else { t.text_dim }), egui::StrokeKind::Inside);
-        let id = egui::Id::new(("ol-title", s.id.0));
+        let id = crate::wid(("ol-title", s.id.0));
         let cur_title = s.title();
         let mut v: String = ui.data_mut(|d| d.get_temp(id).unwrap_or_else(|| cur_title.clone()));
         let resp = ui.add(egui::TextEdit::singleline(&mut v).font(theme::bold(14.0)).frame(egui::Frame::NONE).desired_width(f32::INFINITY));
@@ -599,7 +599,7 @@ fn outline_slide(app: &mut SlideApp, ui: &mut Ui, t: &Tokens, i: usize, s: &deck
         if tb.is_empty() {
             continue;
         }
-        let id = egui::Id::new(("ol-body", s.id.0, sh.id.0));
+        let id = crate::wid(("ol-body", s.id.0, sh.id.0));
         let cur_text: String = tb.paragraphs.iter().map(|p| format!("{}{}", "\t".repeat(p.level as usize), p.text())).collect::<Vec<_>>().join("\n");
         let mut v: String = ui.data_mut(|d| d.get_temp(id).unwrap_or_else(|| cur_text.clone()));
         ui.horizontal(|ui| {

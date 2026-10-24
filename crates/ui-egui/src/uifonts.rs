@@ -108,6 +108,19 @@ impl UiFonts {
         self.note(ctx, &text);
     }
 
+    /// Take the faces another window borrowed (the windows share egui's one set of fonts, so each
+    /// installs every window's faces). True when any was new here.
+    pub fn adopt(&mut self, faces: &[Arc<FontFace>]) -> bool {
+        let mut added = false;
+        for f in faces {
+            if !self.faces.iter().any(|g| g.id() == f.id()) {
+                self.faces.push(f.clone());
+                added = true;
+            }
+        }
+        added
+    }
+
     /// Install the interface fonts again when faces were added. True if they were.
     pub fn apply(&mut self, ctx: &egui::Context) -> bool {
         if !std::mem::take(&mut self.changed) {

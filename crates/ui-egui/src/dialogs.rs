@@ -90,7 +90,7 @@ pub fn show(app: &mut SlideApp, ctx: &egui::Context) {
     let (theme_fonts_w, theme_fonts_h) = if d.fields.get("asian").is_some_and(|v| v == "1") { (60.0, 150.0) } else { (0.0, 0.0) };
     // The window's id is the dialog's, so a translated title never changes it.
     let mut window = egui::Window::new(tl!(title(&d.id)))
-        .id(egui::Id::new(("dialog", d.id.clone())))
+        .id(crate::wid(("dialog", d.id.clone())))
         .collapsible(false)
         .resizable(false)
         .anchor(Align2::CENTER_CENTER, vec2(0.0, -40.0))
@@ -1337,7 +1337,11 @@ fn body(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             ui.horizontal(|ui| {
                 let t = Tokens::get(ui.ctx());
                 if ui.add(egui::Button::new(tl!("Don't Save")).min_size(vec2(84.0, 24.0))).clicked() {
-                    let _ = app.session.execute("file.recovery.discard", &json!({}));
+                    // This window's presentations only: other windows keep their recovery copies.
+                    let uids: Vec<u64> = app.session.documents().iter().map(|d| d.uid).collect();
+                    for uid in uids {
+                        let _ = app.session.execute("file.recovery.discard", &json!({"uid": uid}));
+                    }
                     app.quit_confirmed = true;
                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                     done = true;

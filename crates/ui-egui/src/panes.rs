@@ -83,7 +83,7 @@ fn smartart(app: &mut SlideApp, ui: &mut Ui) {
     ui.add_space(4.0);
     for (i, node) in d.nodes.iter().enumerate() {
         let Some(draft) = drafts.get_mut(i) else { break };
-        let id = egui::Id::new(("smartart_line", gid.0, i));
+        let id = crate::wid(("smartart_line", gid.0, i));
         ui.horizontal(|ui| {
             ui.add_space(16.0 * node.level as f32);
             ui.label("•");
@@ -329,7 +329,7 @@ fn format_shape(app: &mut SlideApp, ui: &mut Ui) {
             }
         }
         "size" => {
-            let lock_id = egui::Id::new("fmt-lock-aspect");
+            let lock_id = crate::wid("fmt-lock-aspect");
             let mut lock: bool = ui.data_mut(|d| d.get_temp(lock_id).unwrap_or(false));
             let locked = lock;
             // Lengths in the measurement unit (centimetres in Japan); the rotation in degrees.
@@ -1066,7 +1066,7 @@ fn animation(app: &mut SlideApp, ui: &mut Ui) {
     // Play From starts at the effect last clicked here, or else the first effect of the selected
     // shape; with nothing selected it is Play All. Reordering or removing forgets the click: the
     // index would point at another effect.
-    let pick_id = egui::Id::new(("anim_pane_pick", st.uid, st.selection.slide));
+    let pick_id = crate::wid(("anim_pane_pick", st.uid, st.selection.slide));
     let pick = ui.data(|m| m.get_temp::<usize>(pick_id));
     // A triggered effect is not on the click sequence, so it can't be played from.
     let eligible = |i: usize| anims.get(i).is_some_and(|a| selected.contains(&a.shape.0)) && tl.start_of(i).is_some();
@@ -1388,7 +1388,7 @@ fn comment_card(app: &mut SlideApp, ui: &mut Ui, slide: usize, index: usize, c: 
             });
         });
     if focused {
-        let key = egui::Id::new("comment-focus-scrolled");
+        let key = crate::wid("comment-focus-scrolled");
         let seen = ui.data(|d| d.get_temp::<(usize, usize)>(key));
         if seen != Some((slide, index)) {
             ui.scroll_to_rect(shown.response.rect, Some(egui::Align::Center));
@@ -1420,7 +1420,7 @@ fn designer(app: &mut SlideApp, ui: &mut Ui) {
     let px = (w * ppp).round().max(16.0) as u32;
     let ideas = deckcraft_engine::cmd::ideas::ideas_for(&doc, idx);
     let themes = deckcraft_model::theme::builtin_themes();
-    let cache_id = egui::Id::new("design-idea-thumbs");
+    let cache_id = crate::wid("design-idea-thumbs");
     let key = (key_doc.0, key_doc.1, idx, px);
     let mut cache: IdeaThumbs = ui.ctx().data_mut(|d| d.get_temp(cache_id)).unwrap_or_default();
     if cache.key != key || cache.tex.is_empty() {

@@ -1,6 +1,6 @@
 # PowerPoint feature checklist
 
-> **Generated:** 2026-10-24 (East Asian text re-scored D after measuring Japanese layout against PowerPoint for Mac; bullets/numbering remain D after empty-line marker review; summary by `cargo xtask parity`; rows re-scored by the 2026-10-14 community PR wave, duplicate Thesaurus, AutoCorrect, Artistic effects and Corrections rows folded; Preview in editor re-scored 2026-10-13; earlier rows re-scored 2026-10-10 against PowerPoint for Mac 16.113.4; video/animated GIF row re-scored 2026-10-11, #171) · **Target:** Microsoft PowerPoint for Mac 16.113 (Microsoft 365)
+> **Generated:** 2026-10-25 (New window / arrange windows re-scored D: one window per presentation, New Window, Arrange All, Cascade, Switch Windows; East Asian text re-scored D after measuring Japanese layout against PowerPoint for Mac; bullets/numbering remain D after empty-line marker review; summary by `cargo xtask parity`; rows re-scored by the 2026-10-14 community PR wave, duplicate Thesaurus, AutoCorrect, Artistic effects and Corrections rows folded; Preview in editor re-scored 2026-10-13; earlier rows re-scored 2026-10-10 against PowerPoint for Mac 16.113.4; video/animated GIF row re-scored 2026-10-11, #171) · **Target:** Microsoft PowerPoint for Mac 16.113 (Microsoft 365)
 
 The summary between `<!-- SUMMARY -->
 **Weighted breadth parity: 84%** over 191 features.
@@ -9,14 +9,14 @@ The summary between `<!-- SUMMARY -->
 |---|---|---|---|---|---|
 | P0 | 72 | 61 | 11 | 0 | 92% |
 | P1 | 65 | 46 | 15 | 4 | 82% |
-| P2 | 54 | 17 | 25 | 12 | 55% |
+| P2 | 54 | 18 | 24 | 12 | 56% |
 
 | Area | Parity |
 |---|---|
 | Application shell | 81% |
 | Files | 75% |
 | Slides | 92% |
-| Views | 98% |
+| Views | 100% |
 | Masters & themes | 92% |
 | Shapes | 91% |
 | Format | 83% |
@@ -89,7 +89,7 @@ Open P0 items: Contextual tabs (Shape Format, Picture Format, Table Design/Layou
 | Views | Rulers, gridlines, guides | P1 | D |
 | Views | Smart guides | P1 | D |
 | Views | Grayscale / black and white view | P2 | D |
-| Views | New window / arrange windows | P2 | P |
+| Views | New window / arrange windows | P2 | D |
 | Masters & themes | Slide Master view (edit master and layouts) | P0 | D |
 | Masters & themes | Insert/rename/delete layouts, insert placeholders | P1 | D |
 | Masters & themes | Handout and Notes masters | P2 | M |

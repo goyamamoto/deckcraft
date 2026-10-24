@@ -51,7 +51,7 @@ struct CachedFonts {
 }
 
 fn cache_id() -> egui::Id {
-    egui::Id::new("fontpick.fonts")
+    crate::wid("fontpick.fonts")
 }
 
 /// Drop the cached families, so the next list asks the engine again (after `font.rescan`).

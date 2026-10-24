@@ -84,7 +84,7 @@ pub fn show(app: &mut SlideApp, ctx: &egui::Context) {
     }
     let grayscale = app.ui.grayscale;
     ctx.show_viewport_immediate(
-        egui::ViewportId::from_hash_of("deckcraft_doc_window"),
+        egui::ViewportId::from_hash_of(("deckcraft_doc_window", crate::window_salt())),
         egui::ViewportBuilder::default().with_title(title.clone()).with_inner_size([960.0, 640.0]).with_min_inner_size([480.0, 360.0]),
         |ui, _| {
             let t = crate::theme::Tokens::get(ui);

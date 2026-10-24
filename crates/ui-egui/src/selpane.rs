@@ -103,7 +103,7 @@ fn run(app: &mut SlideApp, id: &str, p: serde_json::Value) {
 
 /// Each row is a widget with an id of its own (keyboard focus sits on the selected row).
 fn row_id(id: u32) -> Id {
-    Id::new(("selection_pane_row", id))
+    crate::wid(("selection_pane_row", id))
 }
 
 /// A small icon button; `label` (English) is translated for its tooltip and accessible name.

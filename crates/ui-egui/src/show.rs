@@ -1960,7 +1960,7 @@ fn presenter_window(ctx: &egui::Context, show: &mut Show, doc: &Presentation, no
         ui.add(egui::Button::new(egui::RichText::new(tl!(s)).size(15.0).color(Color32::WHITE)).fill(Color32::from_gray(60)).min_size(vec2(0.0, 30.0)))
     };
     ctx.show_viewport_immediate(
-        egui::ViewportId::from_hash_of("deckcraft_presenter"),
+        egui::ViewportId::from_hash_of(("deckcraft_presenter", crate::window_salt())),
         egui::ViewportBuilder::default().with_title(tl!("Presenter View — DeckCraft")).with_inner_size([1100.0, 700.0]),
         |ui, _| {
             if !keyboard(ui.ctx(), show, doc, now, true) {

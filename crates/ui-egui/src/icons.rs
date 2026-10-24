@@ -210,6 +210,9 @@ icons! {
     FitToWindow => "fit-to-window",
     Grayscale => "grayscale",
     NewWindow => "new-window",
+    ArrangeAll => "arrange-all",
+    Cascade => "cascade",
+    SwitchWindows => "switch-windows",
     Macros => "macros",
     // Arrange
     BringForward => "bring-forward",
@@ -1917,6 +1920,29 @@ fn draw(p: &Pen<'_>, icon: Icon) {
             p.seg((2.0, 7.0), (20.0, 7.0), K);
             p.dot((4.5, 5.25), 0.6, K);
             p.badge((18.5, 18.0), 4.8, G, Glyph::Plus);
+        }
+        I::ArrangeAll => {
+            // Two windows side by side, each with a title bar.
+            p.rect(2.0, 4.0, 11.5, 20.0, 1.2, N, K);
+            p.rect(2.0, 4.0, 11.5, 7.5, 0.0, t(B), N);
+            p.seg((2.0, 7.5), (11.5, 7.5), K);
+            p.rect(12.5, 4.0, 22.0, 20.0, 1.2, N, K);
+            p.rect(12.5, 4.0, 22.0, 7.5, 0.0, t(B), N);
+            p.seg((12.5, 7.5), (22.0, 7.5), K);
+        }
+        I::Cascade => {
+            // Three windows a step apart, the front one filled in.
+            p.rect(2.0, 3.0, 15.0, 13.0, 1.2, N, K);
+            p.rect(5.5, 6.5, 18.5, 16.5, 1.2, N, K);
+            p.rect(9.0, 10.0, 22.0, 20.0, 1.2, t(B), K);
+            p.seg((9.0, 13.0), (22.0, 13.0), K);
+        }
+        I::SwitchWindows => {
+            // A window, and an arrow on to the next one.
+            p.rect(2.0, 4.0, 15.0, 16.0, 1.2, N, K);
+            p.seg((2.0, 7.5), (15.0, 7.5), K);
+            p.dot((4.2, 5.75), 0.6, K);
+            p.arrow((13.0, 19.5), (22.0, 19.5), B);
         }
         I::Macros => {
             p.page(3.0, 2.0, 17.0, 21.0, N, K);

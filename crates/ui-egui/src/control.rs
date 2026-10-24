@@ -107,6 +107,10 @@ pub fn inspect(app: &SlideApp, ctx: &egui::Context) -> Value {
         }),
         "animPreview": app.anim_preview_report().map(|(slide, time, duration)| json!({"slide": slide, "time": time, "duration": duration})),
         "documents": app.session.documents().iter().map(|d| json!({"title": d.title(), "dirty": d.is_dirty(), "path": d.path})).collect::<Vec<_>>(),
+        // The presentation window this is (`ui.windows`), 0 without a window host; its number
+        // among the windows on its presentation (View › New Window).
+        "windowId": app.session.windows.this,
+        "viewNumber": app.view_number,
         "status": app.status.as_ref().map(|s| s.0.clone()),
         "perf": {"frameMs": app.perf.frame_ms, "renderMs": app.perf.render_ms, "fps": app.perf.fps},
     })
