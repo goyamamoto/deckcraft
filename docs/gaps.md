@@ -1,6 +1,6 @@
 # Where DeckCraft falls short of PowerPoint
 
-> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-22 · **Change:** minor (Animation Pane ▸ Play From; previous: minor, native chart payloads stored in bounded ZIP members; previous: major, community PR wave 2026-10-14: soak tests, PPTX corpus, comment threads (#70), embedded fonts, SmartArt Text Pane, Animation Pane timeline, Hunspell spelling, thesaurus, AutoCorrect, 14 new dialogs, pen pressure and trackpad gestures; duplicated entries and headers folded; previous: minor, 3-D bevel, camera and face lighting rendered) · **Target:** Microsoft PowerPoint for Mac 16.113 (Microsoft 365)
+> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-24 · **Change:** minor (localization: catalogs through craft-i18n and a Japanese interface; previous: minor, Animation Pane ▸ Play From; previous: minor, native chart payloads stored in bounded ZIP members; previous: major, community PR wave 2026-10-14: soak tests, PPTX corpus, comment threads (#70), embedded fonts, SmartArt Text Pane, Animation Pane timeline, Hunspell spelling, thesaurus, AutoCorrect, 14 new dialogs, pen pressure and trackpad gestures; duplicated entries and headers folded; previous: minor, 3-D bevel, camera and face lighting rendered) · **Target:** Microsoft PowerPoint for Mac 16.113 (Microsoft 365)
 > **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-20 · **Change:** trivial (empty chart number-format sections hide values; previous: minor, native chart payloads stored in bounded ZIP members; previous: major, community PR wave 2026-10-14: soak tests, PPTX corpus, comment threads (#70), embedded fonts, SmartArt Text Pane, Animation Pane timeline, Hunspell spelling, thesaurus, AutoCorrect, 14 new dialogs, pen pressure and trackpad gestures; duplicated entries and headers folded; previous: minor, 3-D bevel, camera and face lighting rendered) · **Target:** Microsoft PowerPoint for Mac 16.113 (Microsoft 365)
 
 Every known shortfall, one entry each, ranked by how much it stops someone who presents with
@@ -22,7 +22,7 @@ revision history.
 | 2 | Data loss and crashes on common paths (#60, #40, #59) | Stability | B | 6–12 | this file |
 | 3 | PPTX round trip drops media options and rewind (#74, #77) | File format | B | 2–4 | [file-format-parity.md](file-format-parity.md) |
 | 4 | SVG pictures don't render (EMF/WMF do) | File format | B | 4–8 | [file-format-parity.md](file-format-parity.md) |
-| 5 | No localization: English only | Localization | B (infra + 5 languages) | 55–90 | [localization-parity.md](localization-parity.md) |
+| 5 | Localization: English and Japanese only | Localization | B (4 more languages) | 45–75 | [localization-parity.md](localization-parity.md) |
 | 6 | No printing | Feature | B | 5–8 | [file-format-parity.md](file-format-parity.md) |
 | 7 | Fonts: only Regular, Bold and Italic faces (#69) | Feature | B | 3–5 | [ui-parity.md](ui-parity.md) |
 | 8 | Image paste fails on Windows and Linux (#53) | Feature | B | 2–4 | [ui-parity.md](ui-parity.md) |
@@ -321,9 +321,20 @@ Detail in [hardware-parity.md](hardware-parity.md).
 
 Detail in [localization-parity.md](localization-parity.md).
 
-- **English only, no string catalog** (#15, #30; Ukrainian PR #34 open). PowerPoint for Mac ships
-  26 languages. Infrastructure 8–14 h, then 3–16 h per language plus native review. Beta needs the
-  infrastructure and at least Simplified Chinese, Spanish, French, German and Japanese (~30–45 h).
+- **English and Japanese only** (#30; Ukrainian PR #34 open). The interface goes through the
+  craft-i18n catalogs and follows the system language (#15); Japanese has a row for ~91% of the
+  interface strings (the rest is document content and engine messages). PowerPoint for Mac ships
+  26 languages. 3–16 h per language plus native review. Beta needs at least Simplified Chinese,
+  Spanish, French and German too (~15–25 h).
+- **The Japanese catalog is not yet in craft-i18n's main branch** (branch `deckcraft-ja`), so
+  `craft-i18n.rev` still pins a revision without `deckcraft.tsv` and release builds are English.
+  Merge it, move the pin and review the wording with a native speaker: 1–2 h.
+- **Engine messages are English sentences** (file errors, Print's range errors, Compare's detail
+  lines, the repaired-copy note): they need templates in the engine before they can be translated.
+  2–4 h.
+- **Japanese text: stacked vertical pitch and fixed-pitch cells.** `wordArtVert` characters advance
+  by ~1.63 em in PowerPoint (less in DeckCraft); half-width characters in ＭＳ ゴシック don't sit on
+  PowerPoint's cells; IME reconversion works on macOS only. 3–6 h.
 - **Hangul in the interface needs an installed Korean font** (#101). craft-fonts has no Korean face
   (Noto CJK is excluded by the asset policy), so the web build draws Korean file names, notes and
   outline text as boxes; desktop borrows Malgun Gothic, Apple SD Gothic Neo or Noto Sans CJK.
@@ -358,6 +369,7 @@ Detail in [localization-parity.md](localization-parity.md).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-24 | minor | Localization gap narrowed to English and Japanese only (catalog infrastructure and the Japanese interface landed); new entries for the catalog's upstream merge, engine messages and the remaining Japanese layout differences |
 | 2026-10-22 | minor | Animation Pane ▸ Play From starts the preview at the selected effect; gap 10 keeps the effect gallery (7–13 h) |
 | 2026-10-20 | trivial | Explicit empty chart number-format sections hide their values; blank whole-code General fallback is retained. Synthetic formatter regressions; chart-element scores and readiness estimates unchanged |
 | 2026-10-18 | minor | Native chart payloads use referenced ZIP members and share media byte/item limits; old inline sidecars remain readable. Synthetic tests cover multi-megabyte layout, all shape owners, shared budgets, missing/corrupt members and invalid references. Scores and milestone scope unchanged |
