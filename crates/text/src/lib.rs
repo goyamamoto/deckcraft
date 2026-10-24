@@ -7,11 +7,14 @@
 //!    slots and the theme's script fonts) and shaping style, each item shaped with the whole
 //!    paragraph as context; paint-only attributes (colour, highlight, underline) never split a
 //!    word, so Arabic joining and ligatures survive them;
-//! 3. line breaking in logical order (UAX #14 opportunities at cluster boundaries, greedy fill);
+//! 3. line breaking in logical order (UAX #14 opportunities at cluster boundaries with PowerPoint's
+//!    kinsoku, `eaLnBrk`, `latinLnBrk`, `hangingPunct` and the deck's `p:kinsoku` lists, greedy
+//!    fill);
 //! 4. per line, rules L1/L2 reorder the characters visually (L4 mirroring is done by the shaper).
 //!
 //! It then places bullets and numbers from the paragraph's start edge (the right edge for RTL
-//! paragraphs), applies indents, spacing and alignment (kashida for `justLow`), anchors the block
+//! paragraphs), applies indents, spacing, alignment (kashida for `justLow`, gaps between the
+//! characters of East Asian justified lines) and font alignment (`fontAlgn`), anchors the block
 //! in the shape's text box, and shrinks text on overflow when the body asks for it. The result is
 //! positioned glyph runs in shape-local coordinates plus per-line caret geometry for editing:
 //! bidirectional carets with affinity, logical and visual movement, and selection as the union of
@@ -634,6 +637,19 @@ fn chinese_num(n: u32) -> String {
     out
 }
 
+/// `n` in a circle (`circleNumDbPlain`): ① to ⑳, then on through Unicode's other circled
+/// numbers, ㉑ to ㉟ (U+3251–325F) and ㊱ to ㊿ (U+32B1–32BF), so long lists don't repeat a label;
+/// past 50, where no circled form exists, the plain number.
+fn circled_number(n: u32) -> String {
+    let cp = match n {
+        0..=20 => 0x2460 + n.saturating_sub(1),
+        21..=35 => 0x3251 + (n - 21),
+        36..=50 => 0x32B1 + (n - 36),
+        _ => return n.to_string(),
+    };
+    char::from_u32(cp).map(String::from).unwrap_or_else(|| n.to_string())
+}
+
 /// Text of an auto-number bullet: `arabicPeriod` 3 → "3.". The East Asian, Thai, Hindi, Arabic
 /// and Hebrew schemes are written as PowerPoint draws them: `ea1ChsPeriod` 10 → "十．",
 /// `ea1JpnKorPeriod` 10 → "一〇．" (digit by digit), `arabicDbPeriod` 13 → "１３．",
@@ -668,7 +684,7 @@ pub fn autonum(scheme: &str, n: u32) -> String {
     } else if scheme.starts_with("circleNumWdBlack") {
         return circled(0x2776, 10);
     } else if scheme.starts_with("circleNum") {
-        return char::from_u32(0x2460 + n.saturating_sub(1).min(19)).map(String::from).unwrap_or_else(|| n.to_string());
+        return circled_number(n);
     } else if scheme.starts_with("ea1Chs") || scheme.starts_with("ea1Cht") {
         chinese_num(n)
     } else if scheme.starts_with("ea1Jpn") {
@@ -1037,9 +1053,16 @@ const SUB_SUPER: f64 = 0.66;
 /// it: kerning only where the run asks for it (`kern`), and no standard or contextual ligatures in
 /// Latin, Greek and Cyrillic ("fi", "ffi" and Calibri's "ti" stay apart). Other scripts need
 /// their ligatures (Arabic lam-alef), and emoji sequences are joined by them.
+///
+/// East Asian text is never kerned: PowerPoint for Mac kerns Latin pairs at `kern="1200"` but
+/// leaves kana, kanji and CJK punctuation at their own advances, even in a face with kana pairs
+/// (Hiragino Sans), so items in Han, hiragana, katakana, Hangul or Bopomofo, or holding a
+/// character of the East Asian slot, are shaped without `kern`.
 fn shaping_features(cells: &[Cell], styles: &[Style], script: Option<ScriptTag>) -> Vec<deckcraft_fonts::Feature> {
     let mut f = vec![];
-    if !cells.first().and_then(|c| styles.get(c.style)).is_some_and(|st| st.kern) {
+    let east_asian = script.is_some_and(|s| script::slot_of_script(s) == FontSlot::EastAsian)
+        || cells.iter().any(|c| script::slot_of(c.ch) == Some(FontSlot::EastAsian));
+    if east_asian || !cells.first().and_then(|c| styles.get(c.style)).is_some_and(|st| st.kern) {
         f.extend(deckcraft_fonts::feature("-kern"));
     }
     let alphabetic = matches!(script.as_ref(), Some(b"Latn" | b"Grek" | b"Cyrl"));
@@ -1501,6 +1524,83 @@ fn line_metrics(face: &FontFace, size: f64) -> (f64, f64) {
     (h * face.line_split, h * (1.0 - face.line_split))
 }
 
+/// How the characters of different sizes on one line line up across it (`a:pPr/@fontAlgn`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FontAlign {
+    /// On a common baseline (`base`).
+    Baseline,
+    /// Their tops on the line's top (`t`).
+    Top,
+    /// Their centres on the line's centre (`ctr`).
+    Center,
+    /// Their bottoms on the line's bottom (`b`).
+    Bottom,
+}
+
+impl FontAlign {
+    /// The alignment `fontAlgn` names for text running `vert`. `auto` (no value is taken as
+    /// `auto`) is the baseline in horizontal text and in text turned on its side (`vert`,
+    /// `vert270`, `mongolianVert`), the centre where characters stand upright (`eaVert`,
+    /// `wordArtVert`, `wordArtVertRtl`), as ECMA-376 defines `ST_TextFontAlignType`.
+    fn of(v: Option<&str>, vert: TextDir) -> FontAlign {
+        match v {
+            Some("t") => FontAlign::Top,
+            Some("ctr") => FontAlign::Center,
+            Some("b") => FontAlign::Bottom,
+            Some("base") => FontAlign::Baseline,
+            _ if matches!(vert, TextDir::EaVertical | TextDir::Stacked | TextDir::StackedRtl) => FontAlign::Center,
+            _ => FontAlign::Baseline,
+        }
+    }
+}
+
+/// A cell's extent across its line, (top, bottom) from the baseline (negative above it): the
+/// line height its own run gives ([`line_metrics`], in the run's face or the slot face drawing
+/// it), or for an upright character its em box centred [`UPRIGHT_CENTRE`] above the baseline,
+/// one line pitch deep.
+fn cross_extent(p: &ParaShaped, c: &Cell) -> Option<(f64, f64)> {
+    let st = p.styles.get(c.style)?;
+    if c.upright {
+        let mid = -UPRIGHT_CENTRE * st.size;
+        let half = st.size * LINE_PITCH / 2.0;
+        return Some((mid - half, mid + half));
+    }
+    let face = p.faces.get(c.face)?;
+    // As for the line's height: a fallback face doesn't count, the run's own faces do.
+    let own = Arc::ptr_eq(face, &st.face)
+        || [st.ea.as_deref(), st.cs.as_deref(), st.sym.as_deref()].into_iter().flatten().any(|f| face.family.eq_ignore_ascii_case(f));
+    let (a, d) = line_metrics(if own { face } else { &st.face }, st.size);
+    Some((-a, d))
+}
+
+/// How far `align` moves each of a line's `cells` down from the baseline (empty when nothing
+/// moves): each character's extent ([`cross_extent`]) lines up with the line's, the union of its
+/// characters' extents (spaces left out), by its top, centre or bottom. A line of one size and
+/// face doesn't move.
+fn font_align_shifts(p: &ParaShaped, cells: &[Cell], align: FontAlign) -> Vec<f64> {
+    if align == FontAlign::Baseline {
+        return Vec::new();
+    }
+    let ext: Vec<Option<(f64, f64)>> = cells.iter().map(|c| cross_extent(p, c)).collect();
+    let (top, bottom) = cells
+        .iter()
+        .zip(&ext)
+        .filter(|(c, _)| !c.ch.is_whitespace())
+        .filter_map(|(_, e)| *e)
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(t, b), (t1, b1)| (t.min(t1), b.max(b1)));
+    if top > bottom {
+        return Vec::new();
+    }
+    ext.iter()
+        .map(|e| match (e, align) {
+            (Some((t, _)), FontAlign::Top) => top - t,
+            (Some((_, b)), FontAlign::Bottom) => bottom - b,
+            (Some((t, b)), FontAlign::Center) => (top + bottom - t - b) / 2.0,
+            _ => 0.0,
+        })
+        .collect()
+}
+
 /// Hangul syllables and jamo: PowerPoint wraps Korean at word boundaries (spaces), not between
 /// syllables.
 fn is_hangul(c: char) -> bool {
@@ -1554,10 +1654,133 @@ fn is_cj_nonstarter(c: char) -> bool {
     )
 }
 
+/// East Asian text as line breaking sees it: ideographs, kana, Bopomofo, CJK symbols and
+/// punctuation (not the ideographic space), enclosed and compatibility CJK, full-width and
+/// half-width forms. Not Hangul, which PowerPoint wraps between words, nor the combining sound
+/// marks.
+fn is_east_asian(c: char) -> bool {
+    matches!(c as u32,
+        0x2E80..=0x2FFF
+            | 0x3001..=0x303F
+            | 0x3040..=0x3098
+            | 0x309B..=0x30FF
+            | 0x3100..=0x312F
+            | 0x3190..=0x31FF
+            | 0x3200..=0x33FF
+            | 0x3400..=0x4DBF
+            | 0x4E00..=0x9FFF
+            | 0xF900..=0xFAFF
+            | 0xFE30..=0xFE4F
+            | 0xFF01..=0xFFEF
+            | 0x20000..=0x3FFFF
+    )
+}
+
+/// A letter or digit of a Latin, Greek or Cyrillic word, which `latinLnBrk` lets a line break
+/// inside.
+fn is_latin_word_char(c: char) -> bool {
+    c.is_alphanumeric() && !is_east_asian(c) && !is_hangul(c) && matches!(script::script_of(c).as_ref(), None | Some(b"Latn" | b"Grek" | b"Cyrl"))
+}
+
+/// A paragraph's line-breaking rules (`a:pPr/@eaLnBrk`, `@latinLnBrk` and the deck's
+/// `p:kinsoku`).
+#[derive(Clone, Copy, Debug)]
+struct BreakRules<'a> {
+    /// `latinLnBrk="1"`: a Latin word may break between any two of its letters, to fill the line
+    /// (PowerPoint for Mac breaks "a verylongword" as "a v|erylongword"); off, only where Unicode
+    /// allows it and never right after `/` or `\`.
+    latin: bool,
+    /// The East Asian line-breaking rules (kinsoku), on unless `eaLnBrk="0"`: closing
+    /// punctuation, small kana, iteration marks and the prolonged sound mark never start a line,
+    /// opening brackets never end one. Off, a line may break before any East Asian character
+    /// (PowerPoint then starts a line with "。").
+    kinsoku: bool,
+    /// The deck's own lists (`p:kinsoku`) when they are for the paragraph's East Asian language:
+    /// in place of the standard ones wherever East Asian text meets.
+    custom: Option<&'a KinsokuLists>,
+}
+
+/// The deck's kinsoku lists (`p:kinsoku`), sorted for lookups.
+#[derive(Clone, Debug, Default)]
+struct KinsokuLists {
+    /// The East Asian language they are for: the one `lang` names, Japanese when it names none;
+    /// `None` when `lang` is not Chinese, Japanese or Korean (the lists then apply nowhere).
+    locale: Option<deckcraft_fonts::CjkLocale>,
+    /// `invalStChars`: the characters no line starts with.
+    no_start: Vec<char>,
+    /// `invalEndChars`: the characters no line ends with.
+    no_end: Vec<char>,
+}
+
+impl KinsokuLists {
+    /// A line-breaking list holds a few dozen characters; a hostile one is cut short.
+    const MAX: usize = 4096;
+
+    fn of(k: &deckcraft_model::Kinsoku) -> KinsokuLists {
+        let set = |s: &str| {
+            let mut v: Vec<char> = s.chars().take(Self::MAX).collect();
+            v.sort_unstable();
+            v.dedup();
+            v
+        };
+        let locale = match k.lang.as_deref() {
+            Some(l) => deckcraft_fonts::CjkLocale::from_lang(l),
+            None => Some(deckcraft_fonts::CjkLocale::Japanese),
+        };
+        KinsokuLists { locale, no_start: set(&k.start), no_end: set(&k.end) }
+    }
+}
+
+#[cfg(test)]
+impl BreakRules<'_> {
+    /// PowerPoint's defaults: kinsoku on with the standard lists, Latin words whole.
+    const STANDARD: BreakRules<'static> = BreakRules { latin: false, kinsoku: true, custom: None };
+}
+
+/// The line-breaking rules of paragraph `p`: its `eaLnBrk` (absent everywhere means on, as
+/// PowerPoint for Mac breaks) and `latinLnBrk` (absent means off), and the deck's `p:kinsoku`
+/// lists when their language (Japanese when they name none) is the paragraph's East Asian one
+/// (its runs' `lang` or `altLang`, else the system's East Asian language).
+fn break_rules<'a>(p: &ParaShaped, kinsoku: Option<&'a KinsokuLists>) -> BreakRules<'a> {
+    let custom = kinsoku.filter(|k| k.locale.is_some() && p.styles.iter().find_map(|st| st.cjk) == k.locale);
+    BreakRules { latin: p.props.latin_line_break.unwrap_or(false), kinsoku: p.props.east_asian_line_break.unwrap_or(true), custom }
+}
+
+/// May a line break between `prev` and `next` under `rules`, where Unicode line breaking says
+/// `uax`?
+fn pair_breaks(prev: char, next: char, uax: bool, rules: &BreakRules) -> bool {
+    // PowerPoint never breaks after a zero-width space, nor before an em dash (only after it), and
+    // wraps Korean between words.
+    if (is_hangul(prev) && is_hangul(next)) || prev == '\u{200B}' || next == '\u{2014}' {
+        return false;
+    }
+    if rules.latin && is_latin_word_char(prev) && is_latin_word_char(next) {
+        return true;
+    }
+    if !rules.kinsoku {
+        // No kinsoku: before any East Asian character, closing punctuation included.
+        if is_east_asian(next) && !prev.is_whitespace() {
+            return true;
+        }
+    } else if let Some(k) = rules.custom {
+        // The deck's lists decide wherever East Asian text meets other text; Unicode's rules
+        // stay between Latin letters and around spaces.
+        if (is_east_asian(prev) || is_east_asian(next)) && !prev.is_whitespace() && !next.is_whitespace() {
+            return k.no_start.binary_search(&next).is_err() && k.no_end.binary_search(&prev).is_err();
+        }
+    } else if is_cj_nonstarter(next) {
+        return false;
+    }
+    if !rules.latin && matches!(prev, '/' | '\\') && !next.is_whitespace() {
+        return false;
+    }
+    uax
+}
+
 /// Break opportunities: allowed[i] = a line may start at char i. Unicode line breaking, then
-/// PowerPoint's differences: without `latinLnBrk` a word doesn't break after `/` or `\`, and
-/// Korean breaks only between words.
-fn break_opportunities(text: &str, latin_break: bool) -> (Vec<bool>, Vec<bool>) {
+/// PowerPoint's differences ([`pair_breaks`]): kinsoku (standard, the deck's own lists, or off
+/// with `eaLnBrk="0"`), `latinLnBrk`, and Korean breaking only between words.
+fn break_opportunities(text: &str, rules: &BreakRules) -> (Vec<bool>, Vec<bool>) {
     let n = text.chars().count();
     let mut allowed = vec![false; n + 1];
     let mut mandatory = vec![false; n + 1];
@@ -1580,21 +1803,22 @@ fn break_opportunities(text: &str, latin_break: bool) -> (Vec<bool>, Vec<bool>) 
     }
     let chars: Vec<char> = text.chars().collect();
     for (i, w) in chars.windows(2).enumerate() {
-        let (prev, next) = (w[0], w[1]);
-        // PowerPoint never breaks after a zero-width space, nor before an em dash (only after it).
-        let keep = if (is_hangul(prev) && is_hangul(next)) || prev == '\u{200B}' || next == '\u{2014}' || is_cj_nonstarter(next) {
-            false
-        } else {
-            latin_break || !matches!(prev, '/' | '\\') || next.is_whitespace()
-        };
-        if !keep
-            && !mandatory.get(i + 1).copied().unwrap_or(false)
-            && let Some(a) = allowed.get_mut(i + 1)
-        {
-            *a = false;
+        let &[prev, next] = w else { continue };
+        if mandatory.get(i + 1).copied().unwrap_or(false) {
+            continue;
+        }
+        if let Some(a) = allowed.get_mut(i + 1) {
+            *a = pair_breaks(prev, next, *a, rules);
         }
     }
     (allowed, mandatory)
+}
+
+/// Spaces that end a wrapped line without counting: they don't push the line to wrap, and its
+/// width (for alignment and justification) stops before them. The ideographic space (U+3000) is
+/// one too, so a right-aligned or centred Japanese line wrapped after "　" isn't an em short.
+fn is_trailing_space(c: char) -> bool {
+    c == ' ' || c == '\u{3000}'
 }
 
 struct RawLine {
@@ -1606,6 +1830,7 @@ struct RawLine {
 
 fn break_lines(
     p: &ParaShaped,
+    rules: &BreakRules,
     first_w: f64,
     rest_w: f64,
     wrap: bool,
@@ -1615,8 +1840,11 @@ fn break_lines(
     x0_rest: f64,
 ) -> Vec<RawLine> {
     let text: String = p.cells.iter().map(|c| c.ch).collect();
-    let (allowed, _) = break_opportunities(&text, p.props.latin_line_break.unwrap_or(false));
-    let hang = p.props.hanging_punct.unwrap_or(false);
+    let (allowed, _) = break_opportunities(&text, rules);
+    // `hangingPunct` is on unless a style turns it off: PowerPoint for Mac hangs "。" and "、"
+    // past the margin when no level sets it. Hanging is part of kinsoku: without it
+    // (`eaLnBrk="0"`) a "。" that doesn't fit starts the next line.
+    let hang = rules.kinsoku && p.props.hanging_punct.unwrap_or(true);
     let n = p.cells.len();
     let mut lines = vec![];
     let mut start = 0;
@@ -1658,7 +1886,7 @@ fn break_lines(
             if wrap && c == '\t' && x + adv > avail + 0.01 && i > start {
                 end = i;
                 next = i;
-                while end > start && p.cells.get(end - 1).is_some_and(|c| c.ch == ' ') {
+                while end > start && p.cells.get(end - 1).is_some_and(|c| is_trailing_space(c.ch)) {
                     end -= 1;
                 }
                 break;
@@ -1670,8 +1898,8 @@ fn break_lines(
                     .unwrap_or_else(|| (start + 1..=i).rev().find(|&j| breakable(j)).or_else(|| (i + 1..n).find(|&j| breakable(j))).unwrap_or(n));
                 end = b;
                 next = b;
-                // Trailing spaces belong to the line but don't count.
-                while end > start && p.cells.get(end - 1).is_some_and(|c| c.ch == ' ') {
+                // Trailing spaces (ideographic ones too) belong to the line but don't count.
+                while end > start && p.cells.get(end - 1).is_some_and(|c| is_trailing_space(c.ch)) {
                     end -= 1;
                 }
                 break;
@@ -1836,6 +2064,48 @@ pub fn layout(ctx: &Ctx, shape: &Shape, body: &TextBody, opts: &Opts) -> TextLay
     l
 }
 
+/// How a body's text is turned about the shape centre, in degrees (90 for `vert`, `eaVert`,
+/// `mongolianVert` and stacked text, 270 for `vert270`, plus `bodyPr/@rot`), and whether its lines
+/// then follow each other from left to right: Mongolian vertical and stacked (`wordArtVert`) text
+/// is turned like `vert`, but PowerPoint draws its lines from left to right.
+fn text_turn(bp: &BodyProps) -> (f64, bool) {
+    let vert = bp.vert.unwrap_or(TextDir::Horizontal);
+    let lines_ltr = matches!(vert, TextDir::MongolianVertical | TextDir::Stacked);
+    let rotation = match vert {
+        TextDir::Vertical | TextDir::EaVertical | TextDir::Stacked | TextDir::StackedRtl | TextDir::MongolianVertical => 90.0,
+        TextDir::Vertical270 => 270.0,
+        TextDir::Horizontal => 0.0,
+    } + bp.rot.unwrap_or(0.0);
+    (rotation, lines_ltr)
+}
+
+/// A turn of 90° or 270°: the text's lines run down the shape.
+fn quarter_turned(rotation: f64) -> bool {
+    (rotation - 90.0).abs() < 1e-6 || (rotation - 270.0).abs() < 1e-6
+}
+
+/// Where the lines of text turned a quarter turn follow each other across the shape.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VerticalLines {
+    /// The first line on the right, the next to its left (`vert`, `eaVert`, `wordArtVertRtl`).
+    RightToLeft,
+    /// The first line on the left (`vert270`, `mongolianVert`, `wordArtVert`).
+    LeftToRight,
+}
+
+/// How the lines of body `bp` run when its text is turned a quarter turn, so that each line runs
+/// down the shape; `None` when they run across it. A turned body's line length sets the shape's
+/// height and its lines' stacking its width, the other way round from horizontal text.
+pub fn vertical_lines(bp: &BodyProps) -> Option<VerticalLines> {
+    let (rotation, lines_ltr) = text_turn(bp);
+    if !quarter_turned(rotation) {
+        return None;
+    }
+    // A 270° turn puts the first line on the left; mirrored lines swap sides.
+    let first_left = ((rotation - 270.0).abs() < 1e-6) != lines_ltr;
+    Some(if first_left { VerticalLines::LeftToRight } else { VerticalLines::RightToLeft })
+}
+
 #[allow(clippy::too_many_arguments)]
 fn layout_scaled(ctx: &Ctx, shape: &Shape, body: &TextBody, bp: &BodyProps, opts: &Opts, scale: f64, reduce: f64) -> TextLayout {
     #[cfg(test)]
@@ -1849,16 +2119,9 @@ fn layout_scaled(ctx: &Ctx, shape: &Shape, body: &TextBody, bp: &BodyProps, opts
         TextDir::Stacked | TextDir::StackedRtl => Upright::All,
         _ => Upright::None,
     };
-    // Mongolian vertical and stacked text: turned like vert, their lines run from left to right
-    // (as PowerPoint draws both).
-    let lines_ltr = matches!(vert, TextDir::MongolianVertical | TextDir::Stacked);
-    let rotation = match vert {
-        TextDir::Vertical | TextDir::EaVertical | TextDir::Stacked | TextDir::StackedRtl | TextDir::MongolianVertical => 90.0,
-        TextDir::Vertical270 => 270.0,
-        TextDir::Horizontal => 0.0,
-    } + bp.rot.unwrap_or(0.0);
+    let (rotation, lines_ltr) = text_turn(bp);
     // For vertical text, lay out in a box with swapped dimensions centred on the text rect.
-    let r = if (rotation - 90.0).abs() < 1e-6 || (rotation - 270.0).abs() < 1e-6 {
+    let r = if quarter_turned(rotation) {
         let c = r.center();
         Rect::new(c.x - r.height() / 2.0, c.y - r.width() / 2.0, c.x + r.height() / 2.0, c.y + r.width() / 2.0)
     } else {
@@ -1886,6 +2149,7 @@ fn layout_scaled(ctx: &Ctx, shape: &Shape, body: &TextBody, bp: &BodyProps, opts
     let mut tail = 0.0;
     let first_last = bp.space_first_last.unwrap_or(false);
     let mut shaped_paras: Vec<ParaShaped> = Vec::with_capacity(body.paragraphs.len());
+    let kinsoku = ctx.pres.kinsoku.as_ref().map(KinsokuLists::of);
     for (pi, para) in body.paragraphs.iter().enumerate() {
         let lvl = para.level.min(8) as usize;
         let pp = resolve::para(ctx, shape, para);
@@ -1931,7 +2195,7 @@ fn layout_scaled(ctx: &Ctx, shape: &Shape, body: &TextBody, bp: &BodyProps, opts
         let tabs = tabs_of(props);
         let first_w = (col_w - first_x - mr).max(1.0);
         let rest_w = (col_w - rest_x - mr).max(1.0);
-        let raw = break_lines(p, first_w, rest_w, wrap, &tabs, props.default_tab.unwrap_or(72.0), first_x, rest_x);
+        let raw = break_lines(p, &break_rules(p, kinsoku.as_ref()), first_w, rest_w, wrap, &tabs, props.default_tab.unwrap_or(72.0), first_x, rest_x);
         // The first paragraph's space before counts only when the body says so.
         let before = if pi == 0 && !first_last { 0.0 } else { spacing_pts(props.space_before, p.lead_size) };
         y += before.max(0.0) + prev_after;
@@ -2027,15 +2291,7 @@ fn layout_scaled(ctx: &Ctx, shape: &Shape, body: &TextBody, bp: &BodyProps, opts
                 }
             }
             if stretch && !filled && matches!(align, Align::Justify | Align::JustLow) {
-                let spaces = line_cells.iter().filter(|c| c.ch == ' ').count();
-                if spaces > 0 {
-                    for (a, c) in adv.iter_mut().zip(line_cells) {
-                        if c.ch == ' ' {
-                            *a += slack / spaces as f64;
-                        }
-                    }
-                    filled = true;
-                }
+                filled = justify(&mut adv, line_cells, &p.styles, rl.start, slack);
             }
             if align == Align::Distributed && n > 1 {
                 for a in adv.iter_mut().take(n - 1) {
@@ -2120,7 +2376,7 @@ fn layout_scaled(ctx: &Ctx, shape: &Shape, body: &TextBody, bp: &BodyProps, opts
                     extent: (left, left + line_w),
                     start_offset: x0,
                 },
-                LinePlace { order, kashida },
+                LinePlace { order, kashida, shift: font_align_shifts(p, line_cells, FontAlign::of(props.font_align.as_deref(), vert)) },
                 lh,
                 bullet,
             ));
@@ -2230,7 +2486,9 @@ fn layout_scaled(ctx: &Ctx, shape: &Shape, body: &TextBody, bp: &BodyProps, opts
             let Some(cell) = p.cells.get(ci) else { continue };
             let Some(st) = p.styles.get(cell.style) else { continue };
             let Some(&(cx, cx1)) = line.edges.get(k) else { continue };
-            let base_y = line.baseline - st.baseline * st.size;
+            // Font alignment moves the character, its underline and strikethrough together.
+            let shift = place.shift.get(k).copied().unwrap_or(0.0);
+            let base_y = line.baseline + shift - st.baseline * st.size;
             let size = if st.baseline != 0.0 { st.size * SUB_SUPER } else { st.size };
             let size = if st.caps == Caps::Small && cell.ch.is_lowercase() { size * 0.8 } else { size };
             // Small capitals are drawn smaller than the capitals beside them: a run of their own.
@@ -2315,7 +2573,7 @@ fn layout_scaled(ctx: &Ctx, shape: &Shape, body: &TextBody, bp: &BodyProps, opts
                     let (p, t) = (st.face.underline.0 * k, (st.face.underline.1 * k).max(0.5));
                     for (y0, y1, kind) in u.boxes(p, t) {
                         out.decos.push(Deco {
-                            rect: Rect::new(cx, line.baseline + y0, cx1, line.baseline + y1),
+                            rect: Rect::new(cx, line.baseline + shift + y0, cx1, line.baseline + shift + y1),
                             color: uc,
                             behind: false,
                             para: line.para,
@@ -2324,10 +2582,16 @@ fn layout_scaled(ctx: &Ctx, shape: &Shape, body: &TextBody, bp: &BodyProps, opts
                     }
                 }
                 if let Some(sk) = st.strike {
-                    // At the strikeout position and thickness of the run's own font.
+                    // At the strikeout position and thickness of the run's own font; through the
+                    // middle of an upright character's em box in vertical text (a double line
+                    // as a pair about it).
                     let k = st.size / st.face.upem.max(1.0);
                     let t = (st.face.strikeout.1 * k).max(0.5);
-                    let sy = line.baseline - st.face.strikeout.0 * k;
+                    let sy = if cell.upright {
+                        line.baseline + shift - UPRIGHT_CENTRE * st.size + if sk == Strike::Double { t / 2.0 } else { -t / 2.0 }
+                    } else {
+                        line.baseline + shift - st.face.strikeout.0 * k
+                    };
                     out.decos.push(Deco {
                         rect: Rect::new(cx, sy, cx1, sy + t),
                         color: st.color,
@@ -2388,11 +2652,13 @@ fn merge_decos(v: Vec<Deco>) -> Vec<Deco> {
     out
 }
 
-/// How a line's cells are placed: visual order (indices from the line start) and kashida widths
-/// (the boxes, with justification, are in [`LineInfo::edges`]).
+/// How a line's cells are placed: visual order (indices from the line start), kashida widths
+/// and how far font alignment moves each cell down from the baseline (empty: none) (the boxes,
+/// with justification, are in [`LineInfo::edges`]).
 struct LinePlace {
     order: Vec<usize>,
     kashida: Vec<f64>,
+    shift: Vec<f64>,
 }
 
 /// Kashida opportunities on a line (indices from the line start), at most one per word (its last
@@ -2425,6 +2691,91 @@ fn kashida_opportunities(p: &ParaShaped, start: usize, end: usize) -> Vec<usize>
         }
     }
     out
+}
+
+/// How far a space may stretch, as a share of its own advance, before the characters of an East
+/// Asian justified line move apart (PowerPoint for Mac: Helvetica's 5.56-pt space at 20 pt takes
+/// 4.44 pt).
+const SPACE_STRETCH: f64 = 0.8;
+
+/// Characters that take no room of their own (soft hyphens, zero-width spaces and joiners, word
+/// joiners): justification puts no gap after them.
+fn is_invisible(c: char) -> bool {
+    matches!(c, '\u{AD}' | '\u{200B}'..='\u{200F}' | '\u{2060}'..='\u{2064}' | '\u{FEFF}') || c.is_control()
+}
+
+/// Spread `slack` over a wrapped justified line (`algn="just"`; `adv` the advances of `cells`, the
+/// line's cells from paragraph index `start`, its trailing spaces left out), as PowerPoint for Mac
+/// does. Returns whether the line now fills its box.
+///
+/// A character is East Asian for this when its run's `lang` is Chinese, Japanese or Korean,
+/// whatever its script: Latin letters in a `ja-JP` run spread too, kanji in an `en-US` run or a
+/// run without a language don't.
+/// - A line with no such character is justified the Western way: its spaces take all the slack,
+///   and a line without spaces stays at the start edge.
+/// - Otherwise every U+0020 space (whatever its run's language) first stretches by up to
+///   [`SPACE_STRETCH`] × its own advance; when the slack is less than that the spaces share it in
+///   proportion and nothing else moves. The rest is divided equally among the gaps after each
+///   East Asian character and after each space, except after the line's last character (17 kana
+///   on a 432-pt line with 7 pt to spare: 0.4375 pt after each of the first 16). The ideographic
+///   space is an ordinary character here: it gets a gap and no stretch.
+fn justify(adv: &mut [f64], cells: &[Cell], styles: &[Style], start: usize, slack: f64) -> bool {
+    let n = adv.len().min(cells.len());
+    let cells = cells.get(..n).unwrap_or(&[]);
+    // The line's characters: (first cell, last cell) of each grapheme that starts a shaping
+    // cluster; a gap goes after the last cell.
+    let mut units: Vec<(usize, usize)> = Vec::with_capacity(n);
+    for (k, c) in cells.iter().enumerate() {
+        match units.last_mut() {
+            Some(u) if !c.breakable(start + k) => u.1 = k,
+            _ => units.push((k, k)),
+        }
+    }
+    let is_space = |k: usize| cells.get(k).is_some_and(|c| c.ch == ' ');
+    let east_asian = |k: usize| {
+        cells.get(k).is_some_and(|c| {
+            c.ch != ' '
+                && !is_invisible(c.ch)
+                && styles.get(c.style).and_then(|st| st.lang.as_deref()).and_then(deckcraft_fonts::CjkLocale::from_lang).is_some()
+        })
+    };
+    let spaces: Vec<usize> = (0..n).filter(|&k| is_space(k)).collect();
+    let add = |adv: &mut [f64], k: usize, d: f64| {
+        if let Some(a) = adv.get_mut(k) {
+            *a += d;
+        }
+    };
+    if !units.iter().any(|&(a, _)| east_asian(a)) {
+        if spaces.is_empty() {
+            return false;
+        }
+        let each = slack / spaces.len() as f64;
+        for k in spaces {
+            add(adv, k, each);
+        }
+        return true;
+    }
+    let caps: Vec<(usize, f64)> = spaces.iter().map(|&k| (k, adv.get(k).copied().unwrap_or(0.0).max(0.0) * SPACE_STRETCH)).collect();
+    let cap: f64 = caps.iter().map(|c| c.1).sum();
+    if cap > 0.0 && slack <= cap {
+        for (k, c) in caps {
+            add(adv, k, slack * c / cap);
+        }
+        return true;
+    }
+    for &(k, c) in &caps {
+        add(adv, k, c);
+    }
+    let gaps: Vec<usize> =
+        units.iter().take(units.len().saturating_sub(1)).filter(|&&(a, _)| east_asian(a) || is_space(a)).map(|&(_, last)| last).collect();
+    if gaps.is_empty() {
+        return false;
+    }
+    let each = (slack - cap) / gaps.len() as f64;
+    for k in gaps {
+        add(adv, k, each);
+    }
+    true
 }
 
 /// Which side of a boundary a caret belongs to: `Downstream` sticks to the character after it
@@ -2838,17 +3189,24 @@ impl TextLayout {
     }
 }
 
-/// Height the shape needs so its text fits (Resize shape to fit text): text height + insets.
+/// Height the shape needs so its text fits (Resize shape to fit text): text height + insets. For
+/// text turned a quarter turn ([`vertical_lines`]) it is the extent of its stacked lines, which
+/// runs across the shape: the width it needs.
 pub fn fit_height(ctx: &Ctx, shape: &Shape, body: &TextBody, rect: Rect, fields: &dyn Fields) -> f64 {
     let bp = resolve::body(ctx, shape);
     let l = layout(ctx, shape, body, &Opts { rect, fields, prompt_color: None, no_shrink: true });
     l.content_height + bp.inset_t.unwrap_or(3.6) + bp.inset_b.unwrap_or(3.6)
 }
 
-/// Width a non-wrapping text box needs.
+/// Width a non-wrapping text box needs: its longest line + insets. For text turned a quarter
+/// turn the lines run down the shape, so it is the height the box needs.
 pub fn fit_width(ctx: &Ctx, shape: &Shape, body: &TextBody, rect: Rect, fields: &dyn Fields) -> f64 {
     let bp = resolve::body(ctx, shape);
-    let wide = Rect::new(rect.x0, rect.y0, rect.x0 + 100_000.0, rect.y1);
+    let wide = if vertical_lines(&bp).is_some() {
+        Rect::new(rect.x0, rect.y0, rect.x1, rect.y0 + 100_000.0)
+    } else {
+        Rect::new(rect.x0, rect.y0, rect.x0 + 100_000.0, rect.y1)
+    };
     let mut s2 = shape.clone();
     if let Some(t) = s2.text.as_mut() {
         t.body.wrap = Some(false);
