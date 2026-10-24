@@ -4,6 +4,8 @@ use deckcraft_model::defaults;
 use deckcraft_model::text::{Paragraph, Run};
 use deckcraft_model::{LayoutType, Presentation, Xfrm};
 
+mod japanese;
+
 fn setup(text: &str, w: f64, h: f64) -> (Presentation, Shape) {
     let mut p = Presentation::default();
     let lay = defaults::layout_of_kind(&p, LayoutType::TitleAndContent).unwrap();
@@ -838,10 +840,17 @@ fn a_word_does_not_break_after_a_slash_or_backslash() {
         assert!(lines.len() >= 2, "{lines:?}");
         assert!(lines[0].chars().count() > "alpha/beta".len(), "filled to the edge, not cut at a separator: {lines:?}");
     }
-    // latinLnBrk on: Unicode's break after a slash is allowed again.
-    let text = "alpha/beta/gamma/delta/epsilon";
-    let lines = wrapped(text, one_line(text) * 0.6, |p| p.latin_line_break = Some(true));
-    assert!(lines[0].ends_with('/'), "{lines:?}");
+    // latinLnBrk on: a word breaks at any letter to fill the line (PowerPoint for Mac breaks
+    // "a verylongword" as "a v|erylongword"); off, the word moves to the next line whole.
+    let text = "a verylongwordthatkeepsgoing";
+    let w = one_line("a very") + 0.5;
+    assert_eq!(wrapped(text, w, |_| {})[0].trim_end(), "a");
+    let lines = wrapped(text, w, |p| p.latin_line_break = Some(true));
+    assert_eq!(lines[0], "a very", "{lines:?}");
+    assert_eq!(lines.concat(), text);
+    // Only between letters: a full stop still can't start a line, so "d." moves down together.
+    let lines = wrapped("word. more", one_line("word") + 0.5, |p| p.latin_line_break = Some(true));
+    assert_eq!(lines[0], "wor", "{lines:?}");
     // A slash followed by a space still breaks, and hyphens still break.
     let lines = wrapped("alpha-beta-gamma-delta-epsilon", one_line("alpha-beta-gamma-") + 1.0, |_| {});
     assert_eq!(lines[0], "alpha-beta-gamma-");
@@ -1390,9 +1399,9 @@ fn underlines_sit_at_the_font_underline_in_their_style() {
 
 #[test]
 fn no_break_after_a_zero_width_space_or_before_an_em_dash() {
-    let (allowed, _) = break_opportunities("ab\u{200B}cd", false);
+    let (allowed, _) = break_opportunities("ab\u{200B}cd", &BreakRules::STANDARD);
     assert!(!allowed[3], "PowerPoint does not break after a zero-width space");
-    let (allowed, _) = break_opportunities("ab\u{2014}cd", false);
+    let (allowed, _) = break_opportunities("ab\u{2014}cd", &BreakRules::STANDARD);
     assert!(!allowed[2] && allowed[3], "an em dash ends a line, never starts one");
 }
 
