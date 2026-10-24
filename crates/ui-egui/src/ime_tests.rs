@@ -147,7 +147,8 @@ fn korean_composes_in_the_notes_pane() {
     let notes = h.state().session.active().unwrap().doc.slides[0].notes_text();
     assert_eq!(notes, "노트");
     assert_eq!(undo_len(h.state()), undo0 + 1);
-    assert!(h.ctx.fonts_mut(|f| f.has_glyphs(&FontId::proportional(13.0), "노트")) || !system_has("노트"));
+    let defs = h.ctx.fonts(|f| f.definitions().clone());
+    assert!("노트".chars().all(|c| crate::theme::draws(&defs, &egui::FontFamily::Proportional, c)) || !system_has("노트"));
 
     // Composing, then going to another slide: the notes stay with the slide they were typed for.
     h.state_mut().run("slide.new", json!({})).unwrap();
@@ -542,7 +543,8 @@ fn cjk_text_in_the_interface_is_drawn_with_real_glyphs() {
             continue;
         }
         for family in [FontId::proportional(13.0), crate::theme::bold(13.0)] {
-            let missing: String = text.chars().filter(|c| !c.is_whitespace() && !h.ctx.fonts_mut(|f| f.has_glyph(&family, *c))).collect();
+            let defs = h.ctx.fonts(|f| f.definitions().clone());
+            let missing: String = text.chars().filter(|c| !c.is_whitespace() && !crate::theme::draws(&defs, &family.family, *c)).collect();
             assert!(missing.is_empty(), "{family:?} draws {missing:?} of {text:?} as boxes");
         }
         checked += 1;
@@ -555,6 +557,7 @@ fn cjk_text_in_the_interface_is_drawn_with_real_glyphs() {
     h.event(Event::Text(typed.into()));
     h.run_steps(2);
     if system_has(typed) {
-        assert!(h.ctx.fonts_mut(|f| f.has_glyphs(&FontId::proportional(13.0), typed)));
+        let defs = h.ctx.fonts(|f| f.definitions().clone());
+        assert!(typed.chars().all(|c| crate::theme::draws(&defs, &egui::FontFamily::Proportional, c)));
     }
 }

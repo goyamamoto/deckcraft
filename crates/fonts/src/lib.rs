@@ -102,6 +102,12 @@ pub fn japanese_ui_fonts(bold: bool) -> Vec<&'static CraftFont> {
     v
 }
 
+/// Whether face `index` of the font file `data` maps `c` to a glyph (its `cmap`).
+pub fn maps_char(data: &[u8], index: u32, c: char) -> bool {
+    use skrifa::MetadataProvider;
+    skrifa::FontRef::from_index(data, index).is_ok_and(|f| f.charmap().map(c).is_some())
+}
+
 /// The font in `data` (face `index` of a collection): its ascent, descent (negative) and line gap
 /// as fractions of its em, read as skrifa reads them (and so as egui lays interface text out with
 /// them); `None` when there is no such font.
