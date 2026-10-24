@@ -105,6 +105,103 @@ fn untranslated_interface_text() {
     report_catalog_gaps(pseudo::looked_up());
 }
 
+/// The dialogs the dialog audit opens, by id (`dialogs.rs`). Quit and Close are left out: with
+/// nothing unsaved they close the window instead of asking.
+const DIALOGS: &[&str] = &[
+    "table",
+    "slideSize",
+    "sizePosition",
+    "headerFooter",
+    "hyperlink",
+    "setupShow",
+    "zoom",
+    "comment",
+    "bullets",
+    "action",
+    "altText",
+    "outline",
+    "renameShape",
+    "font",
+    "paragraph",
+    "tabs",
+    "export",
+    "replaceFonts",
+    "symbol",
+    "equation",
+    "pasteSpecial",
+    "find",
+    "spelling",
+    "accessibility",
+    "language",
+    "customShow",
+    "chartData",
+    "trim",
+    "smartart",
+    "about",
+    "autocorrect",
+    "gridOptions",
+    "preferences",
+    "photoAlbum",
+    "themeColors",
+    "themeFonts",
+    "dateTime",
+];
+
+/// Lists the text each dialog (and the gradient editor) draws untranslated: what a dialog adds to
+/// the main window, laid out in the pseudo-language. Printed, not enforced: font names, sample
+/// text and units are drawn as they are.
+#[test]
+fn untranslated_dialog_text() {
+    let ctx = egui::Context::default();
+    let mut session = deckcraft_engine::Session::new();
+    deckcraft_engine::sample::open_sample(&mut session).unwrap();
+    let mut app = SlideApp::new(session, crate::Services::default());
+    frames(&ctx, &mut app, 3);
+    let doc_text: BTreeSet<String> =
+        app.session.active().map(|d| crate::uifonts::ui_text(d).lines().map(str::to_string).collect()).unwrap_or_default();
+    let fonts: BTreeSet<String> = deckcraft_fonts::FontDb::global().families().into_iter().collect();
+    pseudo::set(true);
+    let window: BTreeSet<String> = frames(&ctx, &mut app, 2).into_iter().collect();
+    let mut found: BTreeMap<String, BTreeSet<&str>> = BTreeMap::new();
+    for id in DIALOGS {
+        app.dialog = Some(crate::dialogs::Dialog::new(id));
+        let drawn = frames(&ctx, &mut app, 2);
+        app.dialog = None;
+        for text in drawn.iter().filter(|t| english_words(t) && !window.contains(*t)) {
+            let plain = pseudo::unmarked(text);
+            let plain = plain.trim();
+            if doc_text.contains(plain) || fonts.contains(plain) || plain == "DeckCraft" {
+                continue;
+            }
+            found.entry(plain.to_string()).or_default().insert(id);
+        }
+    }
+    // The gradient editor of the Format pane, for a linear and a path gradient.
+    let scheme = deckcraft_model::Theme::default().colors;
+    let linear = crate::fillui::default_gradient(deckcraft_model::ColorRef::scheme(deckcraft_color::SchemeSlot::Accent1), 90.0);
+    let radial = deckcraft_model::style::Gradient {
+        shape: deckcraft_model::style::GradientShape::Path { path: "circle".into(), focus: [0.5; 4] },
+        ..linear.clone()
+    };
+    for g in [&linear, &radial] {
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let _ = crate::fillui::gradient_editor(ui, "audit-gradient", g, &scheme);
+        });
+        let mut drawn = Vec::new();
+        out.shapes.iter().for_each(|s| texts(&s.shape, &mut drawn));
+        out.textures_delta.clear();
+        for text in drawn.iter().filter(|t| english_words(t)) {
+            found.entry(pseudo::unmarked(text).trim().to_string()).or_default().insert("gradient editor");
+        }
+    }
+    pseudo::set(false);
+    let mut report = String::new();
+    for (text, ids) in &found {
+        report.push_str(&format!("{text:?}  [{}]\n", ids.iter().copied().collect::<Vec<_>>().join(", ")));
+    }
+    eprintln!("{} texts in the dialogs are drawn untranslated (wrap them in tl!):\n{report}", found.len());
+}
+
 /// The missing-translation report (craft-i18n's integration recipe): the embedded catalogs'
 /// problems, and per language the interface strings with no translation (translators fill them in
 /// craft-i18n's `deckcraft.tsv`). A missing translation shows in English, so the report never
