@@ -36,6 +36,7 @@ pub mod panes;
 mod preview;
 pub mod qat;
 pub mod ribbon;
+pub mod ribbon_fit;
 pub mod selpane;
 pub mod settings;
 pub mod show;

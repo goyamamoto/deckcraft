@@ -164,8 +164,31 @@ pub fn palette(app: &mut SlideApp, ctx: &egui::Context) {
     }
 }
 
-/// The application menu tree: (menu, [(label, command id, shortcut)]), "-" = separator. Used by the
-/// native macOS menu bar and as the parity catalogue's live side.
+/// [`menu_tree`] as a menu bar shows it: menu and item titles in the interface language, command ids
+/// and separators (`"-"`) as they are. An item named like its command takes the command's own
+/// wording ([`crate::i18n::tid`]); the native macOS menu bar builds its titles from here.
+pub fn menu_tree_shown() -> Vec<(String, Vec<(String, &'static str)>)> {
+    menu_tree()
+        .into_iter()
+        .map(|(menu, items)| {
+            let items = items
+                .into_iter()
+                .map(|(label, id)| (if id.is_empty() { label.to_string() } else { menu_label(id, label).to_string() }, id))
+                .collect();
+            (crate::i18n::tc("menu", menu).to_string(), items)
+        })
+        .collect()
+}
+
+/// A menu item's title in the interface language: the command's label row when the item is named
+/// like the command, else the item's own wording.
+pub fn menu_label<'a>(id: &str, label: &'a str) -> &'a str {
+    let own = deckcraft_engine::find_command(id).map(|c| c.label).or_else(|| crate::UI_COMMANDS.iter().find(|c| c.0 == id).map(|c| c.1));
+    if own == Some(label) { crate::i18n::tid(id, label) } else { tl!(label) }
+}
+
+/// The application menu tree: (menu, [(label, command id, shortcut)]), "-" = separator, in English.
+/// Used by the native macOS menu bar ([`menu_tree_shown`]) and as the parity catalogue's live side.
 pub fn menu_tree() -> Vec<(&'static str, Vec<(&'static str, &'static str)>)> {
     vec![
         (
@@ -304,7 +327,35 @@ pub fn menu_tree() -> Vec<(&'static str, Vec<(&'static str, &'static str)>)> {
 
 #[cfg(test)]
 mod tests {
-    use super::palette_items;
+    use super::{menu_tree, menu_tree_shown, palette_items};
+
+    /// The menu bar's titles are translated; ids, separators and the English tree stay as they are.
+    #[test]
+    fn the_menu_bar_titles_are_translated_and_the_ids_kept() {
+        use crate::i18n::{Lang, fixture_lang, set_current};
+        let english = menu_tree_shown();
+        let tree = menu_tree();
+        assert_eq!(english.len(), tree.len());
+        for ((menu, items), (en_menu, en_items)) in english.iter().zip(&tree) {
+            assert_eq!(menu, en_menu);
+            assert_eq!(items.iter().map(|(l, id)| (l.as_str(), *id)).collect::<Vec<_>>(), *en_items);
+        }
+        set_current(fixture_lang(
+            "x-fixture",
+            "\tInsert\tInsert-FX\n\tVertical Text Box\tVertical-FX\n\tNew Presentation\tNew-FX\n@id\tfile.new\tNew-ID\n\tSection\tSection-FX\n@id\tsection.add\tAdd-ID\n",
+        ));
+        let shown = menu_tree_shown();
+        set_current(Lang::EN);
+        let insert = shown.iter().find(|(m, _)| m == "Insert-FX").expect("the Insert menu is translated");
+        assert!(insert.1.contains(&("Vertical-FX".to_string(), "insert.verticalTextBox")));
+        // An item worded otherwise than its command (Section, for Add Section) takes its own row.
+        assert!(insert.1.contains(&("Section-FX".to_string(), "section.add")));
+        assert!(insert.1.iter().any(|(l, id)| l == "-" && id.is_empty()), "separators stay");
+        let file = &shown.first().expect("a File menu").1;
+        // "New Presentation" is file.new's own label: its `@id` row wins.
+        assert!(file.contains(&("New-ID".to_string(), "file.new")));
+        assert_eq!(menu_tree(), tree, "the English tree is unchanged");
+    }
 
     /// #79: the palette listed two "Export…" entries and the first (`file.export`) failed with "missing `path`".
     #[test]
