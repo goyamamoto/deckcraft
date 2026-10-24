@@ -18,6 +18,14 @@
 //! 4. any loaded face (bundled first; faces of the text's tradition first for East Asian text),
 //!    in the requested style when its family has it, then the first requested face (drawn as
 //!    .notdef).
+//!
+//! The genre in step 3 follows the run's first face on purpose, also for a run whose language
+//! isn't East Asian. PowerPoint for Mac measured otherwise: the kanji of an `en-US` run in
+//! Helvetica with no East Asian font are drawn in MS Mincho, and a `zh-CN` run's in MS Gothic.
+//! Those are Office's own fallback faces for each language, not a genre rule (a sans run gets a
+//! Mincho in one language and a gothic in the other), and neither is a font DeckCraft can draw.
+//! A kanji is a full em in either genre, so lines break the same; only the look differs, and a
+//! gothic beside a sans Latin face matches the run's design.
 
 use std::sync::Arc;
 
@@ -134,7 +142,7 @@ pub fn bundled_families(script: ScriptTag) -> Vec<&'static str> {
 
 /// Kana: hiragana, katakana (full and half width, phonetic extensions, small kana and the kana
 /// supplements).
-fn is_kana(c: char) -> bool {
+pub(crate) fn is_kana(c: char) -> bool {
     matches!(u32::from(c), 0x3040..=0x309F | 0x30A0..=0x30FF | 0x31F0..=0x31FF | 0xFF66..=0xFF9F | 0x1AFF0..=0x1B16F)
 }
 
@@ -191,8 +199,9 @@ impl FontDb {
     /// system's East Asian language for Han text without one): a Chinese, Japanese or Korean
     /// cluster the requested faces lack takes a face of its tradition (kana always Japanese,
     /// Hangul Korean), of the requested genre (a Mincho when the run's first face is serif, else
-    /// a gothic) and style (bold: Hiragino W6, Yu Gothic Bold), before any other loaded face.
-    /// With no tradition, Han text keeps the loaded-faces-first order.
+    /// a gothic, whatever the run's language: see the module notes) and style (bold: Hiragino W6,
+    /// Yu Gothic Bold), before any other loaded face. With no tradition, Han text keeps the
+    /// loaded-faces-first order.
     pub fn cascade_for(&self, cluster: &[char], chain: &[Arc<FontFace>], style: &str, cjk: Option<CjkLocale>) -> Arc<FontFace> {
         // Emoji take a colour face (with its ZWJ sequences, skin tones and flags) before the
         // document's fonts, as PowerPoint draws them, even when a text font has a plain glyph.

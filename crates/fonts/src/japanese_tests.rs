@@ -193,6 +193,90 @@ fn bold_of_a_weight_named_family_is_its_partner() {
     }
 }
 
+/// A weight-named face that is already bold (W6 and heavier, as Windows draws them: the caller
+/// makes only lighter faces bolder) is its own bold, and a light one's bold is its partner,
+/// whichever of the family's other weights earlier lookups happened to load: a title's weight
+/// never changes with what the other slides contain.
+#[test]
+fn bold_of_a_weight_named_family_does_not_depend_on_earlier_lookups() {
+    let weights = || [("W3", 300, false), ("W6", 600, true), ("W7", 700, true), ("W9", 900, true)].map(|(w, n, b)| (w, kaku(w, n, b)));
+    let db = bare_db();
+    for (_, f) in weights() {
+        assert_eq!(db.add_font(f), 1);
+    }
+    for (name, bold) in [("DeckCraft Kaku W3", "W6"), ("DeckCraft Kaku W6", "W6"), ("DeckCraft Kaku W7", "W7"), ("デッキ角ゴ W9", "W9")] {
+        assert_eq!(db.face(name, "Bold").style, bold, "{name}");
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let dir = crate::test_fonts::temp_dir("bold-order");
+        for (w, data) in weights() {
+            std::fs::write(dir.join(format!("kaku-{w}.ttf")), data).unwrap();
+        }
+        let fresh = || FontDb::without_bundled(vec![dir.clone()]);
+        // The W6's bold before and after something loads the whole family.
+        let db = fresh();
+        assert_eq!(db.face("DeckCraft Kaku W6", "Bold").style, "W6");
+        assert_eq!(db.face("DeckCraft Kaku", "Regular").style, "W3");
+        assert_eq!(db.face("DeckCraft Kaku W6", "Bold").style, "W6");
+        // The W3's bold when only a heavier weight than its partner was loaded before.
+        let db = fresh();
+        assert_eq!(db.face("DeckCraft Kaku W7", "Regular").style, "W7");
+        assert_eq!(db.face("DeckCraft Kaku W3", "Bold").style, "W6");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// The styles of `family` loaded so far.
+#[cfg(not(target_arch = "wasm32"))]
+fn loaded_styles(db: &FontDb, family: &str) -> Vec<String> {
+    let mut v: Vec<String> = db.read_faces().iter().filter(|f| f.family == family).map(|f| f.style.clone()).collect();
+    v.sort();
+    v
+}
+
+/// Bold text in a weight-named family, and a bold fallback drawn by one, load the file holding
+/// the bold face and no other of the family's (Hiragino Sans is ten files, 59 MB); the fallback
+/// takes the bold partner, as the run's own face does (W3 → W6, not the weight nearest Bold). A
+/// lookup of the family by its own name still loads all of it.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn bold_faces_load_only_the_file_they_need() {
+    let dir = crate::test_fonts::temp_dir("bold-file");
+    for (w, n, b) in [("W3", 300, false), ("W4", 400, false), ("W5", 500, true), ("W6", 600, true), ("W7", 700, true), ("W8", 800, true)] {
+        std::fs::write(dir.join(format!("kaku-{w}.ttf")), kaku(w, n, b)).unwrap();
+    }
+    let sans = |style: &'static str, weight: u16| {
+        let names: [Name<'_>; 2] = [(3, 1, 0x409, 1, "DeckCraft Sans"), (3, 1, 0x409, 2, style)];
+        let fs_selection = if weight >= 700 { 0x20 } else { 0x40 };
+        font(&Spec { names: &names, chars: &['漢'], weight, fs_selection, family_class: 8 << 8 })
+    };
+    std::fs::write(dir.join("sans-bold.ttf"), sans("Bold", 700)).unwrap();
+    std::fs::write(dir.join("sans-black.ttf"), sans("Black", 900)).unwrap();
+    let fresh = || FontDb::without_bundled(vec![dir.clone()]);
+    // A run in the W3 and the W4, bold.
+    let db = fresh();
+    assert_eq!(db.face("DeckCraft Kaku W3", "Bold").style, "W6");
+    assert_eq!(loaded_styles(&db, "DeckCraft Kaku"), ["W3", "W6"]);
+    assert_eq!(db.face("デッキ角ゴ W4", "Bold").style, "W7");
+    assert_eq!(loaded_styles(&db, "DeckCraft Kaku"), ["W3", "W4", "W6", "W7"]);
+    // A bold fallback drawn by the W3: its partner.
+    let db = fresh();
+    assert_eq!(db.face("DeckCraft Kaku W3", "Regular").style, "W3");
+    let f = db.fallback_styled('漢', u32::MAX, "Bold", Some(CjkLocale::Japanese)).unwrap();
+    assert_eq!((f.family.as_str(), f.style.as_str()), ("DeckCraft Kaku", "W6"));
+    assert_eq!(loaded_styles(&db, "DeckCraft Kaku"), ["W3", "W6"]);
+    assert_eq!(db.face("DeckCraft Kaku", "W8").style, "W8", "the whole family by its own name");
+    // A bold fallback drawn by a family with a Bold face: the Bold's file only.
+    let db = fresh();
+    assert_eq!(db.add_font(sans("Regular", 400)), 1);
+    let f = db.fallback_styled('漢', u32::MAX, "Bold", None).unwrap();
+    assert_eq!((f.family.as_str(), f.style.as_str()), ("DeckCraft Sans", "Bold"));
+    assert_eq!(loaded_styles(&db, "DeckCraft Sans"), ["Bold", "Regular"]);
+    assert_eq!(db.face("DeckCraft Sans", "Black").style, "Black", "the whole family by its own name");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// The families the stand-in and fallback chains name, built in memory: a gothic, a Mincho and
 /// a fixed-pitch gothic every platform's chain lists, and a Simplified Chinese and a Korean
 /// face. Each draws kana, kanji, hanzi and Hangul alike, so only the choice tells them apart.
@@ -253,6 +337,49 @@ fn missing_japanese_fonts_take_a_stand_in_of_their_kind() {
     assert!(bare.available_face("游ゴシック", "Regular").is_none());
 }
 
+/// Held by the tests that set the system's East Asian language or whose results depend on it
+/// being unset, so they never see each other's setting.
+static SYSTEM_LOCALE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// The system's East Asian language for one test: set while it runs, put back to the default
+/// (none) when it ends, failing or not.
+struct SystemLocale {
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+impl SystemLocale {
+    fn set(l: Option<CjkLocale>) -> SystemLocale {
+        let lock = SYSTEM_LOCALE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        set_default_cjk_locale(l);
+        SystemLocale { _lock: lock }
+    }
+}
+
+impl Drop for SystemLocale {
+    fn drop(&mut self) {
+        set_default_cjk_locale(None);
+    }
+}
+
+/// A missing font named in Chinese characters no list knows (幼圆) stands in with a Japanese
+/// gothic on a Japanese system, as Word for Mac draws it, and with a Chinese face on a Chinese
+/// one; a name with kana keeps the Japanese gothic everywhere.
+#[test]
+fn missing_cjk_named_fonts_stand_in_by_the_systems_east_asian_language() {
+    let db = stand_ins();
+    let face = |name: &str| db.available_face(name, "Regular").map(|f| f.family.clone());
+    let _system = SystemLocale::set(Some(CjkLocale::SimplifiedChinese));
+    assert_eq!(face("幼圆").as_deref(), Some("WenQuanYi Micro Hei"));
+    assert_eq!(db.document_face("方正兰亭黑简体", "Regular").family, "WenQuanYi Micro Hei");
+    assert_eq!(face("デッキ創英ﾎﾟｯﾌﾟ体").as_deref(), Some("IPAexGothic"), "kana: Japanese");
+    set_default_cjk_locale(Some(CjkLocale::Korean));
+    assert_eq!(face("幼圆").as_deref(), Some("NanumGothic"));
+    for japanese in [Some(CjkLocale::Japanese), None] {
+        set_default_cjk_locale(japanese);
+        assert_eq!(face("幼圆").as_deref(), Some("IPAexGothic"), "{japanese:?}");
+    }
+}
+
 #[test]
 fn craft_fonts_japanese_faces_stand_in_when_present() {
     if !japanese_fonts().any(|f| f.family == "BIZ UDPGothic") {
@@ -285,6 +412,8 @@ fn latin(db: &FontDb, family: &str, serif: bool) -> Arc<FontFace> {
 /// Mincho; bold text a bold face.
 #[test]
 fn east_asian_fallback_follows_the_texts_tradition_genre_and_style() {
+    // Han text with no tradition of its own falls back in the system's, which must be unset.
+    let _system = SystemLocale::set(None);
     let db = stand_ins();
     let sans = latin(&db, "DeckCraft Latin Sans", false);
     let serif = latin(&db, "DeckCraft Latin Serif", true);
@@ -295,6 +424,8 @@ fn east_asian_fallback_follows_the_texts_tradition_genre_and_style() {
         (f.family.clone(), f.style.clone())
     };
     let fam = |cluster: &[char], cjk| pick(cluster, chain, "Regular", cjk).0;
+    // A sans run's kanji take a gothic, also when the tradition is only the system's (an en-US
+    // run, which PowerPoint draws in its own Mincho: see the notes in `fallback`).
     assert_eq!(fam(&['漢'], Some(CjkLocale::Japanese)), "IPAexGothic");
     assert_eq!(fam(&['漢'], Some(CjkLocale::SimplifiedChinese)), "WenQuanYi Micro Hei");
     assert_eq!(fam(&['한'], Some(CjkLocale::Japanese)), "NanumGothic", "Hangul is always Korean");
