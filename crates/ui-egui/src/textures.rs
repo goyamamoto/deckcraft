@@ -19,6 +19,8 @@ struct Key {
     size: (u32, u32),
     edit: bool,
     extra: u64,
+    /// The interface language placeholder prompts were drawn in (editor only; `""` without them).
+    language: &'static str,
     /// The pasteboard region the slide's drawing calls for (canvas only).
     want: Region,
     editing_text: Option<ShapeId>,
@@ -292,6 +294,7 @@ impl Textures {
             size,
             edit,
             extra: extra ^ grayscale as u64 ^ anim_key(anim),
+            language: if edit { crate::i18n::current().code() } else { "" },
             want,
             editing_text,
         };
@@ -313,6 +316,7 @@ impl Textures {
                 size: Some(region.size()),
                 state,
                 editing_text,
+                prompt: Some(crate::i18n::placeholder_prompt),
                 ..Default::default()
             };
             deckcraft_render::render_slide_drawn(p, index, &opts)
@@ -375,6 +379,7 @@ impl Textures {
             size: (width_px, h),
             edit: false,
             extra: 0,
+            language: "",
             want: Region::slide(width_px, h),
             editing_text: None,
         };

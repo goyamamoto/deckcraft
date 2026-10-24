@@ -46,7 +46,8 @@ pub fn show(app: &mut SlideApp, ctx: &egui::Context) {
         return;
     }
     let t = Tokens::get(ctx);
-    let text = toast.text.clone();
+    // Kept in English, shown in the interface language (`@msg` rows and templates).
+    let text = crate::i18n::message(&toast.text).into_owned();
     let mut close = false;
     egui::Area::new(egui::Id::new("toast")).anchor(Align2::CENTER_BOTTOM, vec2(0.0, -44.0)).order(egui::Order::Foreground).show(ctx, |ui| {
         egui::Frame::NONE
@@ -60,12 +61,12 @@ pub fn show(app: &mut SlideApp, ctx: &egui::Context) {
                 ui.horizontal(|ui| {
                     ui.add(egui::Label::new(egui::RichText::new(&text).font(theme::font(13.0)).color(t.text)).wrap());
                     let (r, resp) = ui.allocate_exact_size(vec2(20.0, 20.0), egui::Sense::click());
-                    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Close"));
+                    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Close")));
                     if resp.hovered() {
                         ui.painter().rect_filled(r, CornerRadius::same(4), t.hover);
                     }
                     icons::paint(ui.painter(), r.shrink(3.0), Icon::Close, t.text_dim, false);
-                    if resp.on_hover_text("Close").clicked() {
+                    if resp.on_hover_text(tl!("Close")).clicked() {
                         close = true;
                     }
                 });
