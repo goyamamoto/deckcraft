@@ -462,3 +462,24 @@ fn hostile_japanese_settings_never_panic() {
         p.kinsoku = Some(Kinsoku { lang: None, start: "あいうえお".into(), end: "あいうえお".into() });
     }
 }
+
+#[test]
+fn distributed_text_spreads_whole_characters() {
+    // A kana with a combining voiced sound mark (か + U+3099) is one character: one gap after
+    // it, none between the kana and its mark; a line of one such character is centred.
+    let Some(fam) = japanese_family() else {
+        eprintln!("skipped: no Japanese face");
+        return;
+    };
+    let text = "か\u{3099}きく";
+    let runs = || vec![run_in(text, Some("ja-JP"), &fam, 20.0)];
+    let nat = natural(runs());
+    let w = nat.iter().sum::<f64>() + 30.0;
+    let l = lay_runs(runs(), w, Align::Distributed, |_| {});
+    let got = widths(&l, 0);
+    assert!(close(got[0], nat[0]), "no gap inside the character: {} vs {}", got[0], nat[0]);
+    assert!(close(got[1], nat[1] + 15.0) && close(got[2], nat[2] + 15.0) && close(got[3], nat[3]), "{got:?} {nat:?}");
+    let one = lay_runs(vec![run_in("か\u{3099}", Some("ja-JP"), &fam, 20.0)], 200.0, Align::Distributed, |_| {});
+    let e = one.lines[0].extent;
+    assert!(close(e.0 + (e.1 - e.0) / 2.0, 100.0), "centred: {e:?}");
+}
