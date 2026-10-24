@@ -326,9 +326,18 @@ fn text_outlines_are_read_in_japanese_encodings() {
     assert_eq!(decode_text_in(&shift_jis(t), ja), t);
     assert_eq!(decode_text_in(&shift_jis(t), None), t, "Shift_JIS without Japanese editing");
     assert_eq!(decode_text_in(&shift_jis("ｶﾀｶﾅ\r\nテスト"), None), "ｶﾀｶﾅ\r\nテスト");
-    // Western text in Windows-1252 whose capitals would read as half-width katakana stays Western.
-    let western = encoding_rs::WINDOWS_1252.encode("Ärger Über Öl").0.into_owned();
-    assert_eq!(decode_text_in(&western, None), "Ärger Über Öl");
+    // Kanji alone (slide titles) read as Japanese too.
+    let kanji = "事業計画\r\n\t売上目標\r\n\t人員計画";
+    assert_eq!(decode_text_in(&shift_jis(kanji), None), kanji);
+    assert_eq!(decode_text_in(&shift_jis("2026年度Q3売上報告"), None), "2026年度Q3売上報告");
+    // Western text in Windows-1252 stays Western: its capitals would read as half-width katakana,
+    // a small accented letter (é à ç ê) and the letter after it as a kanji, ñ ö as user-defined
+    // characters.
+    for w in ["Ärger Über Öl", "Présentation\r\nRéunion\r\nStratégie\r\n", "Données clés\r\nDéveloppement", "año señor niño", "Rêve", "ça va"]
+    {
+        let western = encoding_rs::WINDOWS_1252.encode(w).0.into_owned();
+        assert_eq!(decode_text_in(&western, None), w);
+    }
     assert_eq!(decode_text_in(&encoding_rs::EUC_KR.encode("한국어 제목").0, Some(CjkLocale::Korean)), "한국어 제목");
     assert_eq!(decode_text_in(&[], None), "");
     assert_eq!(decode_text_in(&[0xFF, 0xFE, 0x41], None), "\u{FFFD}", "an odd byte is never a crash");
