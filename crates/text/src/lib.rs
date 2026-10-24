@@ -557,12 +557,12 @@ fn face_chain(ctx: &Ctx, st: &Style, slot: FontSlot, script: Option<ScriptTag>) 
     let db = FontDb::global();
     let mut chain: Vec<Arc<FontFace>> = Vec::with_capacity(3);
     let mut push = |family: &str| {
-        // Only families that exist: `FontDb::face` would substitute the default face.
-        if db.has_family(family) {
-            let f = db.face(family, st.style_name);
-            if !chain.iter().any(|c| Arc::ptr_eq(c, &f)) {
-                chain.push(f);
-            }
+        // Only families that exist (or a missing CJK font's stand-in of its kind, a Mincho for
+        // ＭＳ 明朝): `FontDb::face` would substitute the default face.
+        if let Some(f) = db.available_face(family, st.style_name)
+            && !chain.iter().any(|c| Arc::ptr_eq(c, &f))
+        {
+            chain.push(f);
         }
     };
     match slot {

@@ -14,10 +14,18 @@ fn main() {
     println!("cargo::rerun-if-env-changed=CRAFT_FONTS_DIR");
     println!("cargo::rerun-if-env-changed=CRAFT_FONTS_REQUIRED");
     let mut src = String::from("pub static CRAFT_FONTS: &[CraftFont] = &[\n");
+    let required = std::env::var_os("CRAFT_FONTS_REQUIRED").is_some();
     if let Some(dir) = std::env::var_os("CRAFT_FONTS_DIR").map(PathBuf::from) {
         match craft_fonts(&dir) {
-            Ok(entries) => src.push_str(&entries),
-            Err(e) if std::env::var_os("CRAFT_FONTS_REQUIRED").is_some() => {
+            Ok(entries) => {
+                // A release build must draw Japanese with its own faces on every machine: without
+                // them Japanese text falls back to whatever the machine has.
+                if required && !entries.lines().any(|l| l.contains("\"Jpan\"")) {
+                    println!("cargo::error=CRAFT_FONTS_DIR={}: no Japanese (Jpan) face in the manifests", dir.display());
+                }
+                src.push_str(&entries);
+            }
+            Err(e) if required => {
                 println!("cargo::error=CRAFT_FONTS_DIR={}: {e}", dir.display());
             }
             Err(e) => println!("cargo::warning=building without craft-fonts: CRAFT_FONTS_DIR={}: {e}", dir.display()),
