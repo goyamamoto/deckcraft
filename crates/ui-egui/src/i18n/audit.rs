@@ -91,7 +91,7 @@ fn untranslated_interface_text() {
         for text in drawn.iter().filter(|t| english_words(t)) {
             let plain = pseudo::unmarked(text);
             let plain = plain.trim();
-            if doc_text.contains(plain) || fonts.contains(plain) || plain == "DeckCraft" {
+            if doc_text.contains(plain) || fonts.contains(plain) || plain == "DeckCraft" || plain == crate::APP_NAME {
                 continue;
             }
             found.entry(plain.to_string()).or_default().insert(tab);
@@ -171,7 +171,7 @@ fn untranslated_dialog_text() {
         for text in drawn.iter().filter(|t| english_words(t) && !window.contains(*t)) {
             let plain = pseudo::unmarked(text);
             let plain = plain.trim();
-            if doc_text.contains(plain) || fonts.contains(plain) || plain == "DeckCraft" {
+            if doc_text.contains(plain) || fonts.contains(plain) || plain == "DeckCraft" || plain == crate::APP_NAME {
                 continue;
             }
             found.entry(plain.to_string()).or_default().insert(id);
@@ -270,7 +270,7 @@ fn untranslated_interface_text_in_panes() {
             // translate.
             let named = plain.rsplit_once("  (").map_or(plain, |(name, _)| name);
             let measure = !english_words(plain.trim_end_matches("pt"));
-            if skip.contains(plain) || skip.contains(named) || measure || fonts.contains(plain) || plain == "DeckCraft" {
+            if skip.contains(plain) || skip.contains(named) || measure || fonts.contains(plain) || plain == "DeckCraft" || plain == crate::APP_NAME {
                 continue;
             }
             found.entry(plain.to_string()).or_default().insert(surface);
@@ -328,6 +328,7 @@ fn untranslated_shell_text() {
     names.extend(deckcraft_fonts::FontDb::global().families());
     names.extend(deckcraft_model::theme::builtin_themes().into_iter().map(|t| t.name));
     names.insert("DeckCraft".into());
+    names.insert(crate::APP_NAME.into());
     pseudo::set(true);
     let mut found: BTreeMap<String, BTreeSet<&str>> = BTreeMap::new();
     let mut note = |surface: &'static str, drawn: &[String]| {

@@ -721,7 +721,7 @@ fn home(app: &mut SlideApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome) 
     ui.horizontal(|ui| {
         let (r, _) = ui.allocate_exact_size(vec2(36.0, 36.0), Sense::hover());
         crate::dialogs::paint_logo(ui.painter(), r);
-        ui.label(RichText::new("DeckCraft").font(theme::bold(24.0)).color(t.text));
+        ui.label(RichText::new(crate::APP_NAME).font(theme::bold(24.0)).color(t.text));
     });
     ui.add_space(18.0);
     ui.horizontal(|ui| {
@@ -763,7 +763,7 @@ fn home(app: &mut SlideApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome) 
         });
     }
     ui.add_space(30.0);
-    ui.hyperlink_to(tl!("Join the ArtCraft community on Discord"), deckcraft_engine::links::DISCORD);
+    ui.hyperlink_to(tl!("Join our community on Discord"), deckcraft_engine::links::DISCORD);
 }
 
 /// New: a blank presentation, then every theme and starter template, with a search box.
@@ -1427,7 +1427,7 @@ fn account(app: &mut SlideApp, ui: &mut Ui) {
             ui.horizontal(|ui| {
                 let (r, _) = ui.allocate_exact_size(vec2(40.0, 40.0), Sense::hover());
                 crate::dialogs::paint_logo(ui.painter(), r);
-                ui.label(RichText::new("DeckCraft").font(theme::bold(24.0)).color(t.text));
+                ui.label(RichText::new(crate::APP_NAME).font(theme::bold(24.0)).color(t.text));
             });
             dim(ui, &crate::dialogs::version_line());
             dim(ui, tl!("Open source under MIT OR Apache-2.0. Not affiliated with Microsoft."));
@@ -1444,6 +1444,7 @@ fn account(app: &mut SlideApp, ui: &mut Ui) {
             }
             ui.hyperlink_to(tl!("Join our community on Discord"), deckcraft_engine::links::DISCORD);
             ui.hyperlink_to(tl!("Source on GitHub"), deckcraft_engine::links::GITHUB);
+            ui.hyperlink_to(tl!("Upstream DeckCraft on GitHub"), deckcraft_engine::links::UPSTREAM);
         });
     });
 }

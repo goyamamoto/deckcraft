@@ -33,7 +33,7 @@ pub const SHOW_ALL: &str = "app.showAll";
 pub const MINIMIZE: &str = "window.minimize";
 pub const ZOOM: &str = "window.zoom";
 
-const APP_NAME: &str = "DeckCraft";
+use crate::APP_NAME;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct MenuBar {

@@ -220,7 +220,7 @@ pub fn title_bar(app: &mut SlideApp, ui: &mut Ui) {
             .session
             .active()
             .map(|d| if dirty { crate::i18n::fmt(tl!("{title} — Edited"), &[("title", &name(d))]) } else { name(d) })
-            .unwrap_or_else(|| "DeckCraft".into());
+            .unwrap_or_else(|| crate::APP_NAME.into());
         ui.painter().text(rect.center(), Align2::CENTER_CENTER, title, theme::font(13.0), t.text);
         // Right side.
         let mut right = ui.new_child(

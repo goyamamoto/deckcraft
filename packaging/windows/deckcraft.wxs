@@ -12,7 +12,7 @@
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
   <Package
-      Name="DeckCraft"
+      Name="DeckCraft-ja"
       Manufacturer="Learning Machines LLC"
       Version="$(var.Version)"
       UpgradeCode="6F9C69E7-7825-40D2-BF26-C274DA676425"
@@ -28,8 +28,8 @@
 
     <Icon Id="DeckcraftIcon.ico" SourceFile="$(var.IconPath)" />
     <Property Id="ARPPRODUCTICON" Value="DeckcraftIcon.ico" />
-    <Property Id="ARPURLINFOABOUT" Value="https://getartcraft.com/apps/deckcraft" />
-    <Property Id="ARPURLUPDATEINFO" Value="https://getartcraft.com/apps/deckcraft" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/goyamamoto/deckcraft" />
+    <Property Id="ARPURLUPDATEINFO" Value="https://github.com/goyamamoto/deckcraft" />
     <Property Id="ARPHELPLINK" Value="https://discord.gg/artcraft" />
 
     <StandardDirectory Id="ProgramFiles6432Folder">
@@ -46,7 +46,7 @@
     <ComponentGroup Id="DeckcraftFiles" Directory="INSTALLFOLDER">
       <Component Id="DeckcraftApp" Guid="D87EA444-41A4-4C19-922E-66D1A29461FF">
         <File Id="DeckcraftExe" Source="$(var.BinDir)\deckcraft.exe" KeyPath="yes">
-          <Shortcut Id="StartMenuShortcut" Directory="ProgramMenuFolder" Name="DeckCraft"
+          <Shortcut Id="StartMenuShortcut" Directory="ProgramMenuFolder" Name="DeckCraft-ja"
               Description="DeckCraft presentations and slide shows" WorkingDirectory="INSTALLFOLDER" Advertise="yes"
               Icon="DeckcraftIcon.ico" IconIndex="0" />
         </File>

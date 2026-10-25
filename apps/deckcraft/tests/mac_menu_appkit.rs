@@ -98,15 +98,16 @@ fn main() {
     // The Mac layout, as AppKit has it: PowerPoint for Mac's eleven menus.
     let bar = main_menu();
     let tops: Vec<String> = (0..bar.numberOfItems()).filter_map(|i| bar.itemAtIndex(i)?.submenu()).map(|m| m.title().to_string()).collect();
-    assert_eq!(tops, ["DeckCraft", "File", "Edit", "View", "Insert", "Format", "Arrange", "Tools", "Slide Show", "Window", "Help"]);
-    let app_menu = submenu(&bar, "DeckCraft");
+    assert_eq!(tops, [deckcraft_ui_egui::APP_NAME, "File", "Edit", "View", "Insert", "Format", "Arrange", "Tools", "Slide Show", "Window", "Help"]);
+    let app_menu = submenu(&bar, deckcraft_ui_egui::APP_NAME);
     let names = titles(&app_menu);
-    for want in ["About DeckCraft", "Hide DeckCraft", "Quit DeckCraft"] {
+    let (hide, quit) = (format!("Hide {}", deckcraft_ui_egui::APP_NAME), format!("Quit {}", deckcraft_ui_egui::APP_NAME));
+    for want in ["About DeckCraft", hide.as_str(), quit.as_str()] {
         assert!(names.iter().any(|n| n == want), "{want} missing from the app menu: {names:?}");
     }
     // AppKit retitles a Preferences… row Settings… on recent systems.
     assert!(names.iter().any(|n| n == "Preferences…" || n == "Settings…"), "{names:?}");
-    let quit = app_menu.itemAtIndex(index(&app_menu, "Quit DeckCraft")).expect("Quit");
+    let quit = app_menu.itemAtIndex(index(&app_menu, &quit)).expect("Quit");
     assert_eq!(quit.keyEquivalent().to_string(), "q");
     assert_eq!(quit.keyEquivalentModifierMask(), NSEventModifierFlags::Command);
     assert_eq!(nsapp.windowsMenu().map(|m| m.title().to_string()).as_deref(), Some("Window"), "AppKit knows the Window menu");

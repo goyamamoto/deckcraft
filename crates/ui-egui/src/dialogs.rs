@@ -71,10 +71,10 @@ fn title(id: &str) -> &'static str {
         "smartart" => "Choose a SmartArt Graphic",
         "bullets" => "Bullets and Numbering",
         "action" => "Action Settings",
-        "quit" => "DeckCraft",
+        "quit" => crate::APP_NAME,
         "themeColors" => "Create New Theme Colors",
         "themeFonts" => "Create New Theme Fonts",
-        _ => "DeckCraft",
+        _ => crate::APP_NAME,
     }
 }
 
@@ -3215,15 +3215,16 @@ pub fn about(_app: &mut SlideApp, ui: &mut Ui) {
     ui.vertical_centered(|ui| {
         let (r, _) = ui.allocate_exact_size(vec2(64.0, 64.0), Sense::hover());
         paint_logo(ui.painter(), r);
-        ui.label(egui::RichText::new("DeckCraft").font(theme::bold(22.0)));
+        ui.label(egui::RichText::new(crate::APP_NAME).font(theme::bold(22.0)));
         ui.label(egui::RichText::new(version_line()).color(t.text_dim));
         ui.add_space(6.0);
         ui.label(tl!("Presentations and slide shows, rebuilt from scratch in pure Rust."));
+        ui.label(tl!("A Japanese-enhanced build of DeckCraft."));
         ui.label(tl!("An open-source, clean-room project. Not affiliated with Microsoft."));
         ui.add_space(6.0);
-        ui.hyperlink_to(tl!("Join our community on Discord"), deckcraft_engine::links::DISCORD);
-        ui.hyperlink_to("getartcraft.com/apps/deckcraft", deckcraft_engine::links::APP_PAGE);
         ui.hyperlink_to(tl!("Source on GitHub"), deckcraft_engine::links::GITHUB);
+        ui.hyperlink_to(tl!("Upstream DeckCraft on GitHub"), deckcraft_engine::links::UPSTREAM);
+        ui.hyperlink_to(tl!("Join our community on Discord"), deckcraft_engine::links::DISCORD);
         ui.add_space(6.0);
         ui.label(egui::RichText::new(tl!("MIT OR Apache-2.0 · © 2026 ArtCraft Team and the DeckCraft contributors")).size(11.0).color(t.text_faint));
     });
