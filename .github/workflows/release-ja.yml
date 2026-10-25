@@ -1,0 +1,246 @@
+# DeckCraft-ja releases (the goyamamoto/deckcraft fork only; upstream releases use release.yml).
+#
+# A tag `v<version>-ja.<n>` (e.g. v0.10.0-ja.1), or Run workflow with a tag, builds macOS
+# (universal), Windows (x64) and Linux (x86_64, aarch64) with the fork's Japanese catalog and
+# equation fonts, and publishes a GitHub release with every file and SHA256SUMS.txt.
+#
+# Unsigned: the fork has no signing keys. macOS builds are ad-hoc signed and not notarized, and the
+# Windows installer is not Authenticode-signed; the release notes tell people how to clear the
+# quarantine themselves.
+name: Release (DeckCraft-ja)
+
+on:
+  push:
+    tags: ["v*-ja.*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, v<version>-ja.<n> (created at this run's commit if it doesn't exist)"
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-ja-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+  # Build inputs from the fork's own repositories (README › Getting started).
+  CRAFT_FONTS_REPO: goyamamoto/craft-fonts
+  CRAFT_FONTS_REF: 1040f6a5526e5b8409136a92487034f611d29a95 # deckcraft-math-fonts
+  CRAFT_I18N_REPO: goyamamoto/craft-i18n
+  CRAFT_I18N_REF: 73d99bf21e628d2751ec7dbba159363fb94f601f # deckcraft-ja-fork
+
+jobs:
+  version:
+    name: Version
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      tag: ${{ steps.v.outputs.tag }}
+      version: ${{ steps.v.outputs.version }}
+      date: ${{ steps.v.outputs.date }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: v
+        name: Check the tag against Cargo.toml
+        env:
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)-ja\.[0-9]+$ ]]; then
+            echo "::error::tag '$TAG' is not v<version>-ja.<n>"
+            exit 1
+          fi
+          base="${BASH_REMATCH[1]}"
+          cargo_version=$(awk '/^\[/ { p = ($0 == "[workspace.package]"); next } p && $1 == "version" { gsub(/[" ]/, "", $3); print $3; exit }' Cargo.toml)
+          if [[ "$base" != "$cargo_version" ]]; then
+            echo "::error::tag '$TAG' is for $base, but Cargo.toml is at $cargo_version"
+            exit 1
+          fi
+          {
+            echo "tag=$TAG"
+            echo "version=${TAG#v}"
+            echo "date=$(date -u +%Y-%m-%d)"
+          } >>"$GITHUB_OUTPUT"
+
+  macos:
+    name: macOS universal
+    needs: version
+    runs-on: macos-15
+    timeout-minutes: 120
+    env:
+      DECKCRAFT_VERSION: ${{ needs.version.outputs.version }}
+      DECKCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
+      DECKCRAFT_BUILD_SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { repository: "${{ env.CRAFT_FONTS_REPO }}", ref: "${{ env.CRAFT_FONTS_REF }}", path: craft-fonts, persist-credentials: false }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { repository: "${{ env.CRAFT_I18N_REPO }}", ref: "${{ env.CRAFT_I18N_REF }}", path: craft-i18n, persist-credentials: false }
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: release-ja-macos-universal
+      - name: Build and package (ad-hoc signed, not notarized)
+        env:
+          CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+          CRAFT_FONTS_REQUIRED: "1"
+          CRAFT_I18N_DIR: ${{ github.workspace }}/craft-i18n
+          CRAFT_I18N_REQUIRED: "1"
+        run: packaging/macos/package.sh --arch universal
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-macos
+          path: dist/release/*
+          if-no-files-found: error
+
+  windows:
+    name: Windows x64
+    needs: version
+    runs-on: windows-latest
+    timeout-minutes: 120
+    env:
+      DECKCRAFT_VERSION: ${{ needs.version.outputs.version }}
+      DECKCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
+      DECKCRAFT_BUILD_SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { repository: "${{ env.CRAFT_FONTS_REPO }}", ref: "${{ env.CRAFT_FONTS_REF }}", path: craft-fonts, persist-credentials: false }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { repository: "${{ env.CRAFT_I18N_REPO }}", ref: "${{ env.CRAFT_I18N_REF }}", path: craft-i18n, persist-credentials: false }
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: release-ja-windows-x64
+      - name: Install WiX
+        uses: storytold/craft-common-actions/actions/install-wix@2b4eb2c6d94880d926c934ec3736c92cde30086b
+        with:
+          wix-version: "5.0.2"
+      - name: Build and package (unsigned)
+        shell: pwsh
+        env:
+          CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+          CRAFT_FONTS_REQUIRED: "1"
+          CRAFT_I18N_DIR: ${{ github.workspace }}/craft-i18n
+          CRAFT_I18N_REQUIRED: "1"
+        run: ./packaging/windows/package.ps1 -Arch x64
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-windows-x64
+          path: dist/release/*
+          if-no-files-found: error
+
+  linux:
+    name: Linux ${{ matrix.arch }}
+    needs: version
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86_64, runner: ubuntu-22.04, deb: amd64 }
+          - { arch: aarch64, runner: ubuntu-22.04-arm, deb: arm64 }
+    env:
+      DECKCRAFT_VERSION: ${{ needs.version.outputs.version }}
+      DECKCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
+      DECKCRAFT_BUILD_SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { repository: "${{ env.CRAFT_FONTS_REPO }}", ref: "${{ env.CRAFT_FONTS_REF }}", path: craft-fonts, persist-credentials: false }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { repository: "${{ env.CRAFT_I18N_REPO }}", ref: "${{ env.CRAFT_I18N_REF }}", path: craft-i18n, persist-credentials: false }
+      - uses: storytold/craft-common-actions/actions/install-linux-deps@2b4eb2c6d94880d926c934ec3736c92cde30086b
+        with:
+          deb-arch: ${{ matrix.deb }}
+          nfpm-version: "2.47.0"
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: release-ja-linux-${{ matrix.arch }}
+      - name: Build and package (AppImage, deb, rpm, tar.gz)
+        env:
+          CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+          CRAFT_FONTS_REQUIRED: "1"
+          CRAFT_I18N_DIR: ${{ github.workspace }}/craft-i18n
+          CRAFT_I18N_REQUIRED: "1"
+        run: packaging/linux/package.sh
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-linux-${{ matrix.arch }}
+          path: dist/release/*
+          if-no-files-found: error
+
+  release:
+    name: GitHub release
+    needs: [version, macos, windows, linux]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum -- * | tee SHA256SUMS.txt
+      - name: Release notes
+        env:
+          TAG: ${{ needs.version.outputs.tag }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          cat >notes.md <<EOF
+          DeckCraft-ja ${VERSION}: DeckCraft の日本語強化版 / a Japanese-enhanced build of [DeckCraft](https://github.com/storytold/deckcraft).
+          Built from ${GITHUB_SHA} with craft-i18n ${CRAFT_I18N_REF:0:7} (Japanese interface) and craft-fonts ${CRAFT_FONTS_REF:0:7} (equation fonts).
+
+          ## 署名について / Not signed
+
+          このリリースはコード署名・公証をしていません。ダウンロードしたファイルの検疫は各自で解除してください。
+
+          - **macOS**: DMG から DeckCraft.app を「アプリケーション」にコピーしたあと、ターミナルで
+            \`xattr -dr com.apple.quarantine /Applications/DeckCraft.app\` を実行してから開きます。
+          - **Windows**: MSI またはポータブル版 zip のプロパティで「許可する」(Unblock) にチェックするか、
+            PowerShell で \`Unblock-File <ファイル>\` を実行します。SmartScreen が出たら「詳細情報」→「実行」。
+          - **Linux**: 検疫はありません。AppImage は \`chmod +x\` してから実行します。
+
+          These builds are not code-signed or notarized. Clear the quarantine yourself:
+          macOS \`xattr -dr com.apple.quarantine /Applications/DeckCraft.app\` after copying the app from the DMG;
+          Windows \`Unblock-File <file>\` (or Properties › Unblock), then SmartScreen's More info › Run anyway.
+
+          Check downloads against \`SHA256SUMS.txt\`. The app installs as DeckCraft (same bundle id and
+          settings as upstream DeckCraft) and shows its name as DeckCraft-ja.
+          EOF
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.version.outputs.tag }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber -R "$GITHUB_REPOSITORY"
+            gh release edit "$TAG" --notes-file notes.md -R "$GITHUB_REPOSITORY"
+          else
+            gh release create "$TAG" dist/* --target "$GITHUB_SHA" --title "DeckCraft-ja $VERSION" \
+              --notes-file notes.md -R "$GITHUB_REPOSITORY"
+          fi
