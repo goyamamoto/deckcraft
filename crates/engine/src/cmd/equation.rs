@@ -1,14 +1,20 @@
 //! Equations: Insert ▸ Equation from TeX (`insert.equation`), and what the Equation dialog asks
 //! (`equation.at`, `equation.check`). The equation is stored as Office Math (OMML) with its
 //! linear text, as PowerPoint stores it; `deckcraft-math` does the TeX, OMML and layout.
+//! Agents find equations in `slide.inspect` (`equations`, with their TeX) and rewrite one with
+//! `insert.equation {id, at}`.
 
+use deckcraft_geom::Xfrm;
 use deckcraft_math as math;
-use deckcraft_model::text::{Align, Paragraph, Run, RunKind, RunProps};
+use deckcraft_model::edit::Pos;
+use deckcraft_model::text::{Align, Paragraph, Run, RunKind, RunProps, TextBody};
 use deckcraft_model::{Shape, ShapeId};
 use serde_json::{Value, json};
 
-use super::{CommandSpec, always, bad, cmd, has_slide, str_param};
+use super::{CommandSpec, always, bad, bool_param, cmd, f64_param, has_slide, id_param, rect_param, str_param};
 use crate::{Result, Session};
+
+const INSERT: &str = "insert.equation";
 
 /// The font equations are set in: PowerPoint's math font, which the font database stands in for
 /// (Caladea) where it is not installed.
@@ -71,6 +77,46 @@ fn equation_run(sh: &Shape) -> Option<(usize, &Run)> {
     found
 }
 
+/// An equation in a text body: where its run is, the text positions it spans, its OMML.
+struct MathAt<'a> {
+    para: usize,
+    run: usize,
+    start: usize,
+    end: usize,
+    omml: &'a str,
+    text: &'a str,
+}
+
+/// Every equation in `body`, in reading order.
+fn math_runs(body: &TextBody) -> Vec<MathAt<'_>> {
+    let mut out = Vec::new();
+    for (pi, para) in body.paragraphs.iter().enumerate() {
+        let mut off = 0;
+        for (ri, run) in para.runs.iter().enumerate() {
+            let start = off;
+            off += run.char_len();
+            if let RunKind::Math { omml } = &run.kind {
+                out.push(MathAt { para: pi, run: ri, start, end: off, omml, text: &run.text });
+            }
+        }
+    }
+    out
+}
+
+/// TeX for an equation: from its OMML, else its linear text.
+fn tex_of(m: &MathAt) -> String {
+    math::omml_to_tex(m.omml).filter(|t| !t.is_empty()).unwrap_or_else(|| m.text.to_string())
+}
+
+/// The equations in `body` as `slide.inspect` lists them: `{tex, display, start, end}`, the
+/// positions being `[paragraph, char]` as `text.select` and `insert.equation`'s `at` take them.
+pub fn equations_json(body: &TextBody) -> Vec<Value> {
+    math_runs(body)
+        .iter()
+        .map(|m| json!({"tex": tex_of(m), "display": math::omml::is_display(m.omml), "start": [m.para, m.start], "end": [m.para, m.end]}))
+        .collect()
+}
+
 /// The equation's font size in an [`equation_box`].
 pub fn equation_size(sh: &Shape) -> Option<f64> {
     equation_run(sh).map(|(_, r)| r.props.size.unwrap_or(DEFAULT_SIZE))
@@ -114,7 +160,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Equation",
             ["Insert", "Symbols"],
             None,
-            "{tex: TeX source, display?: bool} — at the insertion point (replacing the selection), or in a new text box; display style (limits above and below, display fractions) by default in a box of its own, text style at the insertion point",
+            "{tex: TeX source, display?: bool, size?: pt, rect?: [x,y,w,h], id?, at?: [p, c]} — at the insertion point (replacing the selection), or in a new text box centred in `rect` (default: the slide); with `id`, replaces the equation in that shape's text that `at` touches (default: its first), keeping its formatting, an equation box keeping its centre. Display style (limits above and below, display fractions) by default in a box of its own, text style at the insertion point, the replaced equation's style with `id`. `size` is the equation's font size",
             has_slide,
             insert
         ),
@@ -131,28 +177,49 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+/// OMML and linear text for `tex`; a run needs a character to be laid out, selected and deleted.
+fn convert(tex: &str, display: bool) -> Result<(String, String)> {
+    let (omml, text) = math::tex_to_omml_runs(tex, MATH_RUN_PROPS, display).map_err(|e| bad(INSERT, e.to_string()))?;
+    Ok((omml, if text.is_empty() { " ".to_string() } else { text }))
+}
+
 fn insert(s: &mut Session, p: &Value) -> Result<Value> {
-    let tex = str_param(p, "tex").ok_or_else(|| bad("insert.equation", "missing `tex`"))?;
+    let tex = str_param(p, "tex").ok_or_else(|| bad(INSERT, "missing `tex`"))?;
     if tex.trim().is_empty() {
-        return Err(bad("insert.equation", "the equation is empty"));
+        return Err(bad(INSERT, "the equation is empty"));
+    }
+    let size = f64_param(p, "size").map(|v| v.clamp(1.0, 4000.0));
+    if let Some(id) = id_param(p, "id", INSERT)? {
+        return replace(s, id, super::text::pos_param(p, "at"), tex, bool_param(p, "display"), size);
     }
     let inline = s.doc()?.selection.text.is_some();
     let display = super::bool_or(p, "display", !inline);
-    let (omml, text) = math::tex_to_omml_runs(tex, MATH_RUN_PROPS, display).map_err(|e| bad("insert.equation", e.to_string()))?;
-    // A run needs a character to be laid out, selected and deleted.
-    let text = if text.is_empty() { " ".to_string() } else { text };
+    let (omml, text) = convert(tex, display)?;
     let run = Run { text, props: RunProps::default(), kind: RunKind::Math { omml } };
     if inline {
-        return super::text::insert_math(s, run);
+        return super::text::insert_math(s, run, size);
     }
-    // A text box of its own, centred on the slide, that hugs the equation (no wrapping, so the
-    // fit sets its width too): its handles then sit on the equation and scale it.
-    let rect = super::insert::default_rect(s, 300.0, 50.0);
-    let mut shape = super::insert::new_text_box(rect, "");
+    // A text box of its own, centred in the area (the slide by default), that hugs the equation
+    // (no wrapping, so the fit sets its width too): its handles then sit on the equation and
+    // scale it. The box is centred again once it fits the equation.
+    let area = match rect_param(p, "rect") {
+        Some(r) => r,
+        None => {
+            let page = s.active().map(|d| d.doc.slide_size).unwrap_or(deckcraft_model::defaults::WIDE);
+            Xfrm::new(0.0, 0.0, page.width, page.height)
+        }
+    };
+    let (cx, cy) = (area.x + area.w / 2.0, area.y + area.h / 2.0);
+    if !(cx.is_finite() && cy.is_finite()) {
+        return Err(bad(INSERT, "`rect` is out of range"));
+    }
+    let mut shape = super::insert::new_text_box(Xfrm::new(cx - 150.0, cy - 25.0, 300.0, 50.0), "");
     if let Some(tb) = shape.text.as_mut() {
         let mut run = run;
         run.props.font = Some(MATH_FONT.into());
+        run.props.size = size;
         let mut para = Paragraph::default();
+        para.end_props.size = size;
         para.props.align = Some(Align::Center);
         para.runs = vec![run];
         tb.paragraphs = vec![para];
@@ -165,7 +232,79 @@ fn insert(s: &mut Session, p: &Value) -> Result<Value> {
         tb.body.inset_b = Some(BOX_INSET);
     }
     shape.name = "Equation".into();
-    super::insert::place_text_box(s, "insert.equation", shape, false)
+    let id = super::insert::add_shape(s, INSERT, shape, true)?;
+    super::text::fit_text_box(s, id)?;
+    centre_at(s, id, cx, cy)?;
+    Ok(json!({"id": id}))
+}
+
+/// Move shape `id` so its box is centred on `(cx, cy)`, within the command's edit.
+fn centre_at(s: &mut Session, id: ShapeId, cx: f64, cy: f64) -> Result<()> {
+    s.edit(|doc, sel| {
+        if let Some(sh) = crate::shapes_mut(doc, sel).and_then(|l| deckcraft_model::find_shape_mut(l, id))
+            && let Some(x) = sh.xfrm.as_mut()
+        {
+            x.x = cx - x.w / 2.0;
+            x.y = cy - x.h / 2.0;
+        }
+        Ok(())
+    })
+}
+
+/// `insert.equation` with `id`: the equation in shape `id`'s text that `at` touches (its first
+/// without `at`) becomes `tex`, keeping its run's formatting and, unless `display` says
+/// otherwise, its style. An equation box is refitted around its new equation and keeps its
+/// centre; a caret in that text goes after the equation.
+fn replace(s: &mut Session, id: ShapeId, at: Option<Pos>, tex: &str, display: Option<bool>, size: Option<f64>) -> Result<Value> {
+    let st = s.doc()?;
+    let sh = st.shape(id).ok_or_else(|| bad(INSERT, format!("no shape {id} on this slide")))?;
+    // The box's own frame (a group member's is in its group's space), which `centre_at` sets.
+    let before = sh.xfrm.filter(|_| equation_box(sh));
+    let found = sh.text.as_ref().map(math_runs).unwrap_or_default();
+    let target = match at {
+        Some((p, c)) => found.iter().find(|m| m.para == p && (m.start..=m.end).contains(&c)),
+        None => found.first(),
+    };
+    let Some(m) = target else {
+        return Err(bad(
+            INSERT,
+            match at {
+                Some((p, c)) if !found.is_empty() => format!("no equation at [{p}, {c}] in shape {id}"),
+                _ => format!("shape {id} holds no equation"),
+            },
+        ));
+    };
+    let (pi, ri, start) = (m.para, m.run, m.start);
+    let (omml, text) = convert(tex, display.unwrap_or_else(|| math::omml::is_display(m.omml)))?;
+    let end = start.saturating_add(text.chars().count());
+    s.edit(|doc, sel| {
+        let run = crate::shapes_mut(doc, sel)
+            .and_then(|l| deckcraft_model::find_shape_mut(l, id))
+            .and_then(|sh| sh.text.as_mut())
+            .and_then(|b| b.paragraphs.get_mut(pi))
+            .and_then(|p| p.runs.get_mut(ri))
+            .ok_or_else(|| bad(INSERT, "the equation is gone"))?;
+        run.kind = RunKind::Math { omml };
+        run.text = text;
+        if let Some(size) = size {
+            run.props.size = Some(size);
+        }
+        if let Some(t) = sel.text.as_mut().filter(|t| t.shape == id && t.cell.is_none() && !t.notes) {
+            t.anchor = (pi, end);
+            t.caret = (pi, end);
+        }
+        Ok(())
+    })?;
+    if before.is_some()
+        && let Some(size) = size
+    {
+        set_equation_size(s, id, size)?;
+    }
+    super::text::fit_text_box(s, id)?;
+    if let Some(b) = before {
+        centre_at(s, id, b.x + b.w / 2.0, b.y + b.h / 2.0)?;
+    }
+    Ok(json!({"id": id, "start": [pi, start], "end": [pi, end]}))
 }
 
 /// The equation the caret is in or beside, or that the selection covers (within its paragraph);

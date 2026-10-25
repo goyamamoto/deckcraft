@@ -11,9 +11,12 @@ The dialog takes TeX. The equation is drawn below the text as you type; while an
 half-typed (an unknown command, a missing brace) the last good drawing stays dimmed and the error
 is named with its character position. Insert (⌘↩ / Ctrl+Enter) puts the equation at the insertion
 point, replacing the selection, or, with no text being edited, in a text box of its own centred on
-the slide (named "Equation", the paragraph centred, the run in Cambria Math). Opened with the
+the slide (named "Equation", the paragraph centred, the run in Cambria Math; the box is centred
+after it has been fitted to the equation, so short and tall equations alike sit on the centre). Opened with the
 caret in or beside an equation, or with one selected, the dialog edits that equation: its TeX is
-shown and the equation is selected, so Insert replaces it.
+shown and the equation is selected, so Insert replaces it. Text typed beside an equation takes
+the formatting of the words around it (the run before the equation, else after, else the
+paragraph's end mark), not the equation's math font and size (`edit::insert_props_at`).
 
 **Display style** (the dialog's switch) sets the equation as TeX's `\displaystyle` or a displayed
 equation does: large operators with their limits above and below, fraction parts at full size
@@ -41,6 +44,24 @@ The same from the control channel or MCP: `insert.equation {tex}`, `equation.at 
 equation the caret touches, as TeX with its character range) and `equation.check {tex}`
 (parses, answers `{ok, text}` or the error's position and message). `app.dialog {id:
 "equation", tex?}` and `ui.dialog.open {id: "equation", fields: {tex}}` open the dialog seeded.
+
+## For agents: finding and rewriting equations
+
+An agent (CLI, MCP, the control channel) works with equations in three calls, without
+selecting anything first:
+
+- **Find them.** `slide.inspect` lists every equation in a shape's text under `equations`:
+  `{tex, display, start, end}`, the positions being `[paragraph, char]` as `text.select` takes
+  them. A shape's `text` shows only the linear form (`x=(−b±√(b^2−4ac))/(2a)`).
+- **Add one where it belongs.** `insert.equation {tex, rect?: [x, y, w, h], size?}` makes the box
+  centred in `rect` (the slide without it) at `size` points (18 without it). At an insertion
+  point, `size` sets the equation's size instead of the text's around it.
+- **Rewrite one.** `insert.equation {id, at?, tex, display?, size?}` replaces the equation in
+  shape `id`'s text that `at` touches (the first without `at`), on the current slide: the run
+  keeps its formatting and, unless `display` says otherwise, its style; an equation box is
+  refitted around the new equation and keeps its centre; a caret in that text goes after it.
+  It is one undo step. A shape with no equation, an `at` touching none, or TeX that does not
+  parse is an error that changes nothing.
 
 ## Sizing and editing an equation box
 
@@ -153,4 +174,7 @@ text and Morph skip the paths.
 Checked by `cargo xtask ci`: `crates/math/src/tests.rs` (parsing, errors, no panics on random
 input, OMML and TeX round trips, layout geometry with a mock font), the text layout tests
 (`an_equation_run_is_one_cluster…`), `render::tests::equation_preview…`, the engine's
-`insert_equation_*` and the dialog's `equation_dialog_tests`.
+`insert_equation_*` (with `insert_equation_with_id_*` and
+`a_new_equation_box_is_centred_on_the_slide_or_in_rect_at_the_size_asked`,
+`text_typed_after_an_inline_equation_keeps_the_text_formatting`) and the dialog's
+`equation_dialog_tests`.

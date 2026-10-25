@@ -10,7 +10,7 @@ use crate::{Result, Session};
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(query "document.inspect", "Inspect Presentation", [], None, "{} → slides with titles, layouts, shape counts; selection; size; theme", has_doc, document),
-        cmd!(query "slide.inspect", "Inspect Slide", [], None, "{index?} → the slide's shapes with ids, kinds, boxes, text, fills, animations, transition, notes (text, and notesBody with its formatting)", has_doc, slide),
+        cmd!(query "slide.inspect", "Inspect Slide", [], None, "{index?} → the slide's shapes with ids, kinds, boxes, text (and equations: {tex, display, start, end}), fills, animations, transition, notes (text, and notesBody with its formatting)", has_doc, slide),
         cmd!(query "shape.inspect", "Inspect Shape", [], None, "{id} → full shape JSON plus its effective box", has_doc, shape),
         cmd!(query "commands.list", "List Commands", [], None, "{filter?: substring} → [{id, label, params, enabled}]", always, commands),
     ]
@@ -76,6 +76,10 @@ pub fn shape_summary(ctx: Option<&Ctx>, sh: &Shape, depth: usize) -> Value {
             && !t.is_empty()
         {
             o.insert("text".into(), json!(t.text()));
+            let eqs = super::equation::equations_json(t);
+            if !eqs.is_empty() {
+                o.insert("equations".into(), Value::Array(eqs));
+            }
         }
         if let Some(f) = fill {
             o.insert("fill".into(), f);
