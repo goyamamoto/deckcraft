@@ -4722,3 +4722,138 @@ fn a_selected_equation_box_is_found_by_equation_at_and_double_click_opens_the_di
     assert!(st.selection.text.is_none(), "no caret: the dialog edits it");
     assert_eq!(st.selection.shapes, vec![deckcraft_model::ShapeId(id as u32)]);
 }
+
+fn centre(x: &deckcraft_geom::Xfrm) -> (f64, f64) {
+    (x.x + x.w / 2.0, x.y + x.h / 2.0)
+}
+
+fn near(a: (f64, f64), b: (f64, f64)) -> bool {
+    (a.0 - b.0).abs() < 0.01 && (a.1 - b.1).abs() < 0.01
+}
+
+#[test]
+fn a_new_equation_box_is_centred_on_the_slide_or_in_rect_at_the_size_asked() {
+    let mut s = session();
+    let page = s.doc().unwrap().doc.slide_size;
+    // Short and tall equations alike: the box fits its equation, then sits on the centre.
+    for tex in ["x", "\\sum_{k=1}^{n} k = \\frac{n(n+1)}{2}"] {
+        let (_, x) = equation_box(&mut s, tex);
+        assert!(near(centre(&x), (page.width / 2.0, page.height / 2.0)), "{tex}: {x:?}");
+        s.execute("edit.deselect", &json!({})).unwrap();
+    }
+    let r = s.execute("insert.equation", &json!({"tex": "e^{i\\pi}+1=0", "rect": [60, 140, 400, 100], "size": 40})).unwrap();
+    let id = r["id"].as_u64().unwrap();
+    let x = text_box_xfrm(&s, id);
+    assert!(near(centre(&x), (260.0, 190.0)), "centred in rect: {x:?}");
+    assert_eq!(equation_size_of(&s, id), 40.0);
+    assert!(x.h > 40.0, "the box grew with the size: {x:?}");
+    // One undo step takes the box away.
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(s.active().unwrap().shape(deckcraft_model::ShapeId(id as u32)).is_none());
+    // A rect whose centre is beyond f64 is refused rather than placed at infinity.
+    let e = s.execute("insert.equation", &json!({"tex": "x", "rect": [1.7e308, 0, 1.7e308, 10]})).unwrap_err();
+    assert!(e.to_string().contains("out of range"), "{e}");
+}
+
+#[test]
+fn insert_equation_with_id_rewrites_an_equation_box_in_place() {
+    let mut s = session();
+    let (id, x) = equation_box(&mut s, "a+b");
+    s.execute("format.size", &json!({"size": 36})).unwrap();
+    s.execute("format.color", &json!({"color": "#C00000"})).unwrap();
+    s.execute("shape.sizePosition", &json!({"x": 100, "y": 100})).unwrap();
+    let x0 = text_box_xfrm(&s, id);
+    let run0 =
+        |s: &Session| s.active().unwrap().shape(deckcraft_model::ShapeId(id as u32)).unwrap().text.as_ref().unwrap().paragraphs[0].runs[0].clone();
+    let props0 = run0(&s).props;
+    assert!(props0.fill.is_some(), "coloured");
+    s.execute("edit.deselect", &json!({})).unwrap();
+    let r = s.execute("insert.equation", &json!({"id": id, "tex": "\\frac{a+b}{\\sqrt{c}}"})).unwrap();
+    assert_eq!(r["id"], json!(id));
+    let x1 = text_box_xfrm(&s, id);
+    assert!(x1.h > x0.h + 10.0, "refitted around the taller equation: {x0:?} → {x1:?}");
+    assert!(near(centre(&x1), centre(&x0)), "keeps its centre: {x0:?} → {x1:?}");
+    assert_eq!(equation_size_of(&s, id), 36.0, "keeps its size");
+    let run = run0(&s);
+    assert_eq!(run.props, props0, "keeps its formatting (size, colour, font)");
+    assert!(run.omml().contains("oMathPara"), "keeps display style");
+    let st = s.active().unwrap();
+    assert!(st.selection.shapes.is_empty() && st.selection.text.is_none(), "the selection is left alone");
+    // slide.inspect lists it with its TeX.
+    let info = s.execute("slide.inspect", &json!({})).unwrap();
+    let shape = info["shapes"].as_array().unwrap().iter().find(|v| v["id"] == json!(id)).unwrap().clone();
+    assert_eq!(shape["equations"], json!([{"tex": "\\frac{a+b}{\\sqrt{c}}", "display": true, "start": [0, 0], "end": [0, run.char_len()]}]));
+    // A new size scales it; one undo step brings back the old equation.
+    s.execute("insert.equation", &json!({"id": id, "tex": "x", "size": 20, "display": false})).unwrap();
+    assert_eq!(equation_size_of(&s, id), 20.0);
+    s.execute("edit.undo", &json!({})).unwrap();
+    s.execute("edit.undo", &json!({})).unwrap();
+    s.execute("edit.select", &json!({"ids": [id]})).unwrap();
+    assert_eq!(s.execute("equation.at", &json!({})).unwrap()["tex"], "a+b");
+    assert!(near(centre(&text_box_xfrm(&s, id)), centre(&x0)));
+    let _ = x;
+}
+
+#[test]
+fn text_typed_after_an_inline_equation_keeps_the_text_formatting() {
+    use deckcraft_model::text::RunKind;
+    let mut s = session();
+    s.execute("insert.textBox", &json!({"rect": [10, 10, 400, 40], "text": ""})).unwrap();
+    s.execute("text.insert", &json!({"text": "Area "})).unwrap();
+    s.execute("insert.equation", &json!({"tex": "S=\\pi r^2", "size": 30})).unwrap();
+    s.execute("text.insert", &json!({"text": " here"})).unwrap();
+    let st = s.active().unwrap();
+    let t = st.selection.text.clone().unwrap();
+    let runs = st.shape(t.shape).unwrap().text.as_ref().unwrap().paragraphs[0].runs.clone();
+    let (first, eq, last) = (&runs[0], &runs[1], runs.last().unwrap());
+    assert!(matches!(eq.kind, RunKind::Math { .. }) && eq.props.size == Some(30.0), "{runs:?}");
+    assert_eq!(last.text, " here");
+    assert_eq!(last.props, first.props, "the words around the equation, not its math font or size");
+}
+
+#[test]
+fn insert_equation_with_id_and_at_rewrites_one_equation_in_running_text() {
+    use deckcraft_model::text::RunKind;
+    let mut s = session();
+    s.execute("insert.textBox", &json!({"rect": [10, 10, 400, 40], "text": ""})).unwrap();
+    s.execute("text.insert", &json!({"text": "If "})).unwrap();
+    s.execute("insert.equation", &json!({"tex": "a>0"})).unwrap();
+    s.execute("text.insert", &json!({"text": " then "})).unwrap();
+    s.execute("insert.equation", &json!({"tex": "b=1"})).unwrap();
+    s.execute("text.insert", &json!({"text": "."})).unwrap();
+    let id = s.active().unwrap().selection.text.as_ref().unwrap().shape.0 as u64;
+    s.execute("text.exit", &json!({})).unwrap();
+    let info = s.execute("slide.inspect", &json!({})).unwrap();
+    let shape = info["shapes"].as_array().unwrap().iter().find(|v| v["id"] == json!(id)).unwrap().clone();
+    assert_eq!(
+        shape["equations"],
+        json!([{"tex": "a > 0", "display": false, "start": [0, 3], "end": [0, 6]}, {"tex": "b = 1", "display": false, "start": [0, 12], "end": [0, 15]}])
+    );
+    // `at` anywhere in (or beside) the second picks it; the first stays as it was.
+    s.execute("insert.equation", &json!({"id": id, "at": [0, 13], "tex": "b=\\frac{1}{2}", "size": 30})).unwrap();
+    let st = s.active().unwrap();
+    let para = &st.shape(deckcraft_model::ShapeId(id as u32)).unwrap().text.as_ref().unwrap().paragraphs[0];
+    let maths: Vec<_> = para.runs.iter().filter(|r| matches!(r.kind, RunKind::Math { .. })).collect();
+    assert_eq!(maths.len(), 2);
+    assert_eq!(maths[0].text, "a>0");
+    assert_eq!(maths[1].text, "b=1/2");
+    assert_eq!(maths[1].props.size, Some(30.0));
+    assert!(!maths[1].omml().contains("oMathPara"), "keeps text style");
+    assert_eq!(para.runs.last().unwrap().text, ".", "the text after it stays");
+    // Mistakes are errors that change nothing.
+    let before = s.active().unwrap().doc.clone();
+    let e = s.execute("insert.equation", &json!({"id": id, "at": [0, 0], "tex": "c"})).unwrap_err();
+    assert!(e.to_string().contains("no equation at [0, 0]"), "{e}");
+    let e = s.execute("insert.equation", &json!({"id": id, "tex": "\\frac{1}"})).unwrap_err();
+    assert!(e.to_string().contains("argument"), "{e}");
+    s.execute("insert.textBox", &json!({"rect": [10, 100, 200, 40], "text": "plain"})).unwrap();
+    let plain = s.active().unwrap().selection.shapes[0].0 as u64;
+    let e = s.execute("insert.equation", &json!({"id": plain, "tex": "c"})).unwrap_err();
+    assert!(e.to_string().contains("holds no equation"), "{e}");
+    let e = s.execute("insert.equation", &json!({"id": 99999, "tex": "c"})).unwrap_err();
+    assert!(e.to_string().contains("no shape 99999"), "{e}");
+    let e = s.execute("insert.equation", &json!({"id": -1, "tex": "c"})).unwrap_err();
+    assert!(e.to_string().contains("not a valid shape id"), "{e}");
+    let st = s.active().unwrap();
+    assert_eq!(st.doc.slides[0].shapes.iter().find(|sh| sh.id.0 as u64 == id), before.slides[0].shapes.iter().find(|sh| sh.id.0 as u64 == id));
+}

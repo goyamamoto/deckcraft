@@ -1594,7 +1594,7 @@ fn insert_plain(s: &mut Session, text: &str, lang: Option<&str>) -> Result<()> {
     super::text::edit_text(s, move |body, t| {
         let (a, b) = t.ordered();
         let at = deckcraft_model::edit::delete(body, a, b);
-        let mut props = deckcraft_model::edit::props_at(body, at);
+        let mut props = deckcraft_model::edit::insert_props_at(body, at);
         if let Some(lang) = &lang {
             set_date_lang(&mut props, lang);
         }
