@@ -14,6 +14,10 @@ macro_rules! tl {
     };
 }
 
+/// The product name the window titles, the menu bar and About show: this is the Japanese-enhanced
+/// build of DeckCraft (upstream calls itself DeckCraft).
+pub const APP_NAME: &str = "DeckCraft-ja";
+
 pub mod animtimeline;
 pub mod backstage;
 pub mod canvas;
@@ -963,7 +967,7 @@ impl SlideApp {
 
     /// The name the window shows: the presentation's, else the app's.
     pub fn title_stem(&self) -> String {
-        self.session.active().map(|d| d.title()).unwrap_or_else(|| "DeckCraft".into())
+        self.session.active().map(|d| d.title()).unwrap_or_else(|| APP_NAME.into())
     }
 
     /// The window's title: the presentation's name, numbered when several windows show it
@@ -971,8 +975,8 @@ impl SlideApp {
     pub fn window_title(&self) -> String {
         let stem = self.title_stem();
         match (self.session.active(), self.view_number) {
-            (Some(_), Some(n)) => format!("{stem}:{n} - DeckCraft"),
-            (Some(_), None) => format!("{stem} - DeckCraft"),
+            (Some(_), Some(n)) => format!("{stem}:{n} - {APP_NAME}"),
+            (Some(_), None) => format!("{stem} - {APP_NAME}"),
             (None, _) => stem,
         }
     }
@@ -1395,7 +1399,9 @@ impl SlideApp {
             }
             "app.links" => {
                 use deckcraft_engine::links::*;
-                return Ok(json!({"discord": DISCORD, "website": WEBSITE, "apps": APPS, "appPage": APP_PAGE, "github": GITHUB}));
+                return Ok(
+                    json!({"discord": DISCORD, "website": WEBSITE, "apps": APPS, "appPage": APP_PAGE, "github": GITHUB, "upstream": UPSTREAM}),
+                );
             }
             _ => return Err(format!("unknown UI command `{id}`")),
         }

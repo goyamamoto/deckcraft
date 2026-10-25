@@ -14,9 +14,9 @@
     <string>ja</string>
   </array>
   <key>CFBundleDisplayName</key>
-  <string>DeckCraft</string>
+  <string>DeckCraft-ja</string>
   <key>CFBundleName</key>
-  <string>DeckCraft</string>
+  <string>DeckCraft-ja</string>
   <key>CFBundleExecutable</key>
   <string>DeckCraft</string>
   <key>CFBundleIdentifier</key>

@@ -1,27 +1,25 @@
 <p align="center">
-  <a href="https://getartcraft.com/">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="docs/brand/artcraft-logo-white.svg">
-      <img alt="ArtCraft" src="docs/brand/artcraft-logo.svg" width="200">
-    </picture>
-  </a>
-</p>
-
-<p align="center">
   <img src="assets/app-icon/hicolor/256x256/apps/ai.storyteller.deckcraft.png" width="128" height="128" alt="DeckCraft icon: a presentation screen with a bar chart on an orange tile">
 </p>
 
-<h1 align="center">DeckCraft</h1>
+<h1 align="center">DeckCraft-ja</h1>
 
 <p align="center">
-  <b>Presentations and slide shows; an open-source, modern presentation and slide designer, built in pure Rust.</b>
+  <b>DeckCraft の日本語強化版</b> — PowerPoint をクリーンルームで再実装したオープンソースのプレゼンテーション アプリ <a href="https://github.com/storytold/deckcraft">DeckCraft</a> に、PowerPoint と同じ日本語の扱いと TeX で書ける数式を加えています。<br>
+  <b>A Japanese-enhanced DeckCraft</b>: the open-source, clean-room reimplementation of PowerPoint in pure Rust, with Japanese text handled the way PowerPoint handles it and equations written in TeX.
+</p>
+
+<p align="center">
+  日本語のインターフェイス、PowerPoint for Mac で実測した日本語の行組み（禁則、ぶら下がり、縦書き、両端揃え）、東アジア用フォントとテーマの日本語フォント、IME の変換・再変換、
+  和暦と日本語の日付書式、センチと A4/JIS 用紙、TeX 入力でプレビューと履歴つきの数式（Computer Modern で描画、.pptx の OMML として保存）、プレゼンテーションごとのウインドウとネイティブ メニュー バー。変更は本家にも Pull Request で返します。
 </p>
 
 <p align="center">
   Build decks with themes, layouts, shapes, pictures, tables, charts, transitions and animations,
   open and save .pptx presentation files, and present them full screen. Native on macOS, Windows, Linux
   and FreeBSD, and in the browser. Every button is also a command that the CLI and AI agents
-  (through MCP) can drive.
+  (through MCP) can drive.<br>
+  <i>A Japanese-enhanced build of <a href="https://github.com/storytold/deckcraft">DeckCraft</a>; the Japanese work is offered back upstream.</i>
 </p>
 
 <p align="center">
@@ -35,19 +33,9 @@
 </p>
 
 <p align="center">
-  <a href="https://discord.gg/artcraft"><img alt="Join the ArtCraft community on Discord" src="https://img.shields.io/badge/Join%20us%20on%20Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" height="40"></a>
+  <a href="https://github.com/goyamamoto/deckcraft"><b>DeckCraft-ja on GitHub</b></a> ·
+  <a href="https://github.com/storytold/deckcraft">Upstream DeckCraft</a>
 </p>
-
-<p align="center">
-  <a href="https://getartcraft.com/apps/deckcraft"><b>DeckCraft on getartcraft.com</b></a> ·
-  <a href="https://getartcraft.com/">ArtCraft</a> ·
-  <a href="https://getartcraft.com/apps">All Crafting Apps</a>
-</p>
-
-> [!NOTE]
-> **ArtCraft is a community of artists from all walks of life.** Painters, photographers,
-> filmmakers, illustrators, designers, animators, hobbyists, and people who picked up a pencil
-> last week. If you make things, you're one of us. **[Come say hi on Discord](https://discord.gg/artcraft).**
 
 <p align="center">
   <img alt="DeckCraft editing a slide: ribbon, slide thumbnails with sections, a process diagram on the canvas, notes and status bar" src="docs/images/editor.png" width="900">
@@ -59,7 +47,7 @@
   <a href="#agents-cli-and-mcp">Agents, CLI and MCP</a> ·
   <a href="#roadmap">Roadmap</a> ·
   <a href="#downloads">Downloads</a> ·
-  <a href="#the-crafting-apps">The Crafting Apps</a> ·
+  <a href="#upstream">Upstream</a> ·
   <a href="#license-and-credits">License</a>
 </p>
 
@@ -83,6 +71,11 @@ Today it can:
   by-paragraph builds, full-screen slide show, presenter view, pen, rehearse timings, media playback.
 - **Exchange files**: open and save .pptx presentations, export PDF (slides, notes pages, handouts
   with selectable text), PNG/JPEG, an animated GIF of the deck and outlines. Unsaved work is kept by AutoRecover.
+- **Japanese and equations (DeckCraft-ja)**: a Japanese interface; Japanese line layout, kinsoku,
+  hanging punctuation, vertical text and East Asian fonts as PowerPoint for Mac lays them out; the
+  macOS input method's conversion and reconversion; Japanese dates and eras; equations typed in TeX
+  with a live preview and a history, drawn in Computer Modern and saved as OMML in .pptx; a window
+  per presentation and the native macOS menu bar.
 - **Automate**: 200+ commands with undo, all scriptable from the CLI, a JSON control channel and an
   MCP server for AI agents.
 
@@ -108,19 +101,32 @@ PDF export uses the shared `craft-pdf` writer with import features disabled. See
 [`crates/pdf/README.md`](crates/pdf/README.md) for the dependency and validation requirements.
 
 ```sh
-git clone https://github.com/storytold/deckcraft
+git clone https://github.com/goyamamoto/deckcraft
 cd deckcraft
 cargo run --release -p deckcraft-cli -- render --sample --all --scale 1 out/
 ```
 
+The Japanese interface and the equation fonts come from two branches beside this repo:
+[goyamamoto/craft-i18n](https://github.com/goyamamoto/craft-i18n) `deckcraft-ja-fork` (the Japanese
+catalog) and [goyamamoto/craft-fonts](https://github.com/goyamamoto/craft-fonts)
+`deckcraft-math-fonts` (craft-fonts plus CMU Serif and STIX Two Math):
+
+```sh
+git clone -b deckcraft-math-fonts https://github.com/goyamamoto/craft-fonts ../craft-fonts
+git clone -b deckcraft-ja-fork https://github.com/goyamamoto/craft-i18n ../craft-i18n
+CRAFT_I18N_DIR="$PWD/../craft-i18n" cargo run --release -p deckcraft
+```
+
+Without them DeckCraft-ja builds with an English interface and draws equations in a fallback font.
+
 On Linux, the build also needs the ALSA headers for slide-show sound: `alsa-lib-devel` on Fedora,
 `libasound2-dev` on Debian and Ubuntu, `alsa-lib` on Arch. Without them it stops at `alsa-sys`.
 
-Fonts come from [craft-fonts](https://github.com/storytold/craft-fonts): clone it next to this repo
-(`../craft-fonts`) and local builds pick it up automatically; without it DeckCraft uses your system
-fonts.
+Fonts come from craft-fonts: a checkout next to this repo (`../craft-fonts`) is picked up
+automatically; without it DeckCraft uses your system fonts.
 
-Each [GitHub release](https://github.com/storytold/deckcraft/releases) has ready-made builds, on Linux as
+DeckCraft-ja has no ready-made builds yet; build it from source as above. Each upstream
+[DeckCraft release](https://github.com/storytold/deckcraft/releases) (without the Japanese work) has ready-made builds, on Linux as
 an AppImage, a `.deb`, an `.rpm` and a tarball. On Gentoo, the community [::snakebyte
 overlay](https://github.com/switch87/snakebyte-overlay) packages the Linux release as
 `app-office/deckcraft-bin` (not maintained by the DeckCraft team):
@@ -173,6 +179,9 @@ See [ROADMAP.md](ROADMAP.md) for the stage, numbers by dimension and what's next
 [docs/parity-checklist.md](docs/parity-checklist.md) for the feature-by-feature checklist.
 
 ## Downloads
+
+DeckCraft-ja has no releases of its own yet. These are upstream DeckCraft's builds, without the
+Japanese work.
 
 **Download DeckCraft** from GitHub: the [latest release](https://github.com/storytold/deckcraft/releases/latest) has every build listed below, and [all releases](https://github.com/storytold/deckcraft/releases) has earlier versions and their notes. `<ver>` in the file names is the version number, and `SHA256SUMS.txt` lists a checksum for every file.
 
@@ -271,46 +280,13 @@ ALSA headers).
 |---|---|---|
 | Static site | `deckcraft-web-<ver>.zip` | Runs in a modern browser; host it on any static server |
 
-## The Crafting Apps
+## Upstream
 
-DeckCraft is one of the **Crafting Apps**: free, open-source creative tools from the
-[ArtCraft](https://getartcraft.com/) team, each written from scratch in Rust and each able to
-stand on its own.
-
-| | App | What it's for | Code | Learn more |
-|:-:|---|---|---|---|
-| <img src="https://raw.githubusercontent.com/storytold/photocraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.photocraft.png" alt="" width="32" height="32"> | **PhotoCraft** | Image editing: layers, masks, type and real PSD files | [GitHub](https://github.com/storytold/photocraft) | [Website](https://getartcraft.com/apps/photocraft) |
-| <img src="https://raw.githubusercontent.com/storytold/vectorcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.vectorcraft.png" alt="" width="32" height="32"> | **VectorCraft** | Vector illustration | [GitHub](https://github.com/storytold/vectorcraft) | [Website](https://getartcraft.com/apps/vectorcraft) |
-| <img src="https://raw.githubusercontent.com/storytold/filmcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.filmcraft.png" alt="" width="32" height="32"> | **FilmCraft** | Video editing, color and sound | [GitHub](https://github.com/storytold/filmcraft) | [Website](https://getartcraft.com/apps/filmcraft) |
-| <img src="https://raw.githubusercontent.com/storytold/lightcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.lightcraft.png" alt="" width="32" height="32"> | **LightCraft** | Photo library and raw development | [GitHub](https://github.com/storytold/lightcraft) | [Website](https://getartcraft.com/apps/lightcraft) |
-| <img src="https://raw.githubusercontent.com/storytold/pdfcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.pdfcraft.png" alt="" width="32" height="32"> | **PdfCraft** | Reading, organizing and protecting PDFs | [GitHub](https://github.com/storytold/pdfcraft) | [Website](https://getartcraft.com/apps/pdfcraft) |
-| <img src="https://raw.githubusercontent.com/storytold/effectcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.effectcraft.png" alt="" width="32" height="32"> | **EffectCraft** | Motion graphics and visual effects | [GitHub](https://github.com/storytold/effectcraft) | [Website](https://getartcraft.com/apps/effectcraft) |
-| <img src="https://raw.githubusercontent.com/storytold/designcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.designcraft.png" alt="" width="32" height="32"> | **DesignCraft** | Page layout and publishing | [GitHub](https://github.com/storytold/designcraft) | [Website](https://getartcraft.com/apps/designcraft) |
-| <img src="https://raw.githubusercontent.com/storytold/deckcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.deckcraft.png" alt="" width="32" height="32"> | **DeckCraft** | **Presentations and slide shows · you are here** | [GitHub](https://github.com/storytold/deckcraft) | [Website](https://getartcraft.com/apps/deckcraft) |
-
-And [**ArtCraft**](https://getartcraft.com/) itself, our AI image and video studio for artists who want real control.
-
-<br>
-
-<p align="center">
-  <a href="https://discord.gg/artcraft"><img alt="Join the ArtCraft community on Discord" src="https://img.shields.io/badge/Join%20us%20on%20Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" height="40"></a>
-</p>
-
-<h3 align="center">Come make things with us</h3>
-
-<p align="center">
-  Our Discord is where artists of every kind hang out: people who paint, shoot, draw, cut film,
-  set type, and people still figuring out what they like to make. Share what you're working on,
-  ask for help, tell us what's broken, or tell us what you wish these tools could do.
-  Whatever your medium and however long you've been at it, you're welcome here.
-</p>
-
-<p align="center">
-  <a href="https://discord.gg/artcraft"><b>discord.gg/artcraft</b></a> ·
-  <a href="https://getartcraft.com/">getartcraft.com</a> ·
-  <a href="https://getartcraft.com/apps">The Crafting Apps</a> ·
-  <a href="https://getartcraft.com/apps/deckcraft">DeckCraft</a>
-</p>
+DeckCraft-ja follows [storytold/deckcraft](https://github.com/storytold/deckcraft) and adds the
+Japanese work measured against PowerPoint for Mac with Japanese as its editing language (the
+interface, line layout, fonts, input method, dates and units), equations from TeX, and a window per
+presentation with the native macOS menu bar. Changes are sent upstream as pull requests; the
+branch `goyamamoto/ja-language-support-gaps` holds them without this fork's naming.
 
 ## License and credits
 
@@ -323,12 +299,4 @@ with its author, source and license in [ATTRIBUTION.md](ATTRIBUTION.md).
 DeckCraft's themes, layouts, shape geometry, icons and sample decks are original work, drawn or
 generated in code; no proprietary artwork, fonts, themes or templates are used.
 
-The ArtCraft name, wordmark and logos in [`docs/brand/`](docs/brand/) are trademarks of the
-ArtCraft Team and are not covered by this license. They may be used only unmodified, and only as
-part of this repository and DeckCraft, under [`docs/brand/LICENSE-brand.txt`](docs/brand/LICENSE-brand.txt).
-Forks and modified versions must remove them.
-
-<p align="center">
-  <a href="https://getartcraft.com/"><img alt="ArtCraft" src="docs/brand/artcraft-mark.svg" width="28"></a><br>
-  <sub>Made by the <a href="https://getartcraft.com/">ArtCraft</a> team and community.</sub>
-</p>
+<sub>Microsoft and PowerPoint are trademarks of the Microsoft group of companies. DeckCraft-ja is an independent, open-source project and is not affiliated with, sponsored by or endorsed by Microsoft Corporation; the name is used only to describe the workflows it is compatible with.</sub>

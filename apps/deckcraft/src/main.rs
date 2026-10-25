@@ -306,7 +306,7 @@ fn main() -> eframe::Result {
     }
     let mut options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("DeckCraft")
+            .with_title(deckcraft_ui_egui::APP_NAME)
             .with_inner_size([1440.0, 900.0])
             .with_min_inner_size([900.0, 560.0])
             .with_drag_and_drop(true)
@@ -349,7 +349,7 @@ fn main() -> eframe::Result {
     // New windows start from the first window's chrome (title, size, icon, hidden title bar).
     let template = options.viewport.clone();
     eframe::run_native(
-        "DeckCraft",
+        deckcraft_ui_egui::APP_NAME,
         options,
         Box::new(move |cc| {
             // Japanese editing tags typed Japanese `ja-JP` and draws Han text without a language

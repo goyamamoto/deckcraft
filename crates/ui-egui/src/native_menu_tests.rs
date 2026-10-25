@@ -108,7 +108,7 @@ fn layout_has_mac_roles_and_only_existing_commands() {
     let bar = s.bar();
     assert_eq!(
         bar.menus.iter().map(|m| m.title.as_str()).collect::<Vec<_>>(),
-        ["DeckCraft", "File", "Edit", "View", "Insert", "Format", "Arrange", "Tools", "Slide Show", "Window", "Help"]
+        [crate::APP_NAME, "File", "Edit", "View", "Insert", "Format", "Arrange", "Tools", "Slide Show", "Window", "Help"]
     );
     assert_eq!(bar.menus[0].role, Role::App);
     assert_eq!(bar.menus[9].role, Role::Window);
@@ -124,7 +124,7 @@ fn layout_has_mac_roles_and_only_existing_commands() {
     assert_eq!(bar.find(MINIMIZE).unwrap().shortcut, Chord::parse("Cmd+M"));
     assert!(bar.find(ZOOM).unwrap().shortcut.is_none(), "Zoom has no key, as in PowerPoint");
     assert_eq!(bar.find("app.about").unwrap().label, "About DeckCraft");
-    assert_eq!(bar.find(QUIT).unwrap().label, "Quit DeckCraft");
+    assert_eq!(bar.find(QUIT).unwrap().label, format!("Quit {}", crate::APP_NAME));
     assert_eq!(bar.find("file.save").unwrap().shortcut, Chord::parse("Cmd+S"));
     assert_eq!(bar.find("app.openDialog").unwrap().shortcut, Chord::parse("Cmd+O"));
     assert_eq!(bar.find("view.gridlines").unwrap().shortcut, Chord::parse("Shift+F9"));
@@ -180,7 +180,7 @@ fn state_changes_keep_structure_and_language_refreshes_it() {
     let japanese = s.bar();
     assert_eq!(japanese.menus[1].title, "ファイル");
     assert_ne!(structure_key(&after), structure_key(&japanese), "titles are part of the structure");
-    assert!(japanese.find(QUIT).unwrap().label.contains("DeckCraft"));
+    assert!(japanese.find(QUIT).unwrap().label.contains(crate::APP_NAME));
 }
 
 /// The three shortcut spellings the commands use parse to the keys egui names; bare and Option
