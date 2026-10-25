@@ -25,6 +25,9 @@ an insertion point in text, and follows the equation when one is reopened. The f
 choice the way Word does: a display equation is an `m:oMathPara`, an inline one a bare `m:oMath`;
 `insert.equation {display?}` and `equation.at`'s `display` carry it on the control channel.
 
+The keyboard stays in the TeX editor while the dialog is open (the Display style switch, a Recent
+row or Clear hand it back after a click), with a steady caret in the accent colour.
+
 Every equation inserted is remembered (latest first, no repeats, twenty kept) in the dialog's
 Recent list, which is saved with the interface state (`ui.json`, `UiState::equations`); a row
 puts that TeX back in the editor, Clear forgets them.

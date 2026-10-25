@@ -2976,6 +2976,14 @@ pub struct EquationPreview {
 
 /// Point size the preview is set at (the inserted equation takes the text's own size).
 const EQUATION_PREVIEW_PT: f64 = 22.0;
+
+/// Put the TeX editor's caret after its text (a seeded or picked equation is edited at its end).
+fn equation_caret_to_end(ctx: &egui::Context, id: egui::Id, text: &str) {
+    let mut state = egui::TextEdit::load_state(ctx, id).unwrap_or_default();
+    let end = egui::text::CCursor::new(text.chars().count());
+    state.cursor.set_char_range(Some(egui::text::CCursorRange::one(end)));
+    state.store(ctx, id);
+}
 const EQUATION_DIALOG_W: f32 = 480.0;
 
 /// Insert ▸ Equation: TeX typed above, the equation drawn below as you type (the last good
@@ -3011,6 +3019,12 @@ fn equation_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             let _ = app.run("text.select", json!({"anchor": at["start"], "caret": at["end"]}));
         }
     }
+    let edit_id = crate::wid("equation-tex");
+    if d.fields.get("seeded").is_some_and(|v| v == "1") {
+        // The first frame: the caret after the seeded TeX (the editor's state outlives the dialog).
+        d.fields.insert("seeded".into(), "2".into());
+        equation_caret_to_end(ui.ctx(), edit_id, &d.get("tex", ""));
+    }
     let mut tex = d.get("tex", "");
     ui.set_min_width(EQUATION_DIALOG_W);
     ui.label(tl!("Type the equation in TeX; the preview follows as you type."));
@@ -3022,6 +3036,7 @@ fn equation_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         cursor.stroke = Stroke::new(2.0, t.accent);
     }
     let edit = egui::TextEdit::multiline(&mut tex)
+        .id(edit_id)
         .desired_rows(3)
         .desired_width(EQUATION_DIALOG_W)
         .font(egui::FontId::monospace(14.0))
@@ -3030,6 +3045,9 @@ fn equation_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     if !d.fields.contains_key("focused") {
         r.request_focus();
         d.fields.insert("focused".into(), "1".into());
+        // The focus takes effect next frame; ask for it now, else the caret waits for the
+        // next mouse move.
+        ui.ctx().request_repaint();
     }
     if r.changed() {
         d.fields.remove("error");
@@ -3135,6 +3153,7 @@ fn equation_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         }
     });
     if let Some(h) = pick {
+        equation_caret_to_end(ui.ctx(), edit_id, &h);
         d.fields.insert("tex".into(), h);
         d.fields.remove("error");
     }
@@ -3155,6 +3174,12 @@ fn equation_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             insert = true;
         }
     });
+    // The keyboard stays in the TeX editor while the dialog is open: a click on the Display
+    // style switch, a Recent row or Clear would otherwise take the focus (and the caret) with it.
+    if !insert && !cancel && !r.has_focus() {
+        r.request_focus();
+        ui.ctx().request_repaint();
+    }
     if insert {
         let tex = d.get("tex", "");
         let display = d.get("display", "1") == "1";
