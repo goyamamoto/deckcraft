@@ -4607,3 +4607,86 @@ fn insert_equation_at_the_caret_and_equation_at_finds_it() {
     assert_eq!(bad["error"]["pos"], json!(0));
     assert!(bad["error"]["message"].as_str().unwrap().contains("\\foo"));
 }
+
+fn equation_box(s: &mut Session, tex: &str) -> (u64, deckcraft_geom::Xfrm) {
+    s.execute("insert.equation", &json!({"tex": tex})).unwrap();
+    let st = s.active().unwrap();
+    let id = st.selected_shapes().first().map(|sh| sh.id.0 as u64).expect("the box is selected");
+    let x = text_box_xfrm(s, id);
+    (id, x)
+}
+
+fn equation_size_of(s: &Session, id: u64) -> f64 {
+    let st = s.active().unwrap();
+    cmd::equation::equation_size(st.shape(deckcraft_model::ShapeId(id as u32)).unwrap()).unwrap()
+}
+
+#[test]
+fn an_equation_box_hugs_its_equation_and_size_scales_it() {
+    let mut s = session();
+    let (id, x) = equation_box(&mut s, "x^2 + y^2 = z^2");
+    assert!(x.w > 20.0 && x.w < 120.0 && x.h < 40.0, "hugs the equation: {x:?}");
+    assert_eq!(equation_size_of(&s, id), 18.0);
+    s.execute("shape.resize", &json!({"w": x.w * 2.0})).unwrap();
+    assert!((equation_size_of(&s, id) - 36.0).abs() < 1e-9);
+    let x2 = text_box_xfrm(&s, id);
+    assert!((x2.w / x.w - 2.0).abs() < 0.05 && (x2.h / x.h - 2.0).abs() < 0.05, "the box follows the equation: {x:?} → {x2:?}");
+    // Sizing by height, and the Size dialog's lock, scale the same way.
+    s.execute("shape.resize", &json!({"h": x.h, "lockAspect": true})).unwrap();
+    assert!((equation_size_of(&s, id) - 18.0).abs() < 2.0, "{}", equation_size_of(&s, id));
+    // A plain text box still sizes its box, not its text.
+    s.execute("insert.textBox", &json!({"rect": [10, 10, 200, 40], "text": "words"})).unwrap();
+    let _ = s.execute("text.exit", &json!({}));
+    let tid = s.active().unwrap().selected_shapes()[0].id.0 as u64;
+    s.execute("shape.resize", &json!({"w": 400.0})).unwrap();
+    assert!((text_box_xfrm(&s, tid).w - 400.0).abs() < 1e-9);
+    let size = s.active().unwrap().shape(deckcraft_model::ShapeId(tid as u32)).unwrap().text.as_ref().unwrap().paragraphs[0].runs[0].props.size;
+    assert_eq!(size, None);
+}
+
+#[test]
+fn dragging_an_equation_box_handle_scales_the_equation_in_proportion() {
+    let mut s = session();
+    let (id, x) = equation_box(&mut s, "x^2 + y^2");
+    // The south-east corner, dragged to double the box.
+    let from = on_box(&x, x.w, x.h);
+    let down = drag_gesture(&mut s, from, (from.0 + x.w, from.1 + x.h));
+    assert_eq!(down["hit"]["kind"], "resize");
+    assert!((equation_size_of(&s, id) - 36.0).abs() < 0.5, "{}", equation_size_of(&s, id));
+    let x2 = text_box_xfrm(&s, id);
+    assert!((x2.w / x.w - 2.0).abs() < 0.25, "{x:?} → {x2:?}");
+    assert!((x2.x - x.x).abs() < 1e-6 && (x2.y - x.y).abs() < 1e-6, "the top-left stays");
+    // The right-hand side handle scales the whole equation too, so the height follows.
+    let from = on_box(&x2, x2.w, x2.h / 2.0);
+    drag_gesture(&mut s, from, (from.0 - x2.w / 2.0, from.1));
+    assert!((equation_size_of(&s, id) - 18.0).abs() < 1.0, "{}", equation_size_of(&s, id));
+    let x3 = text_box_xfrm(&s, id);
+    assert!((x3.h / x2.h - 0.5).abs() < 0.25, "the height followed: {x2:?} → {x3:?}");
+    // Undo takes the whole drag back in one step.
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!((equation_size_of(&s, id) - 36.0).abs() < 0.5);
+}
+
+#[test]
+fn a_selected_equation_box_is_found_by_equation_at_and_double_click_opens_the_dialog() {
+    let mut s = session();
+    let (id, x) = equation_box(&mut s, "\\sqrt{2}");
+    let at = s.execute("equation.at", &json!({})).unwrap();
+    assert_eq!(at["tex"], "\\sqrt{2}");
+    assert_eq!(at["id"], json!(id));
+    assert_eq!(at["start"], json!([0, 0]));
+    // Deselected: nothing.
+    s.execute("edit.deselect", &json!({})).unwrap();
+    assert_eq!(s.execute("equation.at", &json!({})).unwrap(), Value::Null);
+    // A double-click on the box asks for the Equation dialog instead of placing a caret.
+    s.ui_requests.clear();
+    let (px, py) = on_box(&x, x.w / 2.0, x.h / 2.0);
+    let ev = |kind| PointerEvent { kind, x: px, y: py, mods: Mods::default(), tol: 3.0, pressure: None };
+    s.pointer(ev(PointerKind::Down)).unwrap();
+    s.pointer(ev(PointerKind::Up)).unwrap();
+    s.pointer(ev(PointerKind::DoubleClick)).unwrap();
+    assert!(s.ui_requests.iter().any(|r| matches!(r, UiRequest::Dialog { id, .. } if id == "equation")), "{:?}", s.ui_requests);
+    let st = s.active().unwrap();
+    assert!(st.selection.text.is_none(), "no caret: the dialog edits it");
+    assert_eq!(st.selection.shapes, vec![deckcraft_model::ShapeId(id as u32)]);
+}

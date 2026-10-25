@@ -145,6 +145,8 @@ enum Drag {
         handle: u8,
         orig: Xfrm,
         start: Point,
+        /// An equation box's font size at the start: the drag scales it with the box.
+        font: Option<f64>,
     },
     LineEnd {
         id: ShapeId,
@@ -625,8 +627,10 @@ impl Session {
             Some(Hit::TableRow { id, row }) => self.begin_table_border(id, false, row, p)?,
             Some(Hit::Resize { id, handle }) => {
                 let orig = st.shape(id).map(|s| xfrm_of(&st.doc, &st.selection, s)).unwrap_or_default();
+                // An equation box's handles scale the equation (its font size) with the box.
+                let font = st.shape(id).and_then(cmd::equation::equation_size);
                 self.begin("Size");
-                self.tool.drag = Some(Drag::Resize { id, handle, orig, start: p });
+                self.tool.drag = Some(Drag::Resize { id, handle, orig, start: p, font });
             }
             Some(Hit::LineEnd { id, end }) => {
                 let orig = st.shape(id).map(|s| xfrm_of(&st.doc, &st.selection, s)).unwrap_or_default();
@@ -797,10 +801,21 @@ impl Session {
                 self.tool.drag =
                     Some(Drag::Move { ids: ids_now, start, origs: origs2, moved: true, duplicate: false, enter_text: enter_text.filter(|_| false) });
             }
-            Drag::Resize { id, handle, orig, start } => {
-                let nx = resize_box(&orig, handle, p - start, mods.shift || self.is_picture(id), mods.alt);
+            Drag::Resize { id, handle, orig, start, font } => {
+                let nx = resize_box(&orig, handle, p - start, mods.shift || self.is_picture(id) || font.is_some(), mods.alt);
                 let nx = self.snap_resize(nx, &orig, handle, id, tol);
-                self.set_xfrm(id, nx)?;
+                match font {
+                    // The equation scales by the dragged side's ratio and keeps its proportions:
+                    // laid out afresh at the new size, so it stays sharp at any size.
+                    Some(size) => {
+                        let ratio = if matches!(handle, 1 | 5) { nx.h / orig.h.max(1e-9) } else { nx.w / orig.w.max(1e-9) };
+                        let ratio = if ratio.is_finite() { ratio.abs().clamp(0.01, 100.0) } else { 1.0 };
+                        let nx = if orig.rot == 0.0 && matches!(handle, 1 | 3 | 5 | 7) { scaled_box(&orig, handle, ratio) } else { nx };
+                        cmd::equation::set_equation_size(self, id, size * ratio)?;
+                        self.set_xfrm(id, nx)?;
+                    }
+                    None => self.set_xfrm(id, nx)?,
+                }
             }
             Drag::LineEnd { id, end, orig } => {
                 let a = orig.affine();
@@ -1167,6 +1182,22 @@ impl Session {
         // The double-click's second press started a click (caret on release): this replaces it.
         if matches!(self.tool.drag, Some(Drag::Move { moved: false, .. })) {
             self.tool.drag = None;
+        }
+        // An equation box (being edited after the first click, or hit): the Equation dialog
+        // edits its equation; no caret, no word selection.
+        let st = self.doc()?;
+        let edited = st.selection.text.as_ref().map(|t| t.shape).filter(|id| st.shape(*id).is_some_and(cmd::equation::equation_box));
+        let hit_eq = match self.hit_test(p, tol) {
+            Some(Hit::Shape { id, .. }) => st.shape(id).filter(|sh| cmd::equation::equation_box(sh)).map(|_| id),
+            _ => None,
+        };
+        if let Some(id) = edited.or(hit_eq) {
+            self.select(|_, sel| {
+                sel.shapes = vec![id];
+                sel.text = None;
+            })?;
+            self.ui_requests.push(crate::UiRequest::Dialog { id: "equation".into(), params: json!({}) });
+            return Ok(Value::Null);
         }
         // In the text being edited: select the word double-clicked.
         if self.place_caret(p, tol, false)?.is_some() {
@@ -1681,6 +1712,24 @@ fn is_text_first(st: &crate::DocState, id: ShapeId) -> bool {
 }
 
 /// The topmost text-holding shape under `p` inside group `sh`, recursing into nested groups.
+/// `o` scaled by `ratio` about the side opposite handle `h` (an equation box dragged by a side
+/// handle keeps its proportions): the left handle keeps the right edge, the top handle the
+/// bottom edge, the other dimension its centre.
+fn scaled_box(o: &Xfrm, h: u8, ratio: f64) -> Xfrm {
+    let (w, hh) = (o.w * ratio, o.h * ratio);
+    let x = match h {
+        7 => o.x + o.w - w,
+        3 => o.x,
+        _ => o.x + (o.w - w) / 2.0,
+    };
+    let y = match h {
+        1 => o.y + o.h - hh,
+        5 => o.y,
+        _ => o.y + (o.h - hh) / 2.0,
+    };
+    Xfrm { x, y, w, h: hh, ..*o }
+}
+
 /// Group children live in the group's child space (`ShapeKind::Group::child`), so the point is
 /// mapped through `group_child_affine`, exactly as `hit_shape` does for group hit-testing.
 fn text_member_at(st: &crate::DocState, sh: &Shape, p: Point, tol: f64) -> Option<ShapeId> {
