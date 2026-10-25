@@ -26,7 +26,12 @@ choice the way Word does: a display equation is an `m:oMathPara`, an inline one 
 `insert.equation {display?}` and `equation.at`'s `display` carry it on the control channel.
 
 The keyboard stays in the TeX editor while the dialog is open (the Display style switch, a Recent
-row or Clear hand it back after a click), with a steady caret in the accent colour.
+row or Clear hand it back after a click), with a steady caret in the accent colour inside a field
+that shows an accent ring while it has the keyboard. On macOS the desktop app takes the window's
+focus state from AppKit (`raw_input_hook` in `apps/deckcraft/src/main.rs`): egui draws a text
+field's caret only while its viewport is focused, and the focus event for the first window could
+go missing, which left the caret invisible until another window had taken the focus and given it
+back. `ui.inspect` reports the flag as `viewportFocused`.
 
 Every equation inserted is remembered (latest first, no repeats, twenty kept) in the dialog's
 Recent list, which is saved with the interface state (`ui.json`, `UiState::equations`); a row
