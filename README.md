@@ -125,7 +125,7 @@ On Linux, the build also needs the ALSA headers for slide-show sound: `alsa-lib-
 Fonts come from craft-fonts: a checkout next to this repo (`../craft-fonts`) is picked up
 automatically; without it DeckCraft uses your system fonts.
 
-DeckCraft-ja has no ready-made builds yet; build it from source as above. Each upstream
+Each upstream
 [DeckCraft release](https://github.com/storytold/deckcraft/releases) (without the Japanese work) has ready-made builds, on Linux as
 an AppImage, a `.deb`, an `.rpm` and a tarball. On Gentoo, the community [::snakebyte
 overlay](https://github.com/switch87/snakebyte-overlay) packages the Linux release as
@@ -180,8 +180,20 @@ See [ROADMAP.md](ROADMAP.md) for the stage, numbers by dimension and what's next
 
 ## Downloads
 
-DeckCraft-ja has no releases of its own yet. These are upstream DeckCraft's builds, without the
-Japanese work.
+**DeckCraft-ja** builds are on [this fork's releases](https://github.com/goyamamoto/deckcraft/releases):
+macOS (universal DMG), Windows x64 (MSI and portable zip) and Linux x86_64 / aarch64 (AppImage,
+.deb, .rpm, tarball), with the Japanese interface and the equation fonts built in. They are **not
+signed or notarized**; clear the quarantine yourself:
+
+- macOS: copy DeckCraft.app from the DMG to Applications, then run
+  `xattr -dr com.apple.quarantine /Applications/DeckCraft.app` before opening it.
+- Windows: `Unblock-File <file>` in PowerShell (or Properties › Unblock); if SmartScreen appears,
+  More info › Run anyway.
+
+DeckCraft-ja のビルド済みファイルは [Releases](https://github.com/goyamamoto/deckcraft/releases) にあります。
+署名・公証をしていないので、macOS では「アプリケーション」にコピーしたあと
+`xattr -dr com.apple.quarantine /Applications/DeckCraft.app` を、Windows では `Unblock-File` を各自で実行してください。
+The rest of this section describes upstream DeckCraft's own releases, without the Japanese work.
 
 **Download DeckCraft** from GitHub: the [latest release](https://github.com/storytold/deckcraft/releases/latest) has every build listed below, and [all releases](https://github.com/storytold/deckcraft/releases) has earlier versions and their notes. `<ver>` in the file names is the version number, and `SHA256SUMS.txt` lists a checksum for every file.
 
