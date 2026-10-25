@@ -26,13 +26,14 @@ equation the caret touches, as TeX with its character range) and `equation.check
 
 ## Sizing and editing an equation box
 
-The text box Insert ▸ Equation makes hugs its equation (no wrapping, no insets), so its handles sit
-on the equation. Dragging a handle scales the equation itself — its font size follows the
-dragged side's ratio, corner and side handles alike keep its proportions — and the equation is
-laid out afresh at the new size, so it stays sharp at any size (nothing is stretched as a
-picture). Shape Format ▸ Size, the Size and Position dialog and `shape.resize {w | h}` scale it the
-same way; Home ▸ Font Size does too. A box with words beside the equation is an ordinary text box
-and sizes as one.
+The text box Insert ▸ Equation makes hugs its equation (no wrapping, 2 pt insets so the caret
+beside the equation stays inside the frame), so its handles sit on the equation. Dragging a
+handle scales the equation itself — its font size follows the dragged side's ratio, measured on
+the equation inside the box (the insets never scale), corner and side handles alike keep its
+proportions — and the equation is laid out afresh at the new size, so it stays sharp at any size
+(nothing is stretched as a picture). Shape Format ▸ Size, the Size and Position dialog and
+`shape.resize {w | h}` scale it the same way; Home ▸ Font Size does too. A box with words beside
+the equation is an ordinary text box and sizes as one.
 
 Double-clicking an equation box opens the Equation dialog on its TeX, as does Insert ▸ Equation
 while the box is selected (click an empty part of the slide first to insert a new equation
@@ -77,8 +78,21 @@ equation opens as readable TeX.
 Every OMML run carries `<a:rPr><a:latin typeface="Cambria Math"/></a:rPr>`, as PowerPoint writes
 its own (its math font); the fallback run names it too. On import the first `a:rPr` inside the
 equation gives the run its font, size and colour, and the run's text is the linear form of the
-OMML read (what Find searches). The font database stands in for Cambria Math with Caladea
-(metric-compatible) where it is not installed.
+OMML read (what Find searches).
+
+### The font
+
+Cambria Math is what the file says (PowerPoint's math font, so the deck opens right there); what
+DeckCraft draws is TeX's: letters, digits and Greek in **CMU Serif** (Computer Modern Unicode
+0.7.0, OFL-1.1, the Computer Modern faces as OpenType — Roman, Italic, Bold, Bold Italic), the
+operators and relations it lacks (∑ ∫ ≤ ∞ ⟨ …) in **STIX Two Math** (OFL-1.1), both bundled
+through craft-fonts' Latin manifest. That holds even where Cambria Math is installed
+(`MathFaces::new`); the font box shows Cambria Math. Another family picked in the font box draws
+the equation in that family, its missing symbols from a math font (`MATH_SYMBOL_FONTS`: STIX Two
+Math, Latin Modern Math, Cambria Math, XITS, Libertinus, Noto Sans Math, as installed) before the
+general fallback. Latin Modern Math would be TeX's own math font in one file, but its GUST Font
+License is not in the asset policy's list (AGENTS.md §1.2), so it is only used when the machine
+has it. A build without craft-fonts draws Cambria Math as Caladea.
 
 ## Drawing
 
@@ -110,8 +124,9 @@ text and Morph skip the paths.
 - PowerPoint for Mac's rendering of the OMML DeckCraft writes was not observed on this machine;
   the OMML follows the standard and the structure of files PowerPoint writes (`a14:m` in
   `mc:AlternateContent`, Cambria Math on every run).
-- Layout constants are TeX's (Computer Modern), not Cambria Math's MATH table; sizes and spacing
-  are close to PowerPoint's, not measured against it.
+- Layout constants are TeX's (Computer Modern), not read from a MATH table; sizes and spacing
+  are close to PowerPoint's, not measured against it. Large operators are the text-size glyph
+  scaled (no display-size variants).
 - Equation text is not editable character by character on the slide (Backspace removes the whole
   equation); the dialog edits it.
 - The linear form uses a few of UnicodeMath's characters (▒, ■, ¦) so the fallback text stays

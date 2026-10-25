@@ -808,8 +808,18 @@ impl Session {
                     // The equation scales by the dragged side's ratio and keeps its proportions:
                     // laid out afresh at the new size, so it stays sharp at any size.
                     Some(size) => {
-                        let ratio = if matches!(handle, 1 | 5) { nx.h / orig.h.max(1e-9) } else { nx.w / orig.w.max(1e-9) };
-                        let ratio = if ratio.is_finite() { ratio.abs().clamp(0.01, 100.0) } else { 1.0 };
+                        let by_height = matches!(handle, 1 | 5);
+                        let ratio = self
+                            .active()
+                            .and_then(|st| st.shape(id))
+                            .and_then(|sh| {
+                                cmd::equation::scale_ratio(
+                                    sh,
+                                    (orig.w, orig.h),
+                                    if by_height { (None, Some(nx.h.abs())) } else { (Some(nx.w.abs()), None) },
+                                )
+                            })
+                            .unwrap_or(1.0);
                         let nx = if orig.rot == 0.0 && matches!(handle, 1 | 3 | 5 | 7) { scaled_box(&orig, handle, ratio) } else { nx };
                         cmd::equation::set_equation_size(self, id, size * ratio)?;
                         self.set_xfrm(id, nx)?;
@@ -1717,6 +1727,11 @@ fn is_text_first(st: &crate::DocState, id: ShapeId) -> bool {
 /// bottom edge, the other dimension its centre.
 fn scaled_box(o: &Xfrm, h: u8, ratio: f64) -> Xfrm {
     let (w, hh) = (o.w * ratio, o.h * ratio);
+    scaled_box_to(o, h, w, hh)
+}
+
+/// `o` at `w` × `hh`, anchored like [`scaled_box`].
+fn scaled_box_to(o: &Xfrm, h: u8, w: f64, hh: f64) -> Xfrm {
     let x = match h {
         7 => o.x + o.w - w,
         3 => o.x,

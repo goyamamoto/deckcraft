@@ -4627,10 +4627,14 @@ fn an_equation_box_hugs_its_equation_and_size_scales_it() {
     let (id, x) = equation_box(&mut s, "x^2 + y^2 = z^2");
     assert!(x.w > 20.0 && x.w < 120.0 && x.h < 40.0, "hugs the equation: {x:?}");
     assert_eq!(equation_size_of(&s, id), 18.0);
+    // The equation inside the box (less its 2 pt insets) is what doubles.
+    let inset = 2.0 * cmd::equation::BOX_INSET;
     s.execute("shape.resize", &json!({"w": x.w * 2.0})).unwrap();
-    assert!((equation_size_of(&s, id) - 36.0).abs() < 1e-9);
+    let expect = 18.0 * (x.w * 2.0 - inset) / (x.w - inset);
+    assert!((equation_size_of(&s, id) - expect).abs() < 1e-6, "{} vs {expect}", equation_size_of(&s, id));
     let x2 = text_box_xfrm(&s, id);
-    assert!((x2.w / x.w - 2.0).abs() < 0.05 && (x2.h / x.h - 2.0).abs() < 0.05, "the box follows the equation: {x:?} → {x2:?}");
+    let (rw, rh) = ((x2.w - inset) / (x.w - inset), (x2.h - inset) / (x.h - inset));
+    assert!((rw - expect / 18.0).abs() < 0.05 && (rh - expect / 18.0).abs() < 0.05, "the box follows the equation: {x:?} → {x2:?}");
     // Sizing by height, and the Size dialog's lock, scale the same way.
     s.execute("shape.resize", &json!({"h": x.h, "lockAspect": true})).unwrap();
     assert!((equation_size_of(&s, id) - 18.0).abs() < 2.0, "{}", equation_size_of(&s, id));
@@ -4652,19 +4656,22 @@ fn dragging_an_equation_box_handle_scales_the_equation_in_proportion() {
     let from = on_box(&x, x.w, x.h);
     let down = drag_gesture(&mut s, from, (from.0 + x.w, from.1 + x.h));
     assert_eq!(down["hit"]["kind"], "resize");
-    assert!((equation_size_of(&s, id) - 36.0).abs() < 0.5, "{}", equation_size_of(&s, id));
+    let inset = 2.0 * cmd::equation::BOX_INSET;
+    let expect = 18.0 * (x.w * 2.0 - inset) / (x.w - inset);
+    assert!((equation_size_of(&s, id) - expect).abs() < 0.5, "{} vs {expect}", equation_size_of(&s, id));
     let x2 = text_box_xfrm(&s, id);
-    assert!((x2.w / x.w - 2.0).abs() < 0.25, "{x:?} → {x2:?}");
+    assert!(((x2.w - inset) / (x.w - inset) - expect / 18.0).abs() < 0.25, "{x:?} → {x2:?}");
     assert!((x2.x - x.x).abs() < 1e-6 && (x2.y - x.y).abs() < 1e-6, "the top-left stays");
     // The right-hand side handle scales the whole equation too, so the height follows.
     let from = on_box(&x2, x2.w, x2.h / 2.0);
     drag_gesture(&mut s, from, (from.0 - x2.w / 2.0, from.1));
-    assert!((equation_size_of(&s, id) - 18.0).abs() < 1.0, "{}", equation_size_of(&s, id));
+    let expect2 = expect * (x2.w / 2.0 - inset) / (x2.w - inset);
+    assert!((equation_size_of(&s, id) - expect2).abs() < 1.0, "{} vs {expect2}", equation_size_of(&s, id));
     let x3 = text_box_xfrm(&s, id);
-    assert!((x3.h / x2.h - 0.5).abs() < 0.25, "the height followed: {x2:?} → {x3:?}");
+    assert!(((x3.h - inset) / (x2.h - inset) - expect2 / expect).abs() < 0.25, "the height followed: {x2:?} → {x3:?}");
     // Undo takes the whole drag back in one step.
     s.execute("edit.undo", &json!({})).unwrap();
-    assert!((equation_size_of(&s, id) - 36.0).abs() < 0.5);
+    assert!((equation_size_of(&s, id) - expect).abs() < 0.5);
 }
 
 #[test]

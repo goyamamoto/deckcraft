@@ -3004,6 +3004,13 @@ fn equation_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     let mut tex = d.get("tex", "");
     ui.set_min_width(EQUATION_DIALOG_W);
     ui.label(tl!("Type the equation in TeX; the preview follows as you type."));
+    // A steady caret, two points wide, in the accent colour: the place being edited must be
+    // easy to find in a line of TeX.
+    {
+        let cursor = &mut ui.visuals_mut().text_cursor;
+        cursor.blink = false;
+        cursor.stroke = Stroke::new(2.0, t.accent);
+    }
     let edit = egui::TextEdit::multiline(&mut tex)
         .desired_rows(3)
         .desired_width(EQUATION_DIALOG_W)

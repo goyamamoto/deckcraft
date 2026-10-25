@@ -528,9 +528,11 @@ impl Cx<'_> {
         let p2 = kurbo::Point::new(x0 + 0.54 * ws, bottom);
         let p3 = kurbo::Point::new(x0 + ws, bar_top + theta / 2.0);
         let mut out = Layout::default();
-        out.paths.push(stroke(&[p0, p1], theta * 0.9));
-        out.paths.push(stroke(&[p1, p2], theta * 1.7));
-        out.paths.push(stroke(&[p2, p3], theta * 0.95));
+        // Strokes as Computer Modern draws its radical: a hairline tick, a heavier down stroke,
+        // a lighter up stroke.
+        out.paths.push(stroke(&[p0, p1], theta * 0.75));
+        out.paths.push(stroke(&[p1, p2], theta * 1.35));
+        out.paths.push(stroke(&[p2, p3], theta * 0.85));
         let bx = x0 + ws;
         out.add(body_lay, bx + 0.04 * em, 0.0);
         let bar = Rect::new(bx - theta * 0.4, bar_top, out.width + 0.08 * em, bar_top + theta);
