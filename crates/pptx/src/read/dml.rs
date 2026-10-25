@@ -606,15 +606,28 @@ pub fn paragraph(imp: &mut Imp, part: &Part, p: &El) -> Paragraph {
                 para.runs.push(Run { text, props, kind: RunKind::Field { field: e.attr("type").unwrap_or("").to_string() } });
             }
             "m" => {
-                // Office Math (a14:m) — keep the OMML and its plain text.
+                // Office Math (a14:m) — keep the OMML and its plain text. The run's formatting
+                // (the math font, size, colour) is the first `a:rPr` inside: PowerPoint writes
+                // one in every `m:r` (`m:rPr` is the equation's own style, not DrawingML's).
                 let mut text = String::new();
                 let mut ts = vec![];
                 e.find_all("t", &mut ts);
                 for t in ts {
                     text.push_str(&t.text());
                 }
+                let mut rprs = vec![];
+                e.find_all("rPr", &mut rprs);
+                let props = rprs.iter().find(|r| r.prefix() == "a").map(|r| rpr(imp, part, r)).unwrap_or_default();
                 let omml = e.elements().map(|c| part.keep_inner(c)).collect::<String>();
-                para.runs.push(Run { text, props: RunProps::default(), kind: RunKind::Math { omml } });
+                // The run's text is the equation's linear form (what Find searches and the
+                // fallback shows), as DeckCraft writes it; the pieces of `m:t` when the OMML
+                // has nothing it reads.
+                let text = deckcraft_math::omml::read(&omml)
+                    .filter(|m| !m.is_empty())
+                    .map(|m| deckcraft_math::linear::linear(&m))
+                    .filter(|t| !t.is_empty())
+                    .unwrap_or(text);
+                para.runs.push(Run { text, props, kind: RunKind::Math { omml } });
             }
             "endParaRPr" => para.end_props = rpr(imp, part, e),
             _ => {}

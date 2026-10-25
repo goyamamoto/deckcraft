@@ -187,7 +187,7 @@ Features row of the dimension table keeps ~62% until the next full re-measure). 
 | Shapes | 7 | 91% | ~75% | 8–14 | Edit points depth, WordArt depth (the Transform gallery and warp adjust handles are in) | [ui-parity.md](ui-parity.md) |
 | Format (fill, line, effects) | 6 | 83% | ~65% | 8–14 | Format Shape pane depth, bevel and 3-D, picture/texture fill options | [ui-parity.md](ui-parity.md) |
 | Arrange | 3 | 100% | ~90% | 1–2 | More Rotation Options | [ui-parity.md](ui-parity.md) |
-| Text | 15 | 85% | ~62% | 18–30 | Font weights beyond Regular/Bold/Italic (#69), dictionaries, AutoFormat as you type, thesaurus depth, equations (PR #55 open) | [localization-parity.md](localization-parity.md) |
+| Text | 15 | 85% | ~62% | 18–30 | Font weights beyond Regular/Bold/Italic (#69), dictionaries, AutoFormat as you type, thesaurus depth, in-place equation editing | [localization-parity.md](localization-parity.md) |
 | Tables | 5 | 97% | ~75% | 3–6 | Draw table depth, borders and cell effects depth | [parity-checklist.md](parity-checklist.md) |
 | Charts | 7 | 65% | ~45% | 12–20 | Data grid editing, chart elements, the `chartex` types (waterfall, funnel, treemap, sunburst, histogram, box) | [parity-checklist.md](parity-checklist.md) |
 | SmartArt | 4 | 50% | ~35% | 8–14 | PowerPoint diagrams editable (read their data model), the data model on save, more layouts | [parity-checklist.md](parity-checklist.md) |

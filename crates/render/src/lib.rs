@@ -2210,8 +2210,54 @@ pub fn draw_layout_with(ctx: &mut RenderContext, l: &deckcraft_text::TextLayout,
             draw_glyph_with(ctx, run, *gid, at, ps.opacity, fill);
         }
     }
+    // Equation strokes: stretched delimiters, radical signs, braces.
+    for p in &l.paths {
+        if p.alpha <= 0.0 || p.color.a == 0 {
+            continue;
+        }
+        let ps = para(p.para);
+        if !ps.visible || ps.opacity <= 0.001 {
+            continue;
+        }
+        ctx.set_transform(m * Affine::translate(ps.offset));
+        ctx.set_paint(color(p.color, ps.opacity * p.alpha));
+        ctx.fill_path(&p.path);
+    }
     for d in l.decos.iter().filter(|d| !d.behind) {
         deco(ctx, d);
+    }
+}
+
+/// An equation on its own, for a preview: `m` at `size` points in `family` (the run font an
+/// inserted equation gets), drawn in `color` on a transparent canvas at `px_per_pt` pixels per
+/// point with a quarter-size margin. `None` for sizes that make no picture; a panic draws
+/// nothing (logged), never a crash.
+pub fn render_equation(m: &deckcraft_math::Math, family: &str, size: f64, px_per_pt: f64, color: Rgba) -> Option<Image> {
+    if !(px_per_pt.is_finite() && px_per_pt > 0.0 && size.is_finite() && size > 0.0) {
+        return None;
+    }
+    let l = deckcraft_text::equation_layout(m, family, size, color);
+    let pad = size * 0.3;
+    let (w_pt, h_pt) = (l.inner.width() + 2.0 * pad, l.inner.height() + 2.0 * pad);
+    if !(w_pt.is_finite() && h_pt.is_finite() && w_pt > 0.0 && h_pt > 0.0) {
+        return None;
+    }
+    let k = px_per_pt.min(MAX_SIDE as f64 / w_pt.max(h_pt));
+    let w = (w_pt * k).ceil().clamp(1.0, MAX_SIDE as f64) as u16;
+    let h = (h_pt * k).ceil().clamp(1.0, MAX_SIDE as f64) as u16;
+    let tr = Rect::new(0.0, 0.0, w_pt, h_pt);
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut ctx = RenderContext::new_with(w, h, vello_cpu::RenderSettings { num_threads: 0, ..Default::default() });
+        draw_layout(&mut ctx, &l, tr, Affine::scale(k) * Affine::translate((pad, pad)));
+        RENDERER.with(|r| r.borrow_mut().finish(ctx, w, h))
+    })) {
+        Ok(img) => Some(img),
+        Err(_) => {
+            log::error!("rendering an equation preview panicked; showing none");
+            note_panic();
+            RENDERER.with(|r| *r.borrow_mut() = Renderer::default());
+            None
+        }
     }
 }
 

@@ -1,7 +1,7 @@
 use super::*;
 use deckcraft_model::Fill;
 use deckcraft_model::defaults;
-use deckcraft_model::text::{Paragraph, Run};
+use deckcraft_model::text::{Paragraph, Run, RunKind, RunProps};
 use deckcraft_model::{LayoutType, Presentation, Xfrm};
 
 mod japanese;
@@ -149,7 +149,7 @@ fn ligatures_stay_for_scripts_that_need_them() {
     let has = |f: &[deckcraft_fonts::Feature], tag: &str| f.iter().any(|x| Some(*x) == deckcraft_fonts::feature(tag));
     let cells = |s: &str| {
         s.chars()
-            .map(|ch| Cell { ch, style: 0, face: 0, level: 0, glyphs: vec![], adv: 0.0, head: 0, boundary: true, upright: false })
+            .map(|ch| Cell { ch, style: 0, face: 0, level: 0, glyphs: vec![], adv: 0.0, head: 0, boundary: true, upright: false, object: None })
             .collect::<Vec<_>>()
     };
     let latin = shaping_features(&cells("office"), &[], Some(*b"Latn"));
@@ -1879,4 +1879,79 @@ fn a_missing_japanese_east_asian_font_takes_a_stand_in_of_its_kind() {
     if db.has_family("Hiragino Mincho ProN") {
         assert_eq!(kanji_face("ヒラギノ明朝 ProN"), "Hiragino Mincho ProN");
     }
+}
+
+fn math_run(tex: &str) -> Run {
+    let (omml, text) = deckcraft_math::tex_to_omml(tex).expect("tex");
+    Run { text, props: RunProps::default(), kind: RunKind::Math { omml } }
+}
+
+fn with_runs(runs: Vec<Run>, w: f64) -> (Presentation, Shape) {
+    let (p, mut sh) = setup("", w, 200.0);
+    sh.text = Some(TextBody { paragraphs: vec![Paragraph { runs, ..Default::default() }], ..Default::default() });
+    (p, sh)
+}
+
+#[test]
+fn an_equation_run_is_one_cluster_drawn_in_two_dimensions() {
+    let (p, sh) = with_runs(vec![math_run("\\frac{a}{b}")], 400.0);
+    let l = lay(&p, &sh, 400.0, 200.0);
+    let text = sh.text.as_ref().unwrap().paragraphs[0].runs[0].text.clone();
+    assert_eq!(l.texts[0], text);
+    // A fraction bar, and glyphs on two baselines.
+    assert!(l.decos.iter().any(|d| !d.behind && d.rect.height() < 3.0 && d.rect.width() > 3.0), "{:?}", l.decos);
+    let mut ys: Vec<i64> = l.runs.iter().flat_map(|r| r.glyphs.iter().map(|g| (g.2 * 10.0).round() as i64)).collect();
+    ys.sort_unstable();
+    ys.dedup();
+    assert!(ys.len() >= 2, "{ys:?}");
+    // One cluster: carets stand only before and after it, the head cell is as wide as the equation.
+    assert_eq!(l.boundaries[0].iter().filter(|b| **b).count(), 2, "{:?}", l.boundaries[0]);
+    let line = &l.lines[0];
+    assert!(line.edges[0].1 - line.edges[0].0 > 5.0, "{:?}", line.edges);
+    assert!(line.edges.iter().skip(1).all(|e| (e.1 - e.0).abs() < 1e-9), "{:?}", line.edges);
+    // The line grows to hold it.
+    let (p2, plain) = with_runs(vec![Run::with("a/b", RunProps::default())], 400.0);
+    let pl = lay(&p2, &plain, 400.0, 200.0);
+    assert!(
+        line.bottom - line.top > pl.lines[0].bottom - pl.lines[0].top + 4.0,
+        "{} vs {}",
+        line.bottom - line.top,
+        pl.lines[0].bottom - pl.lines[0].top
+    );
+}
+
+#[test]
+fn an_inline_equation_pushes_the_text_after_it_along() {
+    let (p, sh) = with_runs(vec![Run::with("x = ", RunProps::default()), math_run("\\sqrt{y}"), Run::with(" holds", RunProps::default())], 400.0);
+    let l = lay(&p, &sh, 400.0, 200.0);
+    let line = &l.lines[0];
+    let eq_start = 4;
+    let eq_len = l.texts[0].chars().count() - 4 - 6;
+    let eq = line.edges[eq_start];
+    assert!(eq.1 - eq.0 > 8.0, "{eq:?}");
+    let h = line.edges[eq_start + eq_len];
+    assert!(h.0 >= eq.1 - 0.01, "the text after the equation starts after it: {h:?} vs {eq:?}");
+    assert_eq!(l.paths.len(), 3, "the radical sign's strokes");
+    assert!(l.paths.iter().all(|tp| tp.path.bounding_box().x0 >= eq.0 - 1.0 && tp.path.bounding_box().x1 <= eq.1 + 1.0));
+}
+
+#[test]
+fn unreadable_omml_draws_the_run_text() {
+    let run = Run { text: "a+b".into(), props: RunProps::default(), kind: RunKind::Math { omml: "<m:oMath><m:r>".into() } };
+    let (p, sh) = with_runs(vec![run], 400.0);
+    let l = lay(&p, &sh, 400.0, 200.0);
+    // Three glyphs for the text (the body placeholder's bullet has no cells).
+    let n: usize = l.runs.iter().filter(|r| !r.cells.is_empty()).map(|r| r.glyphs.len()).sum();
+    assert_eq!(n, 3);
+}
+
+#[test]
+fn equation_layout_previews_an_equation_on_its_own() {
+    let m = deckcraft_math::parse_tex("\\sqrt{x} + \\frac{1}{2}").unwrap();
+    let l = equation_layout(&m, "Cambria Math", 24.0, deckcraft_color::Rgba::rgb(10, 20, 30));
+    assert!(l.inner.width() > 30.0 && l.inner.height() > 20.0, "{:?}", l.inner);
+    assert!(!l.runs.is_empty() && l.runs.iter().all(|r| r.color == deckcraft_color::Rgba::rgb(10, 20, 30)));
+    assert_eq!(l.paths.len(), 3);
+    assert_eq!(l.decos.len(), 2, "overbar and fraction bar");
+    assert_eq!(l.lines.len(), 1);
 }

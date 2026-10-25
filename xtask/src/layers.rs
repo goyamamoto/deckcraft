@@ -51,6 +51,8 @@ pub const TABLE: &[(&str, Class)] = &[
     ("metafile", Class::Layer(0)),
     ("model", Class::Layer(1)),
     ("fonts", Class::Layer(1)),
+    // Equations: TeX parsing, OMML, layout over a font-metrics trait (no font dependency).
+    ("math", Class::Layer(1)),
     ("text", Class::Layer(2)),
     ("anim", Class::Layer(2)),
     ("format", Class::Layer(2)),

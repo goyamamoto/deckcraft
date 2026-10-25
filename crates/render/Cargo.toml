@@ -16,6 +16,7 @@ deckcraft-model = { workspace = true }
 deckcraft-anim = { workspace = true }
 deckcraft-fonts = { workspace = true }
 deckcraft-text = { workspace = true }
+deckcraft-math = { workspace = true }
 vello_cpu = { workspace = true }
 vello_common = { workspace = true }
 image = { workspace = true }

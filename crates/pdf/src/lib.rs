@@ -631,6 +631,20 @@ impl Exporter<'_> {
             s.set_stroke(None);
         }
         if visible {
+            // Equation strokes (stretched delimiters, radical signs, braces): filled paths.
+            for p in &pt.layout.paths {
+                if p.alpha <= 0.0 || p.color.a == 0 {
+                    continue;
+                }
+                let Some(path) = to_path(&p.path) else { continue };
+                let c = p.color;
+                let opacity = NormalizedF32::new((f64::from(c.a) / 255.0 * p.alpha) as f32).unwrap_or(NormalizedF32::ONE);
+                s.push_transform(&tf(at));
+                s.set_fill(Some(Fill { paint: krilla::color::rgb::Color::new(c.r, c.g, c.b).into(), opacity, ..Default::default() }));
+                s.draw_path(&path);
+                s.set_fill(None);
+                s.pop();
+            }
             decos(s, pt, at, false);
         }
         Ok(())

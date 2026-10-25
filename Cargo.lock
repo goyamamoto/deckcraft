@@ -973,6 +973,7 @@ dependencies = [
  "deckcraft-fonts",
  "deckcraft-format",
  "deckcraft-geom",
+ "deckcraft-math",
  "deckcraft-media",
  "deckcraft-model",
  "deckcraft-pdf",
@@ -1045,6 +1046,15 @@ name = "deckcraft-isobmff"
 version = "0.10.0"
 dependencies = [
  "craft-media",
+]
+
+[[package]]
+name = "deckcraft-math"
+version = "0.10.0"
+dependencies = [
+ "deckcraft-geom",
+ "kurbo",
+ "quick-xml",
 ]
 
 [[package]]
@@ -1137,6 +1147,7 @@ dependencies = [
  "deckcraft-color",
  "deckcraft-engine",
  "deckcraft-geom",
+ "deckcraft-math",
  "deckcraft-model",
  "image",
  "log",
@@ -1154,6 +1165,7 @@ dependencies = [
  "deckcraft-color",
  "deckcraft-fonts",
  "deckcraft-geom",
+ "deckcraft-math",
  "deckcraft-metafile",
  "deckcraft-model",
  "deckcraft-text",
@@ -1173,6 +1185,7 @@ dependencies = [
  "deckcraft-color",
  "deckcraft-fonts",
  "deckcraft-geom",
+ "deckcraft-math",
  "deckcraft-model",
  "unicode-bidi",
  "unicode-linebreak",
@@ -1189,6 +1202,7 @@ dependencies = [
  "deckcraft-engine",
  "deckcraft-fonts",
  "deckcraft-geom",
+ "deckcraft-math",
  "deckcraft-media",
  "deckcraft-model",
  "deckcraft-render",

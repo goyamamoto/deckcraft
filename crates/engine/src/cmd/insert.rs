@@ -161,7 +161,7 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 /// Default size for a click-inserted shape (1 inch square, PowerPoint style).
-fn default_rect(s: &Session, w: f64, h: f64) -> Xfrm {
+pub(crate) fn default_rect(s: &Session, w: f64, h: f64) -> Xfrm {
     let size = s.active().map(|d| d.doc.slide_size).unwrap_or(deckcraft_model::defaults::WIDE);
     Xfrm::new((size.width - w) / 2.0, (size.height - h) / 2.0, w, h)
 }
@@ -339,7 +339,7 @@ fn vertical_text_box(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// Add a new text box, fit it to its text, and with no text put the caret in it.
-fn place_text_box(s: &mut Session, cmd: &str, shape: Shape, empty: bool) -> Result<Value> {
+pub(crate) fn place_text_box(s: &mut Session, cmd: &str, shape: Shape, empty: bool) -> Result<Value> {
     let id = add_shape(s, cmd, shape, true)?;
     super::text::fit_text_box(s, id)?;
     if empty {
