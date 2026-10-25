@@ -115,7 +115,7 @@ Standard: craftrules `standards/never-crash.md`.
 | Layer | Crates |
 |---|---|
 | L0 | `geom` (units, transforms, preset shapes), `color` |
-| L1 | `model` (presentation, masters, layouts, slides, shapes, text, themes, inheritance, text edit ops) |
+| L1 | `model` (presentation, masters, layouts, slides, shapes, text, themes, inheritance, text edit ops), `math` (TeX ⇄ OMML equation tree, layout over font metrics) |
 | L2 | `fonts`, `text` (layout), |
 | L3 | `render` (vello_cpu) |
 | L4 | `format` (.deckcraft), `pptx` |

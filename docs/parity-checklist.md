@@ -1,6 +1,6 @@
 # PowerPoint feature checklist
 
-> **Generated:** 2026-10-25 (Native menu bar re-scored D: PowerPoint for Mac's menus from `menu_tree()`, every row a command; New window / arrange windows re-scored D: one window per presentation, New Window, Arrange All, Cascade, Switch Windows; East Asian text re-scored D after measuring Japanese layout against PowerPoint for Mac; bullets/numbering remain D after empty-line marker review; summary by `cargo xtask parity`; rows re-scored by the 2026-10-14 community PR wave, duplicate Thesaurus, AutoCorrect, Artistic effects and Corrections rows folded; Preview in editor re-scored 2026-10-13; earlier rows re-scored 2026-10-10 against PowerPoint for Mac 16.113.4; video/animated GIF row re-scored 2026-10-11, #171) · **Target:** Microsoft PowerPoint for Mac 16.113 (Microsoft 365)
+> **Generated:** 2026-10-25 (Equations re-scored P: TeX in with a live preview, OMML stored and drawn in two dimensions, in-place editing left; Native menu bar re-scored D: PowerPoint for Mac's menus from `menu_tree()`, every row a command; New window / arrange windows re-scored D: one window per presentation, New Window, Arrange All, Cascade, Switch Windows; East Asian text re-scored D after measuring Japanese layout against PowerPoint for Mac; bullets/numbering remain D after empty-line marker review; summary by `cargo xtask parity`; rows re-scored by the 2026-10-14 community PR wave, duplicate Thesaurus, AutoCorrect, Artistic effects and Corrections rows folded; Preview in editor re-scored 2026-10-13; earlier rows re-scored 2026-10-10 against PowerPoint for Mac 16.113.4; video/animated GIF row re-scored 2026-10-11, #171) · **Target:** Microsoft PowerPoint for Mac 16.113 (Microsoft 365)
 
 The summary between `<!-- SUMMARY -->
 **Weighted breadth parity: 85%** over 191 features.
@@ -9,7 +9,7 @@ The summary between `<!-- SUMMARY -->
 |---|---|---|---|---|---|
 | P0 | 72 | 61 | 11 | 0 | 92% |
 | P1 | 65 | 47 | 15 | 3 | 84% |
-| P2 | 54 | 18 | 24 | 12 | 56% |
+| P2 | 54 | 18 | 25 | 11 | 56% |
 
 | Area | Parity |
 |---|---|
@@ -21,7 +21,7 @@ The summary between `<!-- SUMMARY -->
 | Shapes | 91% |
 | Format | 83% |
 | Arrange | 100% |
-| Text | 85% |
+| Text | 86% |
 | Tables | 97% |
 | Charts | 65% |
 | SmartArt | 50% |
@@ -158,7 +158,7 @@ Open P0 items: Contextual tabs (Shape Format, Picture Format, Table Design/Layou
 | Text | AutoCorrect and smart quotes | P2 | P |
 | Text | Thesaurus | P2 | P |
 | Text | Symbols and emoji | P1 | D |
-| Text | Equations | P2 | M |
+| Text | Equations | P2 | P |
 | Text | Hyperlinks (URL, slide, email) | P1 | D |
 | Text | Date/time and slide number fields | P1 | D |
 | Text | Right-to-left and complex scripts | P1 | P |

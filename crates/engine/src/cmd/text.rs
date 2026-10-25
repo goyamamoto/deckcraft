@@ -981,6 +981,26 @@ pub(crate) fn insert_field(s: &mut Session, field: &str, text: &str) -> Result<V
     ok()
 }
 
+/// Insert an equation run at the insertion point (replacing the selection), in the formatting
+/// there but in the math font, and leave the caret after it.
+pub(crate) fn insert_math(s: &mut Session, mut run: Run) -> Result<Value> {
+    let pos = edit_text(s, move |body, t| {
+        let (a, b) = t.ordered();
+        let at = ed::delete(body, a, b);
+        let mut props = ed::props_at(body, at);
+        props.font = Some(super::equation::MATH_FONT.into());
+        props.link = None;
+        props.hover = None;
+        run.props = props;
+        let src = TextBody { paragraphs: vec![Paragraph { runs: vec![run], ..Default::default() }], ..Default::default() };
+        let c = ed::insert_body(body, at, &src);
+        t.anchor = c;
+        t.caret = c;
+        c
+    })?;
+    Ok(json!({"caret": [pos.0, pos.1]}))
+}
+
 /// Text an input method sends: no paragraph or line breaks (Enter is a key of its own).
 fn ime_text(s: &str) -> String {
     s.chars().filter(|c| !c.is_control()).collect()

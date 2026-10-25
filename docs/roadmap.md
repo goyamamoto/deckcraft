@@ -33,7 +33,7 @@ points and lead the beta plan.
    and handout-master text, paragraph defaults and action sounds. Still open: decks from outside
    this repo, media options and rewind on save (#74, #77), relationship-bearing SmartArt and OLE
    (#203), EMF+ records and SVG. 31–55 h.
-3. **Review the open PRs:** equations (#55), browser print (#66), Morph alignment (#67), macOS
+3. **Review the open PRs:** browser print (#66), Morph alignment (#67), macOS
    open-with (#68), font lookup (#80), Ukrainian (#34, after the catalog exists). 4–8 h.
 
 ## Plan to beta (~120–210 h; ~40–70 h wall clock with 3–4 agents)
@@ -85,7 +85,7 @@ From the local execution plan (`plan/execution-plan.md`, gitignored). Status as 
 | M6 | Transitions and animations | mostly | Animation Pane timeline, remaining effects, transition sounds |
 | M7 | Slide show | mostly | second-display placement, laser, record |
 | M8 | Tables and charts | partly | chart data grid, elements, chartex types, draw table |
-| M9 | SmartArt, equations, WordArt | partly | SmartArt layouts and PowerPoint-diagram fidelity, equations (PR #55); the text pane, warp gallery and warp handles are in |
+| M9 | SmartArt, equations, WordArt | partly | SmartArt layouts and PowerPoint-diagram fidelity; equations (TeX in, OMML stored and drawn), the text pane, warp gallery and warp handles are in |
 | M10 | Views | done | |
 | M11 | Output | partly | vector PDF, SVG, GIF, MP4, print |
 | M12 | Review | partly | dictionaries, AutoCorrect, find/replace dialog, compare |

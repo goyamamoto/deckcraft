@@ -31,7 +31,8 @@ use std::sync::Arc;
 use deckcraft_color::Rgba;
 use deckcraft_fonts::script::{self, joins_following, joins_preceding};
 use deckcraft_fonts::{CjkLocale, FontDb, FontFace, FontSlot, ScriptTag, ShapeParams};
-use deckcraft_geom::{Point, Rect};
+use deckcraft_geom::{Affine, BezPath, KurboShape as _, Point, Rect};
+use deckcraft_math as math;
 use deckcraft_model::resolve::{self, Ctx};
 use deckcraft_model::text::{Align, Anchor, AutoFit, BodyProps, Bullet, Caps, ParaProps, RunKind, RunProps, Spacing, Strike, TextBody, TextDir};
 use deckcraft_model::{Fill, Shape, Theme};
@@ -293,9 +294,22 @@ pub struct LineInfo {
     pub start_offset: f64,
 }
 
+/// A filled path in shape-local points: a stretched delimiter, radical sign or brace of an
+/// equation.
+#[derive(Clone, Debug)]
+pub struct TextPath {
+    pub path: BezPath,
+    pub color: Rgba,
+    /// Opacity on top of `color`'s own alpha.
+    pub alpha: f64,
+    pub para: usize,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct TextLayout {
     pub runs: Vec<GlyphRun>,
+    /// Equation parts that are neither glyphs nor rectangles.
+    pub paths: Vec<TextPath>,
     /// Empty list markers for the editor only; ordinary rendering and export omit them.
     /// Their space is still reserved so the caret starts where the first character will.
     pub empty_bullets: Vec<GlyphRun>,
@@ -409,6 +423,9 @@ struct Cell {
     boundary: bool,
     /// Drawn upright in East Asian vertical text.
     upright: bool,
+    /// The equation (`ParaShaped::objects`) this character is part of: the cluster's head cell
+    /// draws it, the others have no width.
+    object: Option<usize>,
 }
 
 impl Cell {
@@ -434,6 +451,181 @@ struct ParaShaped {
     level: u8,
     /// Right-to-left paragraph (`a:pPr/@rtl`).
     rtl: bool,
+    /// Equations laid out as one inline object each (`RunKind::Math`).
+    objects: Vec<MathObject>,
+}
+
+/// An equation laid out at its run's size and colour.
+struct MathObject {
+    layout: math::Layout,
+    /// The faces the layout's glyphs index.
+    faces: Vec<Arc<FontFace>>,
+}
+
+/// [`math::MathFont`] over the font database: the run's family in each style, other faces for
+/// the characters it lacks.
+struct MathFaces {
+    db: &'static FontDb,
+    family: String,
+    base: Arc<FontFace>,
+    faces: Vec<Arc<FontFace>>,
+    cache: HashMap<(char, bool, bool), Option<math::Glyph>>,
+}
+
+impl MathFaces {
+    fn new(base: Arc<FontFace>) -> Self {
+        MathFaces { db: FontDb::global(), family: base.family.clone(), base, faces: Vec::new(), cache: HashMap::new() }
+    }
+
+    fn index(&mut self, face: &Arc<FontFace>) -> u32 {
+        if let Some(i) = self.faces.iter().position(|f| Arc::ptr_eq(f, face)) {
+            return i as u32;
+        }
+        self.faces.push(face.clone());
+        (self.faces.len() - 1) as u32
+    }
+}
+
+impl math::MathFont for MathFaces {
+    fn glyph(&mut self, c: char, bold: bool, italic: bool) -> Option<math::Glyph> {
+        if let Some(g) = self.cache.get(&(c, bold, italic)) {
+            return *g;
+        }
+        let style = style_name(bold, italic);
+        let own = if !bold && !italic { self.base.clone() } else { self.db.document_face(&self.family, style) };
+        let face = if own.covers(c) {
+            Some(own)
+        } else if self.base.covers(c) {
+            Some(self.base.clone())
+        } else {
+            self.db.fallback_styled(c, own.id(), style, None).filter(|f| f.covers(c))
+        };
+        let g = face.and_then(|face| {
+            let gid = face.glyph_for(c);
+            if gid == 0 {
+                return None;
+            }
+            let upem = face.upem.max(1.0);
+            let outline = self.db.outline(&face, gid);
+            let ink = if outline.elements().is_empty() { Rect::ZERO } else { outline.bounding_box() };
+            let ink = Rect::new(ink.x0 / upem, ink.y0 / upem, ink.x1 / upem, ink.y1 / upem);
+            let (fake_bold, fake_italic) = synthetic_style(bold, italic, &face);
+            let index = self.index(&face);
+            Some(math::Glyph { face: index, id: gid, advance: face.advance(gid) / upem, ink, fake_bold, fake_italic })
+        });
+        self.cache.insert((c, bold, italic), g);
+        g
+    }
+
+    fn outline(&mut self, g: &math::Glyph) -> Option<BezPath> {
+        let face = self.faces.get(g.face as usize)?;
+        let upem = face.upem.max(1.0);
+        let mut p = (*self.db.outline(face, g.id)).clone();
+        if p.elements().is_empty() {
+            return None;
+        }
+        p.apply_affine(Affine::scale(1.0 / upem));
+        Some(p)
+    }
+
+    fn x_height(&self) -> f64 {
+        let v = self.base.x_height / self.base.upem.max(1.0);
+        if v.is_finite() && v > 0.0 { v.clamp(0.3, 0.7) } else { 0.45 }
+    }
+
+    fn rule_thickness(&self) -> f64 {
+        let v = self.base.underline.1 / self.base.upem.max(1.0);
+        if v.is_finite() && v > 0.0 { v.clamp(0.035, 0.08) } else { 0.05 }
+    }
+}
+
+/// How an equation's parts are painted: its run's colour and effects.
+struct MathPaint<'a> {
+    color: Rgba,
+    alpha: f64,
+    outline: Option<(Rgba, f64)>,
+    link: bool,
+    gradient: Option<deckcraft_model::style::Gradient>,
+    effects: Option<RunEffects>,
+    /// The character range the equation's glyph runs report.
+    chars: (usize, usize),
+    para: usize,
+    faces: &'a [Arc<FontFace>],
+}
+
+/// Add a laid-out equation to `out` with its baseline origin at `(x, y)`: glyph runs grouped by
+/// face and size, fraction bars and overlines as decorations, strokes as paths.
+fn emit_math(out: &mut TextLayout, lay: &math::Layout, paint: &MathPaint, x: f64, y: f64) {
+    let mut runs: Vec<GlyphRun> = Vec::new();
+    for g in &lay.glyphs {
+        let Some(face) = paint.faces.get(g.face as usize) else { continue };
+        let same = |r: &GlyphRun| Arc::ptr_eq(&r.face, face) && r.size == g.size && r.fake_bold == g.fake_bold && r.fake_italic == g.fake_italic;
+        let r = match runs.iter_mut().find(|r| same(r)) {
+            Some(r) => r,
+            None => {
+                runs.push(GlyphRun {
+                    face: face.clone(),
+                    size: g.size,
+                    color: paint.color,
+                    glyphs: vec![],
+                    cells: vec![],
+                    fake_bold: g.fake_bold,
+                    fake_italic: g.fake_italic,
+                    outline: paint.outline,
+                    para: paint.para,
+                    chars: paint.chars,
+                    link: paint.link,
+                    alpha: paint.alpha,
+                    gradient: paint.gradient.clone(),
+                    effects: paint.effects,
+                    upright: false,
+                });
+                match runs.last_mut() {
+                    Some(r) => r,
+                    None => continue,
+                }
+            }
+        };
+        r.glyphs.push((g.id, x + g.x, y + g.y));
+        r.cells.push((paint.chars.0, g.ch));
+    }
+    out.runs.append(&mut runs);
+    for r in &lay.rules {
+        out.decos.push(Deco {
+            rect: Rect::new(x + r.x0, y + r.y0, x + r.x1, y + r.y1),
+            color: paint.color,
+            behind: false,
+            para: paint.para,
+            line: DecoLine::Solid,
+        });
+    }
+    for p in &lay.paths {
+        let mut path = p.clone();
+        path.apply_affine(Affine::translate((x, y)));
+        out.paths.push(TextPath { path, color: paint.color, alpha: paint.alpha, para: paint.para });
+    }
+}
+
+/// An equation on its own, in display style, for a preview: `size` points in `family` (the
+/// run font an inserted equation gets), in `color`, its baseline origin at the top left of
+/// `inner` plus its ascent. Shape-local coordinates as [`layout`] gives them.
+pub fn equation_layout(m: &math::Math, family: &str, size: f64, color: Rgba) -> TextLayout {
+    let db = FontDb::global();
+    let base = db.document_face(family, "Regular");
+    let mut faces = MathFaces::new(base);
+    let lay = math::layout::layout(m, &mut faces, size, true);
+    let mut out = TextLayout {
+        inner: Rect::new(0.0, 0.0, lay.width, lay.height()),
+        content_width: lay.width,
+        content_height: lay.height(),
+        font_scale: 1.0,
+        ..Default::default()
+    };
+    let paint =
+        MathPaint { color, alpha: 1.0, outline: None, link: false, gradient: None, effects: None, chars: (0, 0), para: 0, faces: &faces.faces };
+    emit_math(&mut out, &lay, &paint, 0.0, lay.ascent);
+    out.lines.push(LineInfo { top: 0.0, baseline: lay.ascent, bottom: lay.height(), extent: (0.0, lay.width), ..Default::default() });
+    out
 }
 
 fn style_name(bold: bool, italic: bool) -> &'static str {
@@ -791,6 +983,7 @@ fn shape_para(ctx: &Ctx, shape: &Shape, body: &TextBody, pi: usize, scale: f64, 
             bullet: None,
             level: 0,
             rtl: false,
+            objects: vec![],
         };
     };
     let props = resolve::para(ctx, shape, para);
@@ -800,6 +993,11 @@ fn shape_para(ctx: &Ctx, shape: &Shape, body: &TextBody, pi: usize, scale: f64, 
     // The logical paragraph: its text and each character's style.
     let mut text = String::new();
     let mut char_style: Vec<usize> = vec![];
+    let mut char_object: Vec<Option<usize>> = vec![];
+    let mut objects: Vec<MathObject> = vec![];
+    // An equation alone in its paragraph is set in display style (limits above and below large
+    // operators); one among words in text style.
+    let display = para.runs.iter().filter(|r| !matches!(r.kind, RunKind::Math { .. })).all(|r| r.content().trim().is_empty());
     // Kana or Hangul in the paragraph tell the tradition of runs with no language.
     let text_cjk = script::tradition_of_text(para.runs.iter().flat_map(|r| r.text.chars()));
     for run in &para.runs {
@@ -812,11 +1010,41 @@ fn shape_para(ctx: &Ctx, shape: &Shape, body: &TextBody, pi: usize, scale: f64, 
             RunKind::Math { .. } => run.text.clone(),
         };
         let si = styles.len();
+        let n = t.chars().count();
+        let object = match &run.kind {
+            RunKind::Math { omml } if n > 0 => {
+                let tree = math::omml::read(omml).filter(|m| !m.is_empty()).unwrap_or_else(|| vec![math::Node::run(run.text.clone())]);
+                let mut mf = MathFaces::new(st.face.clone());
+                let layout = math::layout::layout(&tree, &mut mf, st.size, display);
+                objects.push(MathObject { layout, faces: mf.faces });
+                Some(objects.len() - 1)
+            }
+            _ => None,
+        };
         styles.push(st);
-        char_style.extend(std::iter::repeat_n(si, t.chars().count()));
+        char_style.extend(std::iter::repeat_n(si, n));
+        char_object.extend(std::iter::repeat_n(object, n));
         text.push_str(&t);
     }
-    let cells = shape_cells(ctx, &text, &char_style, &styles, &mut faces, rtl, vertical);
+    let mut cells = shape_cells(ctx, &text, &char_style, &char_object, &styles, &mut faces, rtl, vertical);
+    // An equation is one cluster: its head cell is as wide as the equation and draws it, the
+    // other cells have no width and no caret before them.
+    let mut k = 0;
+    while k < cells.len() {
+        let Some(obj) = cells.get(k).and_then(|c| c.object) else {
+            k += 1;
+            continue;
+        };
+        let end = (k..cells.len()).take_while(|&j| cells.get(j).is_some_and(|c| c.object == Some(obj))).last().map_or(k + 1, |j| j + 1);
+        let width = objects.get(obj).map_or(0.0, |o| o.layout.width);
+        for (j, c) in cells.iter_mut().enumerate().take(end).skip(k) {
+            c.glyphs.clear();
+            c.head = k;
+            c.adv = if j == k { width } else { 0.0 };
+            c.boundary = j == k;
+        }
+        k = end;
+    }
     let lead = para.runs.first().map(|r| resolve::run(ctx, shape, para, &r.props)).unwrap_or_else(|| resolve::run(ctx, shape, para, &para.end_props));
     let lead_style = make_style(ctx, &lead, scale, opts.prompt_color, text_cjk);
     let lead_size = lead_style.size;
@@ -872,7 +1100,7 @@ fn shape_para(ctx: &Ctx, shape: &Shape, body: &TextBody, pi: usize, scale: f64, 
         }
         _ => None,
     };
-    ParaShaped { cells, styles, faces, props, lead_size, lead_face, end_size, end_face, bullet, level: para.level, rtl }
+    ParaShaped { cells, styles, faces, props, lead_size, lead_face, end_size, end_face, bullet, level: para.level, rtl, objects }
 }
 
 /// A face that draws the bullet `label` when the bullet's own can't (circled numbers ①, arrows
@@ -901,6 +1129,7 @@ fn shape_cells(
     ctx: &Ctx,
     text: &str,
     char_style: &[usize],
+    char_object: &[Option<usize>],
     styles: &[Style],
     faces: &mut Vec<Arc<FontFace>>,
     rtl: bool,
@@ -996,6 +1225,7 @@ fn shape_cells(
             head: i,
             boundary: boundary.get(i).copied().unwrap_or(true),
             upright: false,
+            object: char_object.get(i).copied().flatten(),
         })
         .collect();
     // In East Asian vertical text, ideographs, kana, Hangul, full-width forms and the like stand
@@ -1013,7 +1243,8 @@ fn shape_cells(
     let lang = |i: usize| styles.get(char_style.get(i).copied().unwrap_or(0)).and_then(|st| st.lang.as_deref());
     let kern = |i: usize| styles.get(char_style.get(i).copied().unwrap_or(0)).is_some_and(|st| st.kern);
     let up = |i: usize| cells.get(i).is_some_and(|c| c.upright);
-    let key = |i: usize| (levels.get(i).copied(), char_face.get(i).copied(), scripts.get(i).map(|s| s.0), upper(i), lang(i), kern(i), up(i));
+    let obj = |i: usize| char_object.get(i).copied().flatten();
+    let key = |i: usize| (levels.get(i).copied(), char_face.get(i).copied(), scripts.get(i).map(|s| s.0), upper(i), lang(i), kern(i), up(i), obj(i));
     let mut items: Vec<(usize, usize)> = Vec::new();
     let mut a = 0;
     while a < n {
@@ -1623,6 +1854,9 @@ impl FontAlign {
 /// one line pitch deep.
 fn cross_extent(p: &ParaShaped, c: &Cell) -> Option<(f64, f64)> {
     let st = p.styles.get(c.style)?;
+    if let Some(o) = c.object.and_then(|k| p.objects.get(k)) {
+        return Some((-o.layout.ascent, o.layout.descent));
+    }
     if c.upright {
         let mid = -UPRIGHT_CENTRE * st.size;
         let half = st.size * LINE_PITCH / 2.0;
@@ -2280,6 +2514,11 @@ fn layout_scaled(ctx: &Ctx, shape: &Shape, body: &TextBody, bp: &BodyProps, opts
             for c in p.cells.get(rl.start..rl.end.max(rl.start)).unwrap_or(&[]) {
                 if let (Some(st), Some(face)) = (p.styles.get(c.style), p.faces.get(c.face)) {
                     let sz = st.size;
+                    // An equation taller than its line's text grows the line to hold it.
+                    if let Some(o) = c.object.and_then(|k| p.objects.get(k)) {
+                        asc = asc.max(o.layout.ascent + 0.1 * sz);
+                        desc = desc.max(o.layout.descent + 0.1 * sz);
+                    }
                     // The run's own fonts set the line; a fallback face (emoji, a symbol or a
                     // script the run's fonts lack) does not move the baseline in PowerPoint.
                     let own = Arc::ptr_eq(face, &st.face)
@@ -2581,66 +2820,89 @@ fn layout_scaled(ctx: &Ctx, shape: &Shape, body: &TextBody, bp: &BodyProps, opts
             let base_y = line.baseline + shift - st.baseline * st.size;
             let size = if st.baseline != 0.0 { st.size * SUB_SUPER } else { st.size };
             let size = if st.caps == Caps::Small && cell.ch.is_lowercase() { size * 0.8 } else { size };
-            // Small capitals are drawn smaller than the capitals beside them: a run of their own.
-            let key = (cell.style, cell.face, st.caps == Caps::Small && cell.ch.is_lowercase(), cell.upright);
-            if key != cur_key {
+            if let Some(o) = cell.object.and_then(|k| p.objects.get(k)) {
+                // An equation: drawn whole from its head cell, at the cell's left edge.
                 if let Some(r) = cur.take() {
                     out.runs.push(r);
                 }
-                let Some(face) = p.faces.get(cell.face) else { continue };
-                let (fake_bold, fake_italic) = synthetic_style(st.bold, st.italic, face);
-                cur = Some(GlyphRun {
-                    face: face.clone(),
-                    size,
-                    color: st.color,
-                    glyphs: vec![],
-                    cells: vec![],
-                    fake_bold,
-                    fake_italic,
-                    outline: st.outline,
-                    para: line.para,
-                    chars: (ci, ci + 1),
-                    link: st.link,
-                    alpha: st.alpha,
-                    gradient: st.gradient.clone(),
-                    effects: st.effects,
-                    upright: cell.upright,
-                });
-                cur_key = key;
-            }
-            if let Some(r) = cur.as_mut() {
-                r.chars = (r.chars.0.min(ci), r.chars.1.max(ci + 1));
-                if cell.ch == '\u{AD}' && cx1 - cx > 0.01 {
-                    // The soft hyphen a line breaks at is drawn as a hyphen.
-                    if let Some(f) = p.faces.get(cell.face) {
-                        r.glyphs.push((f.glyph_for('-'), cx, base_y));
-                        r.cells.push((ci, cell.ch));
+                cur_key = (usize::MAX, usize::MAX, false, false);
+                if cell.head == ci {
+                    let end = (ci..line.end).take_while(|&j| p.cells.get(j).is_some_and(|c| c.head == ci)).last().map_or(ci + 1, |j| j + 1);
+                    let paint = MathPaint {
+                        color: st.color,
+                        alpha: st.alpha,
+                        outline: st.outline,
+                        link: st.link,
+                        gradient: st.gradient.clone(),
+                        effects: st.effects,
+                        chars: (ci, end),
+                        para: line.para,
+                        faces: &o.faces,
+                    };
+                    emit_math(&mut out, &o.layout, &paint, cx, base_y);
+                }
+            } else {
+                // Small capitals are drawn smaller than the capitals beside them: a run of their own.
+                let key = (cell.style, cell.face, st.caps == Caps::Small && cell.ch.is_lowercase(), cell.upright);
+                if key != cur_key {
+                    if let Some(r) = cur.take() {
+                        out.runs.push(r);
                     }
-                } else if cell.head == ci && !cell.glyphs.is_empty() {
-                    // The cluster's glyphs start at its leftmost cell; kashida (right-to-left
-                    // only) fills the gap on the cluster's left with tatweel glyphs.
-                    let cells_of =
-                        (k..line.end.saturating_sub(line.start)).take_while(|&j| p.cells.get(line.start + j).is_some_and(|c| c.head == ci));
-                    let (mut cl, mut kash) = (cx, 0.0);
-                    for j in cells_of {
-                        cl = cl.min(line.edges.get(j).map(|e| e.0).unwrap_or(cx));
-                        kash += place.kashida.get(j).copied().unwrap_or(0.0);
-                    }
-                    if kash > 0.0 {
-                        let face = p.faces.get(cell.face);
-                        let tg = face.map(|f| f.glyph_for('\u{0640}')).unwrap_or(0);
-                        let tw = face.map(|f| f.advance(tg) * size / f.upem.max(1.0)).unwrap_or(0.0);
-                        if tg != 0 && tw > 0.0 {
-                            let count = ((kash / tw).ceil() as usize).clamp(1, 256);
-                            for i in 0..count {
-                                r.glyphs.push((tg, cl + (i as f64 * tw).min((kash - tw).max(0.0)), base_y));
-                                r.cells.push((ci, cell.ch));
+                    let Some(face) = p.faces.get(cell.face) else { continue };
+                    let (fake_bold, fake_italic) = synthetic_style(st.bold, st.italic, face);
+                    cur = Some(GlyphRun {
+                        face: face.clone(),
+                        size,
+                        color: st.color,
+                        glyphs: vec![],
+                        cells: vec![],
+                        fake_bold,
+                        fake_italic,
+                        outline: st.outline,
+                        para: line.para,
+                        chars: (ci, ci + 1),
+                        link: st.link,
+                        alpha: st.alpha,
+                        gradient: st.gradient.clone(),
+                        effects: st.effects,
+                        upright: cell.upright,
+                    });
+                    cur_key = key;
+                }
+                if let Some(r) = cur.as_mut() {
+                    r.chars = (r.chars.0.min(ci), r.chars.1.max(ci + 1));
+                    if cell.ch == '\u{AD}' && cx1 - cx > 0.01 {
+                        // The soft hyphen a line breaks at is drawn as a hyphen.
+                        if let Some(f) = p.faces.get(cell.face) {
+                            r.glyphs.push((f.glyph_for('-'), cx, base_y));
+                            r.cells.push((ci, cell.ch));
+                        }
+                    } else if cell.head == ci && !cell.glyphs.is_empty() {
+                        // The cluster's glyphs start at its leftmost cell; kashida (right-to-left
+                        // only) fills the gap on the cluster's left with tatweel glyphs.
+                        let cells_of =
+                            (k..line.end.saturating_sub(line.start)).take_while(|&j| p.cells.get(line.start + j).is_some_and(|c| c.head == ci));
+                        let (mut cl, mut kash) = (cx, 0.0);
+                        for j in cells_of {
+                            cl = cl.min(line.edges.get(j).map(|e| e.0).unwrap_or(cx));
+                            kash += place.kashida.get(j).copied().unwrap_or(0.0);
+                        }
+                        if kash > 0.0 {
+                            let face = p.faces.get(cell.face);
+                            let tg = face.map(|f| f.glyph_for('\u{0640}')).unwrap_or(0);
+                            let tw = face.map(|f| f.advance(tg) * size / f.upem.max(1.0)).unwrap_or(0.0);
+                            if tg != 0 && tw > 0.0 {
+                                let count = ((kash / tw).ceil() as usize).clamp(1, 256);
+                                for i in 0..count {
+                                    r.glyphs.push((tg, cl + (i as f64 * tw).min((kash - tw).max(0.0)), base_y));
+                                    r.cells.push((ci, cell.ch));
+                                }
                             }
                         }
-                    }
-                    for (gid, gx, gy) in &cell.glyphs {
-                        r.glyphs.push((*gid, cl + kash + gx, base_y + gy));
-                        r.cells.push((ci, cell.ch));
+                        for (gid, gx, gy) in &cell.glyphs {
+                            r.glyphs.push((*gid, cl + kash + gx, base_y + gy));
+                            r.cells.push((ci, cell.ch));
+                        }
                     }
                 }
             }

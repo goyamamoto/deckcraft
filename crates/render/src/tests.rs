@@ -36,6 +36,17 @@ fn shape_fill_uses_theme_accent() {
 }
 
 #[test]
+fn equation_preview_draws_dark_ink_on_a_transparent_canvas() {
+    let m = deckcraft_math::parse_tex("\\frac{a}{b}").unwrap();
+    let img = render_equation(&m, "Cambria Math", 24.0, 2.0, deckcraft_color::Rgba::BLACK).expect("picture");
+    assert!(img.width > 20 && img.height > 40, "{}x{}", img.width, img.height);
+    assert_eq!(img.pixel(0, 0)[3], 0, "transparent margin");
+    let inked = (0..img.height).flat_map(|y| (0..img.width).map(move |x| (x, y))).filter(|&(x, y)| img.pixel(x, y)[3] > 128).count();
+    assert!(inked > 50, "{inked} inked pixels");
+    assert!(render_equation(&m, "Cambria Math", f64::NAN, 2.0, deckcraft_color::Rgba::BLACK).is_none());
+}
+
+#[test]
 fn render_shapes_draws_the_selection_on_a_transparent_canvas() {
     let sh = Shape {
         id: ShapeId(880),

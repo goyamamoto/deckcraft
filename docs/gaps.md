@@ -265,8 +265,10 @@ and starts at that effect. The pane has an advanced timeline with draggable bars
 - **Estimate:** 1–2 h (bundle openly licensed dictionaries); 2–4 h (AutoFormat as you type).
 
 ### Equations
-- **Evidence:** checklist row missing; PR #55 (OMML editor, +10.5k lines) is open.
-- **Estimate:** 3–6 h to review, land and round-trip.
+- **Evidence:** Insert ▸ Equation takes TeX with a live preview and a Recent list, stores OMML and
+  draws it in two dimensions (docs/equations.md); checklist row P. Left: PowerPoint's in-place
+  equation editor and structure gallery, ink to math, measuring our layout against Cambria Math's.
+- **Estimate:** 10–16 h for in-place editing of OMML structures.
 
 ### Smaller missing rows
 Zoom: live thumbnails, the zoom-in animation and the native `p166:sldZm` element (3–5 h;
@@ -366,6 +368,7 @@ Detail in [localization-parity.md](localization-parity.md).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-25 | minor | Equations: Insert ▸ Equation takes TeX, previews as you type, remembers what was inserted; OMML is read, written and drawn (docs/equations.md). The equations gap is now in-place editing and the structure gallery |
 | 2026-10-25 | minor | Native macOS menu bar landed (docs/native-menus.md): gap 13 and the UI/UX bullet removed, the ranked list renumbered to 14 |
 | 2026-10-24 | minor | Localization gap narrowed to English and Japanese only (catalog infrastructure and the Japanese interface landed); new entries for the catalog's upstream merge, engine messages and the remaining Japanese layout differences |
 | 2026-10-22 | minor | Animation Pane ▸ Play From starts the preview at the selected effect; gap 10 keeps the effect gallery (7–13 h) |

@@ -1253,6 +1253,31 @@ fn an_embedded_font_list_already_in_the_package_is_read() {
     assert_eq!(p.media(f.bold.expect("bold")).expect("media").data.as_slice(), font);
 }
 
+/// An equation inserted from TeX: OMML in `a14:m` with the math font on every run, the plain
+/// text as the fallback, and the run's font read back on import (so it is drawn in the same face).
+#[test]
+fn equations_round_trip_with_their_font() {
+    use deckcraft_engine::Session;
+    use deckcraft_model::text::RunKind;
+    let mut s = Session::with_new();
+    s.execute("insert.equation", &serde_json::json!({"tex": "\\frac{a}{b} = \\sqrt{c}"})).unwrap();
+    let doc = s.doc().unwrap().doc.clone();
+    let bytes = deckcraft_pptx::export(&doc).unwrap();
+    let back = deckcraft_pptx::import(&bytes).unwrap();
+    let sh = back.slides[0].shapes.iter().find(|sh| sh.name == "Equation").unwrap();
+    let run = &sh.text.as_ref().unwrap().paragraphs[0].runs[0];
+    let RunKind::Math { omml } = &run.kind else { panic!("{run:?}") };
+    assert!(omml.contains("<m:f>") && omml.contains("<m:rad>"), "{omml}");
+    assert!(omml.contains("<a:latin typeface=\"Cambria Math\"/>"), "{omml}");
+    assert_eq!(run.props.font.as_deref(), Some("Cambria Math"));
+    assert_eq!(run.text, "a/b=√c");
+    assert_eq!(deckcraft_math::omml_to_tex(omml).as_deref(), Some("\\frac{a}{b} = \\sqrt{c}"));
+    // Saved again, it stays one equation with the same markup.
+    let again = deckcraft_pptx::import(&deckcraft_pptx::export(&back).unwrap()).unwrap();
+    let sh2 = again.slides[0].shapes.iter().find(|sh| sh.name == "Equation").unwrap();
+    assert_eq!(sh2.text.as_ref().unwrap().paragraphs[0].runs[0].kind, run.kind);
+}
+
 /// Text transparency (#32) is `a:alpha` on the run's colour, and survives a save.
 #[test]
 fn text_transparency_round_trips() {

@@ -19,6 +19,7 @@ deckcraft-color = { path = "crates/color" }
 deckcraft-metafile = { path = "crates/metafile" }
 deckcraft-model = { path = "crates/model" }
 deckcraft-fonts = { path = "crates/fonts" }
+deckcraft-math = { path = "crates/math" }
 deckcraft-text = { path = "crates/text" }
 deckcraft-render = { path = "crates/render" }
 deckcraft-pdf = { path = "crates/pdf" }

@@ -320,6 +320,8 @@ pub struct UiState {
     pub zoom: Option<f32>,
     pub sorter_zoom: f32,
     pub recent: Vec<String>,
+    /// Equations inserted from the Equation dialog, latest first (its Recent list).
+    pub equations: Vec<String>,
     pub presenter_view: bool,
     pub ui_scale: f32,
     /// Format Shape pane: tab (`fill`, `effects`, `size`, `picture`, `text`).
@@ -362,6 +364,7 @@ impl Default for UiState {
             zoom: None,
             sorter_zoom: 1.0,
             recent: vec![],
+            equations: vec![],
             presenter_view: true,
             ui_scale: 1.0,
             format_tab: "fill".into(),
@@ -418,12 +421,28 @@ impl UiState {
         self.recent.retain(|p| !p.is_empty() && p.len() <= 4096 && !p.contains('\0'));
         self.recent.dedup();
         self.recent.truncate(RECENT_MAX);
+        self.equations.retain(|e| !e.trim().is_empty() && e.len() <= deckcraft_math::tex::MAX_LEN);
+        self.equations.dedup();
+        self.equations.truncate(EQUATION_HISTORY_MAX);
         self
+    }
+
+    /// Remember `tex` as the latest equation inserted (once; the list stays short).
+    pub fn remember_equation(&mut self, tex: &str) {
+        let tex = tex.trim();
+        if tex.is_empty() {
+            return;
+        }
+        self.equations.retain(|e| e != tex);
+        self.equations.insert(0, tex.to_string());
+        self.equations.truncate(EQUATION_HISTORY_MAX);
     }
 }
 
 /// How many recent files File › Open and Home list.
 pub const RECENT_MAX: usize = 12;
+/// How many equations the Equation dialog's Recent list keeps.
+pub const EQUATION_HISTORY_MAX: usize = 20;
 
 /// UI-only commands (id, label, shortcut, params).
 pub const UI_COMMANDS: &[(&str, &str, Option<&str>, &str)] = &[
@@ -482,7 +501,7 @@ pub const UI_COMMANDS: &[(&str, &str, Option<&str>, &str)] = &[
     ("app.exportDialog", "Export…", None, "{}"),
     ("app.browseThemeDialog", "Browse for Themes…", None, "{}"),
     ("app.compareDialog", "Compare…", None, "{}"),
-    ("app.dialog", "Open Dialog", None, "{id}"),
+    ("app.dialog", "Open Dialog", None, "{id, tex?} — other keys seed the dialog (Equation: tex)"),
     ("app.pasteSpecial", "Paste Special…", Some("Cmd+Alt+V"), "{}"),
     ("app.qat", "Quick Access Toolbar", None, "{add: command id, params?, label?, icon?} | {remove: id, params?} | {reset: true} → [buttons]"),
     ("app.find", "Find…", Some("Cmd+F"), "{}"),
@@ -525,6 +544,8 @@ pub struct SlideApp {
     /// Spelling squiggles, checked on a worker thread.
     pub squiggles: squiggles::Squiggles,
     pub dialog: Option<dialogs::Dialog>,
+    /// The Equation dialog's last good preview picture.
+    pub equation_preview: Option<dialogs::EquationPreview>,
     /// The word looked up in the Thesaurus pane.
     pub thesaurus_query: String,
     pub show: Option<show::Show>,
@@ -640,6 +661,7 @@ impl SlideApp {
             control_rx: None,
             squiggles: Default::default(),
             dialog: None,
+            equation_preview: None,
             thesaurus_query: String::new(),
             show: None,
             anim_preview: None,
@@ -1366,7 +1388,10 @@ impl SlideApp {
             }
             "app.dialog" => {
                 let d = p.get("id").and_then(Value::as_str).ok_or("missing `id`")?;
-                self.dialog = Some(dialogs::Dialog::new(d));
+                let mut dialog = dialogs::Dialog::new(d);
+                // The other keys seed the dialog (`tex` for Equation).
+                dialog.params = p.clone();
+                self.dialog = Some(dialog);
             }
             "app.links" => {
                 use deckcraft_engine::links::*;
@@ -2477,6 +2502,8 @@ mod animpane_tests;
 mod browsetheme_tests;
 #[cfg(test)]
 mod compare_tests;
+#[cfg(test)]
+mod equation_dialog_tests;
 #[cfg(test)]
 mod eyedropper_tests;
 #[cfg(test)]

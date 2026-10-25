@@ -4551,3 +4551,59 @@ fn views_of_one_presentation_take_turns_with_their_own_selection() {
     assert_eq!(s.doc().unwrap().selection.slide, 1, "clamped to the last slide");
     assert!(s.doc().unwrap().selection.shapes.is_empty(), "the deleted shape is no longer selected");
 }
+
+#[test]
+fn insert_equation_makes_a_math_text_box_from_tex() {
+    use deckcraft_model::text::{Align, RunKind};
+    let mut s = session();
+    s.execute("insert.equation", &json!({"tex": "\\frac{a}{b} = c"})).unwrap();
+    let st = s.active().unwrap();
+    let sh = st.selected_shapes().first().cloned().cloned().expect("the new box is selected");
+    assert_eq!(sh.name, "Equation");
+    let para = &sh.text.as_ref().unwrap().paragraphs[0];
+    let run = &para.runs[0];
+    assert!(matches!(&run.kind, RunKind::Math { omml } if omml.contains("<m:f>") && omml.contains("xmlns:m=")), "{run:?}");
+    assert_eq!(run.text, "a/b=c");
+    assert_eq!(run.props.font.as_deref(), Some("Cambria Math"));
+    assert_eq!(para.props.align, Some(Align::Center));
+    assert!(st.selection.text.is_none(), "the box is selected, not being edited");
+    let e = s.execute("insert.equation", &json!({"tex": "\\frac{a}"})).unwrap_err();
+    assert!(e.to_string().contains("argument"), "{e}");
+    let e = s.execute("insert.equation", &json!({"tex": "  "})).unwrap_err();
+    assert!(e.to_string().contains("empty"), "{e}");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(s.active().unwrap().current_slide().unwrap().shapes.iter().all(|sh| sh.name != "Equation"));
+}
+
+#[test]
+fn insert_equation_at_the_caret_and_equation_at_finds_it() {
+    use deckcraft_model::text::RunKind;
+    let mut s = session();
+    s.execute("insert.textBox", &json!({"rect": [10, 10, 300, 40], "text": ""})).unwrap();
+    s.execute("text.insert", &json!({"text": "x = "})).unwrap();
+    s.execute("insert.equation", &json!({"tex": "y^2"})).unwrap();
+    let st = s.active().unwrap();
+    let t = st.selection.text.clone().expect("still editing");
+    assert_eq!(t.caret, (0, 7));
+    let runs = st.shape(t.shape).unwrap().text.as_ref().unwrap().paragraphs[0].runs.clone();
+    assert_eq!(runs.len(), 2, "{runs:?}");
+    assert!(matches!(runs[1].kind, RunKind::Math { .. }));
+    assert_eq!(runs[1].text, "y^2");
+    assert_eq!(runs[1].props.font.as_deref(), Some("Cambria Math"));
+    assert_eq!(s.execute("equation.at", &json!({})).unwrap(), json!({"tex": "y^{2}", "start": [0, 4], "end": [0, 7]}));
+    s.execute("text.select", &json!({"anchor": [0, 0], "caret": [0, 2]})).unwrap();
+    assert_eq!(s.execute("equation.at", &json!({})).unwrap(), Value::Null);
+    // Selecting the equation and inserting another replaces it.
+    s.execute("text.select", &json!({"anchor": [0, 4], "caret": [0, 7]})).unwrap();
+    s.execute("insert.equation", &json!({"tex": "z"})).unwrap();
+    let st = s.active().unwrap();
+    let runs = st.shape(t.shape).unwrap().text.as_ref().unwrap().paragraphs[0].runs.clone();
+    assert_eq!(runs.iter().filter(|r| matches!(r.kind, RunKind::Math { .. })).count(), 1, "{runs:?}");
+    assert_eq!(runs.last().unwrap().text, "z");
+    let check = s.execute("equation.check", &json!({"tex": "\\alpha"})).unwrap();
+    assert_eq!(check, json!({"ok": true, "text": "α"}));
+    let bad = s.execute("equation.check", &json!({"tex": "\\foo"})).unwrap();
+    assert_eq!(bad["ok"], json!(false));
+    assert_eq!(bad["error"]["pos"], json!(0));
+    assert!(bad["error"]["message"].as_str().unwrap().contains("\\foo"));
+}
