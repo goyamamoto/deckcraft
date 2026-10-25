@@ -93,6 +93,14 @@ fn a_recent_equation_fills_the_editor_and_clear_forgets_them() {
     h.get_by_label("E = mc^2").click();
     h.run_steps(3);
     assert_eq!(tex_field(&h).as_deref(), Some("E = mc^2"));
+    // Picking a row leaves the keyboard in the editor.
+    h.event(egui::Event::Text("!".into()));
+    h.run_steps(2);
+    assert_eq!(tex_field(&h).as_deref(), Some("E = mc^2!"));
+    h.event(egui::Event::Key { key: egui::Key::Backspace, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE });
+    h.event(egui::Event::Key { key: egui::Key::Backspace, physical_key: None, pressed: false, repeat: false, modifiers: egui::Modifiers::NONE });
+    h.run_steps(2);
+    assert_eq!(tex_field(&h).as_deref(), Some("E = mc^2"));
     assert_eq!(h.state().equation_preview.as_ref().map(|p| p.source.as_str()), Some("E = mc^2"));
     h.get_by_label("Clear").click();
     h.run_steps(2);
@@ -185,6 +193,11 @@ fn a_real_double_click_on_an_equation_box_opens_the_dialog_with_the_keyboard_in_
     h.run_steps(3);
     assert_eq!(h.state().dialog.as_ref().map(|d| d.id.as_str()), Some("equation"), "the double-click opened the dialog");
     assert_eq!(tex_field(&h).as_deref(), Some("a+b"));
+    // The editor has the keyboard focus (so its caret is drawn), at the end of the TeX.
+    let id = crate::wid("equation-tex");
+    assert_eq!(h.ctx.memory(|m| m.focused()), Some(id));
+    let caret = egui::TextEdit::load_state(&h.ctx, id).and_then(|s| s.cursor.char_range()).map(|r| format!("{:?}", r.primary.index));
+    assert_eq!(caret.as_deref(), Some("CharIndex(3)"));
     // The keyboard is in the editor: typing lands at the end of the TeX, after the caret.
     h.event(egui::Event::Text("+c".into()));
     h.run_steps(2);
@@ -205,6 +218,10 @@ fn the_display_style_switch_follows_the_context_and_sets_the_equation() {
     h.run_steps(3);
     let short = h.state().equation_preview.as_ref().map(|p| (p.display, p.size.y)).unwrap();
     assert!(!short.0 && short.1 < tall.1, "{tall:?} vs {short:?}");
+    // The click did not take the keyboard away from the editor: typing still lands there.
+    h.event(egui::Event::Text(" + b".into()));
+    h.run_steps(2);
+    assert_eq!(tex_field(&h).as_deref(), Some("\\sum_i a_i + b"));
     h.get_by_label("Insert").click();
     h.run_steps(3);
     let st = h.state().session.active().unwrap();
