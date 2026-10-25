@@ -2229,14 +2229,14 @@ pub fn draw_layout_with(ctx: &mut RenderContext, l: &deckcraft_text::TextLayout,
 }
 
 /// An equation on its own, for a preview: `m` at `size` points in `family` (the run font an
-/// inserted equation gets), drawn in `color` on a transparent canvas at `px_per_pt` pixels per
-/// point with a quarter-size margin. `None` for sizes that make no picture; a panic draws
+/// inserted equation gets), in display or text style, drawn in `color` on a transparent canvas
+/// at `px_per_pt` pixels per point with a quarter-size margin. `None` for sizes that make no picture; a panic draws
 /// nothing (logged), never a crash.
-pub fn render_equation(m: &deckcraft_math::Math, family: &str, size: f64, px_per_pt: f64, color: Rgba) -> Option<Image> {
+pub fn render_equation(m: &deckcraft_math::Math, family: &str, size: f64, px_per_pt: f64, color: Rgba, display: bool) -> Option<Image> {
     if !(px_per_pt.is_finite() && px_per_pt > 0.0 && size.is_finite() && size > 0.0) {
         return None;
     }
-    let l = deckcraft_text::equation_layout(m, family, size, color);
+    let l = deckcraft_text::equation_layout(m, family, size, color, display);
     let pad = size * 0.3;
     let (w_pt, h_pt) = (l.inner.width() + 2.0 * pad, l.inner.height() + 2.0 * pad);
     if !(w_pt.is_finite() && h_pt.is_finite() && w_pt > 0.0 && h_pt > 0.0) {

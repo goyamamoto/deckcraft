@@ -190,3 +190,34 @@ fn a_real_double_click_on_an_equation_box_opens_the_dialog_with_the_keyboard_in_
     h.run_steps(2);
     assert_eq!(tex_field(&h).as_deref(), Some("a+b+c"));
 }
+
+#[test]
+fn the_display_style_switch_follows_the_context_and_sets_the_equation() {
+    // A new box: display style on; switching it off previews and inserts text style.
+    let mut h = harness();
+    open(&mut h);
+    assert_eq!(h.state().dialog.as_ref().and_then(|d| d.fields.get("display").cloned()).as_deref(), Some("1"));
+    h.event(egui::Event::Text("\\sum_i a_i".into()));
+    h.run_steps(2);
+    let tall = h.state().equation_preview.as_ref().map(|p| (p.display, p.size.y)).unwrap();
+    assert!(tall.0);
+    h.get_by_label("Display style").click();
+    h.run_steps(3);
+    let short = h.state().equation_preview.as_ref().map(|p| (p.display, p.size.y)).unwrap();
+    assert!(!short.0 && short.1 < tall.1, "{tall:?} vs {short:?}");
+    h.get_by_label("Insert").click();
+    h.run_steps(3);
+    let st = h.state().session.active().unwrap();
+    let sh = st.selected_shapes().first().cloned().cloned().unwrap();
+    let RunKind::Math { omml } = &sh.text.as_ref().unwrap().paragraphs[0].runs[0].kind else { panic!() };
+    assert!(!omml.contains("oMathPara"), "inline: {omml}");
+    // Reopened on it, the switch shows its style; at an insertion point the default is text style.
+    open(&mut h);
+    assert_eq!(h.state().dialog.as_ref().and_then(|d| d.fields.get("display").cloned()).as_deref(), Some("0"));
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    h.state_mut().run("insert.textBox", json!({"rect": [40, 300, 400, 40], "text": ""})).unwrap();
+    h.run_steps(2);
+    open(&mut h);
+    assert_eq!(h.state().dialog.as_ref().and_then(|d| d.fields.get("display").cloned()).as_deref(), Some("0"));
+}

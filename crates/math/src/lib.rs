@@ -24,15 +24,17 @@ pub fn parse_tex(s: &str) -> Result<Math, TexError> {
     tex::parse(s)
 }
 
-/// An equation from TeX as what a presentation stores: its OMML and its linear text.
+/// An equation from TeX as what a presentation stores: its OMML (a display equation) and its
+/// linear text.
 pub fn tex_to_omml(s: &str) -> Result<(String, String), TexError> {
-    tex_to_omml_runs(s, "")
+    tex_to_omml_runs(s, "", true)
 }
 
-/// [`tex_to_omml`] with `run_props` XML in every OMML run ([`omml::write_runs`]).
-pub fn tex_to_omml_runs(s: &str, run_props: &str) -> Result<(String, String), TexError> {
+/// [`tex_to_omml`] with `run_props` XML in every OMML run, as a display or an inline equation
+/// ([`omml::write_runs`]).
+pub fn tex_to_omml_runs(s: &str, run_props: &str, display: bool) -> Result<(String, String), TexError> {
     let m = tex::parse(s)?;
-    Ok((omml::write_runs(&m, run_props), linear::linear(&m)))
+    Ok((omml::write_runs(&m, run_props, display), linear::linear(&m)))
 }
 
 /// The TeX of a stored equation, for editing it; `None` when the OMML is not XML.

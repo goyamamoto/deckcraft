@@ -114,7 +114,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Equation",
             ["Insert", "Symbols"],
             None,
-            "{tex: TeX source} — at the insertion point (replacing the selection), or in a new text box",
+            "{tex: TeX source, display?: bool} — at the insertion point (replacing the selection), or in a new text box; display style (limits above and below, display fractions) by default in a box of its own, text style at the insertion point",
             has_slide,
             insert
         ),
@@ -123,7 +123,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Equation at Caret",
             [],
             None,
-            "{} → {tex, start, end} for the equation the caret touches or the selection covers, else null",
+            "{} → {tex, display, start, end, id?} for the equation the caret touches or the selection covers, or the selected equation box, else null",
             has_slide,
             at
         ),
@@ -136,11 +136,13 @@ fn insert(s: &mut Session, p: &Value) -> Result<Value> {
     if tex.trim().is_empty() {
         return Err(bad("insert.equation", "the equation is empty"));
     }
-    let (omml, text) = math::tex_to_omml_runs(tex, MATH_RUN_PROPS).map_err(|e| bad("insert.equation", e.to_string()))?;
+    let inline = s.doc()?.selection.text.is_some();
+    let display = super::bool_or(p, "display", !inline);
+    let (omml, text) = math::tex_to_omml_runs(tex, MATH_RUN_PROPS, display).map_err(|e| bad("insert.equation", e.to_string()))?;
     // A run needs a character to be laid out, selected and deleted.
     let text = if text.is_empty() { " ".to_string() } else { text };
     let run = Run { text, props: RunProps::default(), kind: RunKind::Math { omml } };
-    if s.doc()?.selection.text.is_some() {
+    if inline {
         return super::text::insert_math(s, run);
     }
     // A text box of its own, centred on the slide, that hugs the equation (no wrapping, so the
@@ -178,7 +180,7 @@ fn at(s: &mut Session, _p: &Value) -> Result<Value> {
         let RunKind::Math { omml } = &run.kind else { return Ok(Value::Null) };
         let start: usize = sh.text.as_ref().and_then(|t| t.paragraphs.first()).map(|p| p.runs.iter().take(ri).map(Run::char_len).sum()).unwrap_or(0);
         let tex = math::omml_to_tex(omml).filter(|t| !t.is_empty()).unwrap_or_else(|| run.text.clone());
-        return Ok(json!({"tex": tex, "start": [0, start], "end": [0, start + run.char_len()], "id": id}));
+        return Ok(json!({"tex": tex, "display": math::omml::is_display(omml), "start": [0, start], "end": [0, start + run.char_len()], "id": id}));
     };
     let Some(body) = super::text::body_of(st, t) else { return Ok(Value::Null) };
     let (a, b) = t.ordered();
@@ -194,7 +196,7 @@ fn at(s: &mut Session, _p: &Value) -> Result<Value> {
         let touches = if a == b { a.1 >= ra && a.1 <= rb } else { a.1 >= ra && b.1 <= rb };
         if touches {
             let tex = math::omml_to_tex(omml).filter(|t| !t.is_empty()).unwrap_or_else(|| run.text.clone());
-            return Ok(json!({"tex": tex, "start": [b.0, ra], "end": [b.0, rb]}));
+            return Ok(json!({"tex": tex, "display": math::omml::is_display(omml), "start": [b.0, ra], "end": [b.0, rb]}));
         }
     }
     Ok(Value::Null)

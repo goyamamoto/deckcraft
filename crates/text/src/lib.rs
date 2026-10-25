@@ -543,8 +543,9 @@ impl math::MathFont for MathFaces {
     }
 
     fn rule_thickness(&self) -> f64 {
+        // TeX's fraction bar is 0.04 em; a face's underline is often heavier (CMU Serif 0.05).
         let v = self.base.underline.1 / self.base.upem.max(1.0);
-        if v.is_finite() && v > 0.0 { v.clamp(0.035, 0.08) } else { 0.05 }
+        if v.is_finite() && v > 0.0 { v.clamp(0.035, 0.045) } else { 0.04 }
     }
 }
 
@@ -619,14 +620,14 @@ fn emit_math(out: &mut TextLayout, lay: &math::Layout, paint: &MathPaint, x: f64
     }
 }
 
-/// An equation on its own, in display style, for a preview: `size` points in `family` (the
-/// run font an inserted equation gets), in `color`, its baseline origin at the top left of
-/// `inner` plus its ascent. Shape-local coordinates as [`layout`] gives them.
-pub fn equation_layout(m: &math::Math, family: &str, size: f64, color: Rgba) -> TextLayout {
+/// An equation on its own, for a preview: `size` points in `family` (the run font an inserted
+/// equation gets), in `color`, in display or text style, its baseline origin at the top left
+/// of `inner` plus its ascent. Shape-local coordinates as [`layout`] gives them.
+pub fn equation_layout(m: &math::Math, family: &str, size: f64, color: Rgba, display: bool) -> TextLayout {
     let db = FontDb::global();
     let base = db.document_face(family, "Regular");
     let mut faces = MathFaces::new(base);
-    let lay = math::layout::layout(m, &mut faces, size, true);
+    let lay = math::layout::layout(m, &mut faces, size, display);
     let mut out = TextLayout {
         inner: Rect::new(0.0, 0.0, lay.width, lay.height()),
         content_width: lay.width,
@@ -1008,9 +1009,6 @@ fn shape_para(ctx: &Ctx, shape: &Shape, body: &TextBody, pi: usize, scale: f64, 
     let mut char_style: Vec<usize> = vec![];
     let mut char_object: Vec<Option<usize>> = vec![];
     let mut objects: Vec<MathObject> = vec![];
-    // An equation alone in its paragraph is set in display style (limits above and below large
-    // operators); one among words in text style.
-    let display = para.runs.iter().filter(|r| !matches!(r.kind, RunKind::Math { .. })).all(|r| r.content().trim().is_empty());
     // Kana or Hangul in the paragraph tell the tradition of runs with no language.
     let text_cjk = script::tradition_of_text(para.runs.iter().flat_map(|r| r.text.chars()));
     for run in &para.runs {
@@ -1028,6 +1026,10 @@ fn shape_para(ctx: &Ctx, shape: &Shape, body: &TextBody, pi: usize, scale: f64, 
             RunKind::Math { omml } if n > 0 => {
                 let tree = math::omml::read(omml).filter(|m| !m.is_empty()).unwrap_or_else(|| vec![math::Node::run(run.text.clone())]);
                 let mut mf = MathFaces::new(st.face.clone());
+                // A display equation (`m:oMathPara`: limits above and below large operators,
+                // display-style fractions) or an inline one (`m:oMath`) in text style, as the
+                // equation says — the Equation dialog's Display style switch.
+                let display = math::omml::is_display(omml);
                 let layout = math::layout::layout(&tree, &mut mf, st.size, display);
                 objects.push(MathObject { layout, faces: mf.faces });
                 Some(objects.len() - 1)
