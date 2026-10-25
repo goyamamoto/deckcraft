@@ -305,11 +305,17 @@ fn omml_written_by_office_reads_with_its_run_properties() {
 fn run_properties_go_into_every_run_and_read_back_unchanged() {
     let m = tex::parse("x^2 + \\text{a b}").unwrap();
     let props = "<a:rPr><a:latin typeface=\"Cambria Math\"/></a:rPr>";
-    let xml = omml::write_runs(&m, props);
+    let xml = omml::write_runs(&m, props, true);
     assert_eq!(xml.matches(props).count(), 4, "{xml}");
     assert!(xml.contains("<m:r><m:rPr><m:nor/></m:rPr><a:rPr>"), "m:rPr first, then a:rPr: {xml}");
     assert_eq!(omml::read(&xml).unwrap(), m);
-    assert_eq!(omml::write(&m), omml::write_runs(&m, ""));
+    assert_eq!(omml::write(&m), omml::write_runs(&m, "", true));
+    // Inline: a bare m:oMath, read the same, told apart by is_display.
+    let inline = omml::write_runs(&m, "", false);
+    assert!(inline.starts_with("<m:oMath xmlns:m=") && !inline.contains("oMathPara"), "{inline}");
+    assert_eq!(omml::read(&inline).unwrap(), m);
+    assert!(omml::is_display(&xml) && !omml::is_display(&inline));
+    assert!(!omml::is_display(&tex_to_omml_runs("x", "", false).unwrap().0));
 }
 
 #[test]

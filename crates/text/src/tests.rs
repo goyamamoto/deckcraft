@@ -1948,7 +1948,7 @@ fn unreadable_omml_draws_the_run_text() {
 #[test]
 fn equation_layout_previews_an_equation_on_its_own() {
     let m = deckcraft_math::parse_tex("\\sqrt{x} + \\frac{1}{2}").unwrap();
-    let l = equation_layout(&m, "Cambria Math", 24.0, deckcraft_color::Rgba::rgb(10, 20, 30));
+    let l = equation_layout(&m, "Cambria Math", 24.0, deckcraft_color::Rgba::rgb(10, 20, 30), true);
     assert!(l.inner.width() > 30.0 && l.inner.height() > 20.0, "{:?}", l.inner);
     assert!(!l.runs.is_empty() && l.runs.iter().all(|r| r.color == deckcraft_color::Rgba::rgb(10, 20, 30)));
     assert_eq!(l.paths.len(), 3);
@@ -1964,10 +1964,29 @@ fn equations_draw_in_computer_modern_with_math_symbols_from_stix() {
         return;
     }
     let m = deckcraft_math::parse_tex("\\sum_{i} x_i \\leq \\infty").unwrap();
-    let l = equation_layout(&m, "Cambria Math", 24.0, deckcraft_color::Rgba::BLACK);
+    let l = equation_layout(&m, "Cambria Math", 24.0, deckcraft_color::Rgba::BLACK, true);
     let face_of = |ch: char| l.runs.iter().find(|r| r.cells.iter().any(|c| c.1 == ch)).map(|r| r.face.family.clone());
     assert_eq!(face_of('x').as_deref(), Some("CMU Serif"), "letters in Computer Modern");
     assert_eq!(face_of('∑').as_deref(), Some("STIX Two Math"), "symbols CMU lacks from the math font");
     assert_eq!(face_of('≤').as_deref(), Some("STIX Two Math"));
     assert!(l.runs.iter().filter(|r| r.cells.iter().any(|c| c.1 == 'x')).all(|r| r.face.italic && !r.fake_italic), "a real italic face");
+}
+
+#[test]
+fn an_inline_equation_is_set_in_text_style_and_a_display_one_in_display_style() {
+    let tex = "\\sum_{i=1}^{n} \\frac{a}{b}";
+    let (display_omml, text) = deckcraft_math::tex_to_omml_runs(tex, "", true).unwrap();
+    let (inline_omml, _) = deckcraft_math::tex_to_omml_runs(tex, "", false).unwrap();
+    let run = |omml: String| Run { text: text.clone(), props: RunProps::default(), kind: RunKind::Math { omml } };
+    let (p, sh) = with_runs(vec![run(display_omml)], 400.0);
+    let d = lay(&p, &sh, 400.0, 200.0);
+    let (p2, sh2) = with_runs(vec![run(inline_omml)], 400.0);
+    let i = lay(&p2, &sh2, 400.0, 200.0);
+    let height = |l: &TextLayout| l.lines[0].bottom - l.lines[0].top;
+    assert!(height(&d) > height(&i) + 4.0, "display {} vs inline {}", height(&d), height(&i));
+    // Inline: the sum's limits sit beside it (the operator's size is the text size), and the
+    // fraction's parts are smaller.
+    let size_of = |l: &TextLayout, ch: char| l.runs.iter().find(|r| r.cells.iter().any(|c| c.1 == ch)).map(|r| r.size).unwrap_or(0.0);
+    assert!(size_of(&d, '∑') > size_of(&i, '∑') + 3.0, "{} vs {}", size_of(&d, '∑'), size_of(&i, '∑'));
+    assert!(size_of(&d, 'a') > size_of(&i, 'a') + 3.0, "{} vs {}", size_of(&d, 'a'), size_of(&i, 'a'));
 }

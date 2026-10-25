@@ -2969,6 +2969,7 @@ fn grid_options(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
 pub struct EquationPreview {
     pub source: String,
     pub dark: bool,
+    pub display: bool,
     pub texture: egui::TextureHandle,
     pub size: egui::Vec2,
 }
@@ -2985,6 +2986,12 @@ fn equation_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     let t = Tokens::get(ui.ctx());
     if !d.fields.contains_key("seeded") {
         d.fields.insert("seeded".into(), "1".into());
+        // Display style for an equation in a box of its own, text style at an insertion point.
+        let inline = app.session.active().is_some_and(|st| st.selection.text.is_some());
+        d.fields.insert("display".into(), if inline { "0" } else { "1" }.into());
+        if let Some(v) = d.params.get("display").and_then(Value::as_bool) {
+            d.fields.insert("display".into(), if v { "1" } else { "0" }.into());
+        }
         let given = d.params.get("tex").and_then(Value::as_str).map(str::to_string);
         if let Some(tex) = given {
             d.fields.insert("tex".into(), tex);
@@ -2994,6 +3001,9 @@ fn equation_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             // Editing: the equation is selected, so Insert replaces it. A selected equation box
             // (not being edited) is entered first, and left again when the dialog closes.
             d.fields.insert("tex".into(), tex.to_string());
+            if let Some(v) = at.get("display").and_then(Value::as_bool) {
+                d.fields.insert("display".into(), if v { "1" } else { "0" }.into());
+            }
             if let Some(id) = at.get("id") {
                 let _ = app.run("text.edit", json!({"id": id, "at": at["start"]}));
                 d.fields.insert("exit".into(), "1".into());
@@ -3027,16 +3037,23 @@ fn equation_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     d.fields.insert("tex".into(), tex.clone());
     let parsed = deckcraft_math::parse_tex(&tex);
     let empty = tex.trim().is_empty();
+    // Display style (as TeX's `\displaystyle` or a displayed equation: limits above and below
+    // large operators, full-size fraction parts) or text style, as in a line of text.
+    let mut display = d.get("display", "1") == "1";
+    if ui.checkbox(&mut display, tl!("Display style")).changed() {
+        d.fields.insert("display".into(), if display { "1" } else { "0" }.into());
+    }
     // Preview.
     let dark = app.ui.brightness == theme::Brightness::Dark;
     if let Ok(m) = &parsed
         && !empty
-        && app.equation_preview.as_ref().is_none_or(|p| p.source != tex || p.dark != dark)
+        && app.equation_preview.as_ref().is_none_or(|p| p.source != tex || p.dark != dark || p.display != display)
     {
         let c = t.text;
         let color = deckcraft_color::Rgba::rgb(c.r(), c.g(), c.b());
         let ppp = f64::from(ui.ctx().pixels_per_point());
-        if let Some(img) = deckcraft_render::render_equation(m, deckcraft_engine::cmd::equation::MATH_FONT, EQUATION_PREVIEW_PT, ppp, color) {
+        if let Some(img) = deckcraft_render::render_equation(m, deckcraft_engine::cmd::equation::MATH_FONT, EQUATION_PREVIEW_PT, ppp, color, display)
+        {
             let size = vec2(img.width as f32 / ppp as f32, img.height as f32 / ppp as f32);
             let ci = crate::textures::to_color_image(&img, false);
             let texture = match app.equation_preview.as_mut() {
@@ -3046,7 +3063,7 @@ fn equation_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 }
                 None => crate::textures::upload(ui.ctx(), "equation-preview", ci),
             };
-            app.equation_preview = Some(EquationPreview { source: tex.clone(), dark, texture, size });
+            app.equation_preview = Some(EquationPreview { source: tex.clone(), dark, display, texture, size });
         }
     }
     let (area, _) = ui.allocate_exact_size(vec2(EQUATION_DIALOG_W, 110.0), Sense::hover());
@@ -3140,7 +3157,8 @@ fn equation_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     });
     if insert {
         let tex = d.get("tex", "");
-        match app.run("insert.equation", json!({"tex": tex})) {
+        let display = d.get("display", "1") == "1";
+        match app.run("insert.equation", json!({"tex": tex, "display": display})) {
             Ok(_) => {
                 app.ui.remember_equation(&tex);
                 if d.fields.contains_key("exit") {

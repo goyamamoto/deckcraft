@@ -11,19 +11,31 @@ use crate::symbols;
 
 pub const NS_M: &str = "http://schemas.openxmlformats.org/officeDocument/2006/math";
 
-/// The equation as `<m:oMathPara xmlns:m="…"><m:oMath>…</m:oMath></m:oMathPara>`.
+/// The equation as a display equation: `<m:oMathPara xmlns:m="…"><m:oMath>…</m:oMath></m:oMathPara>`.
 pub fn write(m: &Math) -> String {
-    write_runs(m, "")
+    write_runs(m, "", true)
 }
 
 /// [`write`] with `run_props` (XML, e.g. a DrawingML `a:rPr` naming the math font, as PowerPoint
-/// writes in every `m:r`) inside each run, after its `m:rPr` and before its text.
-pub fn write_runs(m: &Math, run_props: &str) -> String {
+/// writes in every `m:r`) inside each run, after its `m:rPr` and before its text. `display`
+/// wraps the equation in `m:oMathPara` (a display equation: large operators with their limits
+/// above and below, display-style fractions); without it the equation is a bare `m:oMath`, an
+/// inline one set in text style, as Word tells the two apart.
+pub fn write_runs(m: &Math, run_props: &str, display: bool) -> String {
     let mut out = String::with_capacity(256);
-    out.push_str(&format!("<m:oMathPara xmlns:m=\"{NS_M}\"><m:oMath>"));
+    if display {
+        out.push_str(&format!("<m:oMathPara xmlns:m=\"{NS_M}\"><m:oMath>"));
+    } else {
+        out.push_str(&format!("<m:oMath xmlns:m=\"{NS_M}\">"));
+    }
     Writer { out: &mut out, run_props }.row(m, 0);
-    out.push_str("</m:oMath></m:oMathPara>");
+    out.push_str(if display { "</m:oMath></m:oMathPara>" } else { "</m:oMath>" });
     out
+}
+
+/// Whether `omml` is a display equation (an `m:oMathPara`) rather than an inline `m:oMath`.
+pub fn is_display(omml: &str) -> bool {
+    omml.contains("oMathPara")
 }
 
 fn esc(s: &str, out: &mut String) {

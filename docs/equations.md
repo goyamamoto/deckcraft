@@ -15,6 +15,16 @@ the slide (named "Equation", the paragraph centred, the run in Cambria Math). Op
 caret in or beside an equation, or with one selected, the dialog edits that equation: its TeX is
 shown and the equation is selected, so Insert replaces it.
 
+**Display style** (the dialog's switch) sets the equation as TeX's `\displaystyle` or a displayed
+equation does: large operators with their limits above and below, fraction parts at full size
+with TeX's display shifts (numerator up 0.677 em, denominator down 0.686 em about the axis at
+0.25 em). Off, the equation is set in text style as in a line of text: limits beside the
+operator, fraction parts at 70 % with the tighter shifts (0.394 / 0.345 em) — what `\frac` looks
+like inside a paragraph in LaTeX. The switch is on for an equation in a box of its own and off at
+an insertion point in text, and follows the equation when one is reopened. The file keeps the
+choice the way Word does: a display equation is an `m:oMathPara`, an inline one a bare `m:oMath`;
+`insert.equation {display?}` and `equation.at`'s `display` carry it on the control channel.
+
 Every equation inserted is remembered (latest first, no repeats, twenty kept) in the dialog's
 Recent list, which is saved with the interface state (`ui.json`, `UiState::equations`); a row
 puts that TeX back in the editor, Clear forgets them.
@@ -112,8 +122,8 @@ operators).
 In the text layout an equation is one cluster: its first character carries the equation's width
 and draws it (glyph runs by face and size, bars as decorations, strokes as `TextLayout::paths`),
 the others have no width, and a caret stands only before and after it. The line grows to the
-equation's height. An equation alone in its paragraph is set in display style, one among words in
-text style. The renderer, the editor canvas (which renders through it), the PDF writer
+equation's height. Display or text style comes from the equation itself (`m:oMathPara` or
+`m:oMath`, the dialog's Display style switch), not from where it sits. The renderer, the editor canvas (which renders through it), the PDF writer
 (`paths` filled) and the dialog preview (`render_equation`) draw the same layout; warped WordArt
 text and Morph skip the paths.
 

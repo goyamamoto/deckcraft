@@ -4562,7 +4562,10 @@ fn insert_equation_makes_a_math_text_box_from_tex() {
     assert_eq!(sh.name, "Equation");
     let para = &sh.text.as_ref().unwrap().paragraphs[0];
     let run = &para.runs[0];
-    assert!(matches!(&run.kind, RunKind::Math { omml } if omml.contains("<m:f>") && omml.contains("xmlns:m=")), "{run:?}");
+    assert!(
+        matches!(&run.kind, RunKind::Math { omml } if omml.contains("<m:f>") && omml.contains("xmlns:m=") && omml.contains("oMathPara")),
+        "{run:?}"
+    );
     assert_eq!(run.text, "a/b=c");
     assert_eq!(run.props.font.as_deref(), Some("Cambria Math"));
     assert_eq!(para.props.align, Some(Align::Center));
@@ -4590,7 +4593,9 @@ fn insert_equation_at_the_caret_and_equation_at_finds_it() {
     assert!(matches!(runs[1].kind, RunKind::Math { .. }));
     assert_eq!(runs[1].text, "y^2");
     assert_eq!(runs[1].props.font.as_deref(), Some("Cambria Math"));
-    assert_eq!(s.execute("equation.at", &json!({})).unwrap(), json!({"tex": "y^{2}", "start": [0, 4], "end": [0, 7]}));
+    assert_eq!(s.execute("equation.at", &json!({})).unwrap(), json!({"tex": "y^{2}", "display": false, "start": [0, 4], "end": [0, 7]}));
+    // At the insertion point the equation is inline (text style) unless asked otherwise.
+    assert!(!runs[1].omml().contains("oMathPara"));
     s.execute("text.select", &json!({"anchor": [0, 0], "caret": [0, 2]})).unwrap();
     assert_eq!(s.execute("equation.at", &json!({})).unwrap(), Value::Null);
     // Selecting the equation and inserting another replaces it.
@@ -4606,6 +4611,18 @@ fn insert_equation_at_the_caret_and_equation_at_finds_it() {
     assert_eq!(bad["ok"], json!(false));
     assert_eq!(bad["error"]["pos"], json!(0));
     assert!(bad["error"]["message"].as_str().unwrap().contains("\\foo"));
+}
+
+trait OmmlOf {
+    fn omml(&self) -> &str;
+}
+impl OmmlOf for deckcraft_model::text::Run {
+    fn omml(&self) -> &str {
+        match &self.kind {
+            deckcraft_model::text::RunKind::Math { omml } => omml,
+            _ => "",
+        }
+    }
 }
 
 fn equation_box(s: &mut Session, tex: &str) -> (u64, deckcraft_geom::Xfrm) {
@@ -4681,6 +4698,14 @@ fn a_selected_equation_box_is_found_by_equation_at_and_double_click_opens_the_di
     let at = s.execute("equation.at", &json!({})).unwrap();
     assert_eq!(at["tex"], "\\sqrt{2}");
     assert_eq!(at["id"], json!(id));
+    assert_eq!(at["display"], json!(true));
+    // A box asked for in text style stays inline, and says so.
+    s.execute("edit.deselect", &json!({})).unwrap();
+    s.execute("insert.equation", &json!({"tex": "\\frac{1}{2}", "display": false})).unwrap();
+    let at = s.execute("equation.at", &json!({})).unwrap();
+    assert_eq!(at["display"], json!(false));
+    s.execute("edit.undo", &json!({})).unwrap();
+    s.execute("edit.select", &json!({"ids": [id]})).unwrap();
     assert_eq!(at["start"], json!([0, 0]));
     // Deselected: nothing.
     s.execute("edit.deselect", &json!({})).unwrap();
