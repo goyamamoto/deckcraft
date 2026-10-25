@@ -398,7 +398,7 @@ pub fn caret_color(st: &DocState, t: &TextSel) -> Option<deckcraft_color::Rgba> 
     Some(resolve::text_color(&ctx, &props)).filter(|c| c.a > 0)
 }
 
-fn pos_param(p: &Value, key: &str) -> Option<Pos> {
+pub(crate) fn pos_param(p: &Value, key: &str) -> Option<Pos> {
     let a = p.get(key)?.as_array()?;
     Some((a.first()?.as_u64()? as usize, a.get(1)?.as_u64()? as usize))
 }
@@ -486,7 +486,7 @@ pub(crate) fn insert_text(s: &mut Session, text: &str, props: Option<RunProps>) 
     let pos = edit_text(s, |body, t| {
         let (a, b) = t.ordered();
         let at = ed::delete(body, a, b);
-        let props = props.clone().or_else(|| if a != b { Some(ed::props_at(body, at)) } else { unlinked_at_link_end(body, at) });
+        let props = props.clone().or_else(|| if a != b { Some(ed::insert_props_at(body, at)) } else { unlinked_at_link_end(body, at) });
         let props = tagged_props(body, at, props, east_asian, lang.as_deref());
         let c = ed::insert(body, at, &text, props);
         t.anchor = c;
@@ -640,7 +640,7 @@ fn tagged_props(
     inherited: Option<&str>,
 ) -> Option<RunProps> {
     let Some(lang) = lang else { return props };
-    let base = props.clone().unwrap_or_else(|| ed::props_at(body, at));
+    let base = props.clone().unwrap_or_else(|| ed::insert_props_at(body, at));
     east_asian_props(&base, inherited, lang).or(props)
 }
 
@@ -966,7 +966,7 @@ pub(crate) fn insert_field(s: &mut Session, field: &str, text: &str) -> Result<V
     edit_text(s, move |body, t| {
         let (a, b) = t.ordered();
         let at = ed::delete(body, a, b);
-        let props = ed::props_at(body, at);
+        let props = ed::insert_props_at(body, at);
         let src = TextBody {
             paragraphs: vec![deckcraft_model::text::Paragraph {
                 runs: vec![Run { text: text.clone(), props, kind: RunKind::Field { field: field.clone() } }],
@@ -982,13 +982,16 @@ pub(crate) fn insert_field(s: &mut Session, field: &str, text: &str) -> Result<V
 }
 
 /// Insert an equation run at the insertion point (replacing the selection), in the formatting
-/// there but in the math font, and leave the caret after it.
-pub(crate) fn insert_math(s: &mut Session, mut run: Run) -> Result<Value> {
+/// there (at `size` when given) but in the math font, and leave the caret after it.
+pub(crate) fn insert_math(s: &mut Session, mut run: Run, size: Option<f64>) -> Result<Value> {
     let pos = edit_text(s, move |body, t| {
         let (a, b) = t.ordered();
         let at = ed::delete(body, a, b);
-        let mut props = ed::props_at(body, at);
+        let mut props = ed::insert_props_at(body, at);
         props.font = Some(super::equation::MATH_FONT.into());
+        if size.is_some() {
+            props.size = size;
+        }
         props.link = None;
         props.hover = None;
         run.props = props;
@@ -1055,7 +1058,7 @@ fn compose(s: &mut Session, p: &Value) -> Result<Value> {
             let (start, props) = edit_text(s, |body, t| {
                 let (a, b) = t.ordered();
                 let at = ed::delete(body, a, b);
-                let props = if a != b { Some(ed::props_at(body, at)) } else { unlinked_at_link_end(body, at) };
+                let props = if a != b { Some(ed::insert_props_at(body, at)) } else { unlinked_at_link_end(body, at) };
                 // The composition keeps the untagged formatting: each preedit is tagged afresh.
                 let c = ed::insert(body, at, &text, tagged_props(body, at, props.clone(), east_asian, lang.as_deref()));
                 let c = (c.0, c.1.saturating_sub(after_caret));
@@ -1606,7 +1609,7 @@ pub(crate) fn link_text(s: &mut Session, link: Hyperlink, display: &str) -> Resu
         return Err(bad("insert.hyperlink", "nothing to link: select text or give `text`"));
     }
     let pos = edit_text(s, |body, t| {
-        let mut props = ed::props_at(body, a);
+        let mut props = ed::insert_props_at(body, a);
         props.link = Some(link);
         let c = ed::insert(body, a, display, Some(props));
         t.anchor = c;

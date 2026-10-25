@@ -54,34 +54,51 @@ fn split_at(p: &mut Paragraph, at: usize) -> usize {
     p.runs.len()
 }
 
+/// The run whose properties are in effect at char `ch`: the run before the caret (the first run
+/// at the paragraph's start), the last run past the end, `None` for a paragraph with no runs.
+fn run_at(p: &Paragraph, ch: usize) -> Option<usize> {
+    let mut acc = 0usize;
+    for (i, r) in p.runs.iter().enumerate() {
+        let end = acc.saturating_add(r.char_len());
+        if (ch <= end && ch > acc) || ch == 0 {
+            return Some(i);
+        }
+        acc = end;
+    }
+    p.runs.len().checked_sub(1)
+}
+
 /// The explicit run properties in effect at `pos` (the run before the caret, or the end mark).
 pub fn props_at(body: &TextBody, pos: Pos) -> RunProps {
     let (pi, ch) = clamp(body, pos);
     let Some(p) = body.paragraphs.get(pi) else { return RunProps::default() };
-    let mut acc = 0;
-    let mut last = None;
-    for r in &p.runs {
-        let len = r.char_len();
-        if ch <= acc + len && ch > acc {
-            return r.props.clone();
-        }
-        if acc + len >= ch && ch == 0 {
-            return r.props.clone();
-        }
-        acc += len;
-        last = Some(&r.props);
-    }
-    last.cloned().unwrap_or_else(|| p.end_props.clone())
+    run_at(p, ch).and_then(|i| p.runs.get(i)).map_or_else(|| p.end_props.clone(), |r| r.props.clone())
 }
 
-/// Insert `text` at `pos` (with `props`, else the props at `pos`). `\n` starts a new paragraph
-/// (same level and paragraph props); `\u{b}` inserts a line break. Returns the caret after it.
+/// The run properties text inserted at `pos` takes: [`props_at`], except beside an equation, whose
+/// math font and size belong to it — there the nearest other run in the paragraph lends its
+/// properties (before `pos`, else after), else the paragraph's end mark.
+pub fn insert_props_at(body: &TextBody, pos: Pos) -> RunProps {
+    let (pi, ch) = clamp(body, pos);
+    let Some(p) = body.paragraphs.get(pi) else { return RunProps::default() };
+    let Some(i) = run_at(p, ch) else { return p.end_props.clone() };
+    if !matches!(p.runs.get(i).map(|r| &r.kind), Some(RunKind::Math { .. })) {
+        return props_at(body, pos);
+    }
+    let before = p.runs.get(..i).unwrap_or_default().iter().rev();
+    let after = p.runs.get(i + 1..).unwrap_or_default().iter();
+    before.chain(after).find(|r| !matches!(r.kind, RunKind::Math { .. })).map_or_else(|| p.end_props.clone(), |r| r.props.clone())
+}
+
+/// Insert `text` at `pos` (with `props`, else [`insert_props_at`] `pos`). `\n` starts a new
+/// paragraph (same level and paragraph props); `\u{b}` inserts a line break. Returns the caret
+/// after it.
 pub fn insert(body: &mut TextBody, pos: Pos, text: &str, props: Option<RunProps>) -> Pos {
     if body.paragraphs.is_empty() {
         body.paragraphs.push(Paragraph::default());
     }
     let (mut pi, mut ch) = clamp(body, pos);
-    let props = props.unwrap_or_else(|| props_at(body, (pi, ch)));
+    let props = props.unwrap_or_else(|| insert_props_at(body, (pi, ch)));
     let text = text.replace("\r\n", "\n").replace('\r', "\n");
     let mut first = true;
     for part in text.split('\n') {
@@ -552,6 +569,38 @@ mod tests {
 
     fn body(t: &str) -> TextBody {
         TextBody::from_text(t)
+    }
+
+    #[test]
+    fn text_inserted_beside_an_equation_takes_the_text_formatting() {
+        let math = |t: &str| Run {
+            text: t.into(),
+            props: RunProps { font: Some("Cambria Math".into()), size: Some(30.0), ..Default::default() },
+            kind: RunKind::Math { omml: "<m:oMath/>".into() },
+        };
+        let words = |t: &str| Run::with(t, RunProps { font: Some("Inter".into()), ..Default::default() });
+        let mut b = TextBody::default();
+        b.paragraphs.push(Paragraph { runs: vec![words("a "), math("x^2"), words(" b")], ..Default::default() });
+        // After the equation: the run before it, not the equation's math font and size.
+        assert_eq!(props_at(&b, (0, 5)).font.as_deref(), Some("Cambria Math"));
+        assert_eq!(insert_props_at(&b, (0, 5)).font.as_deref(), Some("Inter"));
+        assert_eq!(insert_props_at(&b, (0, 5)).size, None);
+        let c = insert(&mut b, (0, 5), "!", None);
+        assert_eq!(c, (0, 6));
+        assert!(b.paragraphs[0].runs.iter().any(|r| r.text.contains('!') && r.props.font.as_deref() == Some("Inter")));
+        // An equation first in its paragraph lends nothing either: the run after it does.
+        b.paragraphs[0].runs.remove(0);
+        assert_eq!(insert_props_at(&b, (0, 0)).font.as_deref(), Some("Inter"));
+        // Nothing but an equation: the end mark.
+        let mut only = TextBody::default();
+        only.paragraphs.push(Paragraph {
+            runs: vec![math("y")],
+            end_props: RunProps { size: Some(30.0), ..Default::default() },
+            ..Default::default()
+        });
+        assert_eq!(insert_props_at(&only, (0, 1)), RunProps { size: Some(30.0), ..Default::default() });
+        // Elsewhere it is props_at.
+        assert_eq!(insert_props_at(&b, (0, 6)), props_at(&b, (0, 6)));
     }
 
     #[test]
