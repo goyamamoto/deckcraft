@@ -55,7 +55,9 @@ fn typing_tex_previews_it_and_cmd_enter_inserts_and_remembers_it() {
     let run = &sh.text.as_ref().unwrap().paragraphs[0].runs[0];
     assert!(matches!(&run.kind, RunKind::Math { omml } if omml.contains("<m:f>")));
     assert_eq!(h.state().ui.equations, vec!["\\frac{a}{b}".to_string()]);
-    // Inserting it again keeps one entry; a second equation goes first.
+    // A second equation (the first one deselected, else the dialog would edit it) goes first.
+    h.state_mut().run("edit.deselect", json!({})).unwrap();
+    h.run_steps(2);
     open(&mut h);
     h.event(egui::Event::Text("x^2".into()));
     h.run_steps(2);
@@ -136,4 +138,28 @@ fn opening_the_dialog_beside_an_equation_edits_it() {
     let runs = st.shape(t.shape).unwrap().text.as_ref().unwrap().paragraphs[0].runs.clone();
     assert_eq!(runs.iter().filter(|r| matches!(r.kind, RunKind::Math { .. })).count(), 1, "{runs:?}");
     assert_eq!(runs.last().unwrap().text, "y^2+1");
+}
+
+#[test]
+fn the_dialog_edits_a_selected_equation_box_in_place() {
+    let mut s = Session::with_new();
+    s.execute("insert.equation", &json!({"tex": "\\frac{a}{b}"})).unwrap();
+    let id = s.active().unwrap().selected_shapes()[0].id;
+    let mut h = harness_with(s);
+    open(&mut h);
+    assert_eq!(tex_field(&h).as_deref(), Some("\\frac{a}{b}"));
+    let st = h.state().session.active().unwrap();
+    let t = st.selection.text.clone().expect("the box is entered so Insert replaces the equation");
+    assert_eq!((t.shape, t.ordered()), (id, ((0, 0), (0, 3))));
+    h.event(egui::Event::Text(" + 1".into()));
+    h.run_steps(2);
+    h.get_by_label("Insert").click();
+    h.run_steps(3);
+    let st = h.state().session.active().unwrap();
+    assert!(st.selection.text.is_none(), "editing left again");
+    assert_eq!(st.selection.shapes, vec![id]);
+    let runs = st.shape(id).unwrap().text.as_ref().unwrap().paragraphs[0].runs.clone();
+    assert_eq!(runs.iter().filter(|r| matches!(r.kind, RunKind::Math { .. })).count(), 1, "{runs:?}");
+    assert_eq!(runs.iter().find(|r| matches!(r.kind, RunKind::Math { .. })).unwrap().text, "a/b+1");
+    assert_eq!(h.state().ui.equations, vec!["\\frac{a}{b} + 1".to_string()]);
 }

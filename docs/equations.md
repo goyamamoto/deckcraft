@@ -24,6 +24,21 @@ equation the caret touches, as TeX with its character range) and `equation.check
 (parses, answers `{ok, text}` or the error's position and message). `app.dialog {id:
 "equation", tex?}` and `ui.dialog.open {id: "equation", fields: {tex}}` open the dialog seeded.
 
+## Sizing and editing an equation box
+
+The text box Insert ▸ Equation makes hugs its equation (no wrapping, no insets), so its handles sit
+on the equation. Dragging a handle scales the equation itself — its font size follows the
+dragged side's ratio, corner and side handles alike keep its proportions — and the equation is
+laid out afresh at the new size, so it stays sharp at any size (nothing is stretched as a
+picture). Shape Format ▸ Size, the Size and Position dialog and `shape.resize {w | h}` scale it the
+same way; Home ▸ Font Size does too. A box with words beside the equation is an ordinary text box
+and sizes as one.
+
+Double-clicking an equation box opens the Equation dialog on its TeX, as does Insert ▸ Equation
+while the box is selected (click an empty part of the slide first to insert a new equation
+instead); Insert replaces the equation and leaves the box selected. `equation.at` names a selected
+box's equation with its `id`.
+
 ## What the TeX covers
 
 | Kind | TeX |

@@ -2991,8 +2991,13 @@ fn equation_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         } else if let Ok(at) = app.run("equation.at", json!({}))
             && let Some(tex) = at.get("tex").and_then(Value::as_str)
         {
-            // Editing: the equation is selected, so Insert replaces it.
+            // Editing: the equation is selected, so Insert replaces it. A selected equation box
+            // (not being edited) is entered first, and left again when the dialog closes.
             d.fields.insert("tex".into(), tex.to_string());
+            if let Some(id) = at.get("id") {
+                let _ = app.run("text.edit", json!({"id": id, "at": at["start"]}));
+                d.fields.insert("exit".into(), "1".into());
+            }
             let _ = app.run("text.select", json!({"anchor": at["start"], "caret": at["end"]}));
         }
     }
@@ -3131,12 +3136,18 @@ fn equation_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         match app.run("insert.equation", json!({"tex": tex})) {
             Ok(_) => {
                 app.ui.remember_equation(&tex);
+                if d.fields.contains_key("exit") {
+                    let _ = app.run("text.exit", json!({}));
+                }
                 return true;
             }
             Err(e) => {
                 d.fields.insert("error".into(), e);
             }
         }
+    }
+    if cancel && d.fields.contains_key("exit") {
+        let _ = app.run("text.exit", json!({}));
     }
     cancel
 }

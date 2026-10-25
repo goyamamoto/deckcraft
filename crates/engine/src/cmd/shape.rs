@@ -197,6 +197,19 @@ fn move_by(s: &mut Session, p: &Value) -> Result<Value> {
 fn resize(s: &mut Session, p: &Value) -> Result<Value> {
     let (w, h) = (f64_param(p, "w").map(|v| v.max(0.0)), f64_param(p, "h").map(|v| v.max(0.0)));
     let lock = bool_or(p, "lockAspect", false);
+    // An equation box is sized by scaling its equation; the others by their boxes.
+    let ids = targets(s, p)?;
+    let mut rest = Vec::with_capacity(ids.len());
+    for id in ids {
+        let locked = s.doc()?.shape(id).is_some_and(|x| x.locked);
+        if locked || !super::equation::resize_equation(s, id, w, h)? {
+            rest.push(id.0);
+        }
+    }
+    if rest.is_empty() {
+        return ok();
+    }
+    let p = &with_param(p, "ids", Value::from(rest));
     edit_geometry(s, p, "shape.resize", |sh| {
         if let Some(x) = sh.xfrm.as_mut() {
             let ar = if x.h > 0.0 { x.w / x.h } else { 1.0 };
