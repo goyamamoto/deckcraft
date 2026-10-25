@@ -3035,12 +3035,20 @@ fn equation_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         cursor.blink = false;
         cursor.stroke = Stroke::new(2.0, t.accent);
     }
+    // A framed field with a focus ring, and no hint text inside it: the caret at the start of
+    // an empty editor was lost on a hint's first glyph (the examples are on the line below).
+    let focused = ui.memory(|m| m.has_focus(edit_id));
+    let frame = egui::Frame::new()
+        .fill(t.field_bg)
+        .stroke(Stroke::new(if focused { 1.5 } else { 1.0 }, if focused { t.accent } else { t.border }))
+        .corner_radius(CornerRadius::same(4))
+        .inner_margin(egui::Margin::symmetric(8, 6));
     let edit = egui::TextEdit::multiline(&mut tex)
         .id(edit_id)
+        .frame(frame)
         .desired_rows(3)
         .desired_width(EQUATION_DIALOG_W)
-        .font(egui::FontId::monospace(14.0))
-        .hint_text("\\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}");
+        .font(egui::FontId::monospace(14.0));
     let r = ui.add(edit);
     if !d.fields.contains_key("focused") {
         r.request_focus();

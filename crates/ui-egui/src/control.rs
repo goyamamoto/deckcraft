@@ -114,6 +114,8 @@ pub fn inspect(app: &SlideApp, ctx: &egui::Context) -> Value {
         // The interface's font chain (the proportional family's faces, first drawn first): tells
         // which face draws the interface in a language, such as the platform's Japanese face.
         "interfaceFonts": ctx.fonts(|f| f.definitions().families.get(&egui::FontFamily::Proportional).cloned()).unwrap_or_default(),
+        // Whether egui takes this window as focused (it draws text-field carets only then).
+        "viewportFocused": ctx.input(|i| i.focused),
         "status": app.status.as_ref().map(|s| s.0.clone()),
         "perf": {"frameMs": app.perf.frame_ms, "renderMs": app.perf.render_ms, "fps": app.perf.fps},
     })

@@ -67,6 +67,25 @@ impl eframe::App for App {
                 }
             });
         }
+        // macOS: egui draws a text field's caret only while its viewport has the focus, and the
+        // focus event winit sends as the first window opens can go missing (the caret then showed
+        // only once another window had taken the focus and given it back). AppKit knows better:
+        // the app is active with a key window, and this viewport is the window in use.
+        #[cfg(target_os = "macos")]
+        if let Some(mtm) = objc2::MainThreadMarker::new() {
+            let ns = objc2_app_kit::NSApplication::sharedApplication(mtm);
+            let key = ns.isActive() && ns.keyWindow().is_some();
+            let vp = raw.viewport_id;
+            let in_use = Host::with(|h| {
+                let this = h.window_of_viewport_mut(vp).map(|w| w.id);
+                this.is_some() && this == h.active().map(|w| w.id)
+            })
+            .unwrap_or(false);
+            if in_use && raw.focused != key {
+                log::debug!("viewport focus: egui had {}, AppKit says {key}", raw.focused);
+                raw.focused = key;
+            }
+        }
         Host::with(|h| h.raw_input_hook(raw));
     }
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
