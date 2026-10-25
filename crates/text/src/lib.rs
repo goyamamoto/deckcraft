@@ -474,7 +474,11 @@ struct MathFaces {
 
 impl MathFaces {
     fn new(base: Arc<FontFace>) -> Self {
-        MathFaces { db: FontDb::global(), family: base.family.clone(), base, faces: Vec::new(), cache: HashMap::new() }
+        let db = FontDb::global();
+        // PowerPoint's math font names "the math font": equations are drawn in Computer Modern
+        // (TeX's, CMU Serif) when craft-fonts bundles it, even where Cambria Math is installed.
+        let base = if base.answers_to("Cambria Math") { db.available_face("CMU Serif", "Regular").unwrap_or(base) } else { base };
+        MathFaces { db, family: base.family.clone(), base, faces: Vec::new(), cache: HashMap::new() }
     }
 
     fn index(&mut self, face: &Arc<FontFace>) -> u32 {
@@ -498,7 +502,12 @@ impl math::MathFont for MathFaces {
         } else if self.base.covers(c) {
             Some(self.base.clone())
         } else {
-            self.db.fallback_styled(c, own.id(), style, None).filter(|f| f.covers(c))
+            // A symbol the run's family lacks: from a math font (the bundled STIX Two Math, or
+            // one installed), so operators and relations match each other, before any face.
+            MATH_SYMBOL_FONTS
+                .iter()
+                .find_map(|f| self.db.available_face(f, "Regular").filter(|f| f.covers(c)))
+                .or_else(|| self.db.fallback_styled(c, own.id(), style, None).filter(|f| f.covers(c)))
         };
         let g = face.and_then(|face| {
             let gid = face.glyph_for(c);
@@ -538,6 +547,10 @@ impl math::MathFont for MathFaces {
         if v.is_finite() && v > 0.0 { v.clamp(0.035, 0.08) } else { 0.05 }
     }
 }
+
+/// Math fonts tried, in order, for a symbol the equation's family lacks.
+const MATH_SYMBOL_FONTS: &[&str] =
+    &["STIX Two Math", "Latin Modern Math", "Cambria Math", "XITS Math", "Libertinus Math", "Noto Sans Math", "STIX Math"];
 
 /// How an equation's parts are painted: its run's colour and effects.
 struct MathPaint<'a> {

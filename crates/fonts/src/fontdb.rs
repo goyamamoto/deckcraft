@@ -32,7 +32,10 @@ pub fn bundled() -> Vec<&'static [u8]> {
 pub fn substitutes(family: &str) -> &'static [&'static str] {
     match family.to_ascii_lowercase().as_str() {
         "calibri" | "calibri light" => &["Carlito", "Liberation Sans", "Arial", "Inter"],
-        "cambria" | "cambria math" => &["Caladea", "Liberation Serif", "Times New Roman", "Merriweather"],
+        "cambria" => &["Caladea", "Liberation Serif", "Times New Roman", "Merriweather"],
+        // PowerPoint's math font: drawn in Computer Modern (TeX's), symbols it lacks from a math
+        // font (see deckcraft-text's equation faces), then Cambria's own stand-ins.
+        "cambria math" => &["CMU Serif", "Caladea", "Liberation Serif", "Times New Roman", "Merriweather"],
         "arial" | "helvetica" | "helvetica neue" | "arial nova" => &["Liberation Sans", "Arial", "Helvetica Neue", "Helvetica", "Inter"],
         "times new roman" | "times" => &["Liberation Serif", "Times New Roman", "Times", "Merriweather"],
         "courier new" | "courier" | "consolas" | "menlo" => &["Liberation Mono", "Courier New", "Menlo", "Courier"],

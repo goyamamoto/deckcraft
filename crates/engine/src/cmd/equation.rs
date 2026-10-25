@@ -21,6 +21,30 @@ const MATH_RUN_PROPS: &str = "<a:rPr><a:latin typeface=\"Cambria Math\"/></a:rPr
 /// The size an equation run has when it names none.
 const DEFAULT_SIZE: f64 = 18.0;
 
+/// The inset of an equation box on each side: room for the caret beside the equation, inside
+/// the frame. Sizing goes by the equation inside, so the inset never scales.
+pub const BOX_INSET: f64 = 2.0;
+
+/// The horizontal and vertical insets of `sh`'s text box, as laid out.
+pub fn insets(sh: &Shape) -> (f64, f64) {
+    let b = sh.text.as_ref().map(|t| &t.body);
+    let l = b.and_then(|b| b.inset_l).unwrap_or(7.2) + b.and_then(|b| b.inset_r).unwrap_or(7.2);
+    let t = b.and_then(|b| b.inset_t).unwrap_or(3.6) + b.and_then(|b| b.inset_b).unwrap_or(3.6);
+    (l.max(0.0), t.max(0.0))
+}
+
+/// The ratio a box of `old` sized to `new` scales its equation by: the equation's own extent
+/// (the box less its insets) is what grows, by width when `w` is asked for, else by height.
+pub fn scale_ratio(sh: &Shape, old: (f64, f64), new: (Option<f64>, Option<f64>)) -> Option<f64> {
+    let (il, it) = insets(sh);
+    let ratio = match new {
+        (Some(w), _) if old.0 - il > 1e-6 => (w - il) / (old.0 - il),
+        (_, Some(h)) if old.1 - it > 1e-6 => (h - it) / (old.1 - it),
+        _ => return None,
+    };
+    (ratio.is_finite() && ratio > 0.0).then(|| ratio.clamp(0.01, 100.0))
+}
+
 /// A shape holding one equation and nothing else (Insert ▸ Equation's text box): one paragraph
 /// whose only content is a math run. Such a shape is sized as a picture is — its handles scale
 /// the equation — and double-clicking it edits the equation.
@@ -77,15 +101,8 @@ pub(crate) fn resize_equation(s: &mut Session, id: ShapeId, w: Option<f64>, h: O
     let Some(sh) = st.shape(id).filter(|sh| equation_box(sh)).cloned() else { return Ok(false) };
     let Some(size) = equation_size(&sh) else { return Ok(false) };
     let x = super::xfrm_of(&st.doc, &st.selection, &sh);
-    let ratio = match (w, h) {
-        (Some(w), _) if x.w > 1e-9 => w / x.w,
-        (_, Some(h)) if x.h > 1e-9 => h / x.h,
-        _ => return Ok(true),
-    };
-    if !ratio.is_finite() || ratio <= 0.0 {
-        return Ok(true);
-    }
-    set_equation_size(s, id, size * ratio.clamp(0.01, 100.0))?;
+    let Some(ratio) = scale_ratio(&sh, (x.w, x.h), (w, h)) else { return Ok(true) };
+    set_equation_size(s, id, size * ratio)?;
     super::text::fit_text_box(s, id)?;
     Ok(true)
 }
@@ -138,11 +155,12 @@ fn insert(s: &mut Session, p: &Value) -> Result<Value> {
         para.runs = vec![run];
         tb.paragraphs = vec![para];
         tb.body.wrap = Some(false);
-        // No insets: the box is exactly the equation, so sizing the box scales it exactly.
-        tb.body.inset_l = Some(0.0);
-        tb.body.inset_r = Some(0.0);
-        tb.body.inset_t = Some(0.0);
-        tb.body.inset_b = Some(0.0);
+        // A small inset: the box is the equation plus room for the caret beside it; sizing
+        // goes by the equation inside (`scale_ratio`), so the box scales it exactly.
+        tb.body.inset_l = Some(BOX_INSET);
+        tb.body.inset_r = Some(BOX_INSET);
+        tb.body.inset_t = Some(BOX_INSET);
+        tb.body.inset_b = Some(BOX_INSET);
     }
     shape.name = "Equation".into();
     super::insert::place_text_box(s, "insert.equation", shape, false)

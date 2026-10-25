@@ -403,6 +403,7 @@ mod tests {
     fn office_fonts_have_substitutes() {
         assert!(substitutes("Calibri").contains(&"Carlito"));
         assert!(substitutes("Cambria").contains(&"Caladea"));
+        assert_eq!(substitutes("Cambria Math").first(), Some(&"CMU Serif"));
         assert!(substitutes("Times New Roman").contains(&"Liberation Serif"));
         assert!(substitutes("Aptos").contains(&"Inter"));
         assert!(substitutes("zzz").is_empty());

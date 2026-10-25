@@ -1955,3 +1955,19 @@ fn equation_layout_previews_an_equation_on_its_own() {
     assert_eq!(l.decos.len(), 2, "overbar and fraction bar");
     assert_eq!(l.lines.len(), 1);
 }
+
+#[test]
+fn equations_draw_in_computer_modern_with_math_symbols_from_stix() {
+    let db = FontDb::global();
+    if !db.has_family("CMU Serif") || !db.has_family("STIX Two Math") {
+        eprintln!("skipped: built without the craft-fonts math faces");
+        return;
+    }
+    let m = deckcraft_math::parse_tex("\\sum_{i} x_i \\leq \\infty").unwrap();
+    let l = equation_layout(&m, "Cambria Math", 24.0, deckcraft_color::Rgba::BLACK);
+    let face_of = |ch: char| l.runs.iter().find(|r| r.cells.iter().any(|c| c.1 == ch)).map(|r| r.face.family.clone());
+    assert_eq!(face_of('x').as_deref(), Some("CMU Serif"), "letters in Computer Modern");
+    assert_eq!(face_of('∑').as_deref(), Some("STIX Two Math"), "symbols CMU lacks from the math font");
+    assert_eq!(face_of('≤').as_deref(), Some("STIX Two Math"));
+    assert!(l.runs.iter().filter(|r| r.cells.iter().any(|c| c.1 == 'x')).all(|r| r.face.italic && !r.fake_italic), "a real italic face");
+}

@@ -163,3 +163,30 @@ fn the_dialog_edits_a_selected_equation_box_in_place() {
     assert_eq!(runs.iter().find(|r| matches!(r.kind, RunKind::Math { .. })).unwrap().text, "a/b+1");
     assert_eq!(h.state().ui.equations, vec!["\\frac{a}{b} + 1".to_string()]);
 }
+
+#[test]
+fn a_real_double_click_on_an_equation_box_opens_the_dialog_with_the_keyboard_in_the_editor() {
+    let mut s = Session::with_new();
+    s.execute("insert.equation", &json!({"tex": "a+b"})).unwrap();
+    let id = s.active().unwrap().selected_shapes()[0].id;
+    s.execute("edit.deselect", &json!({})).unwrap();
+    let mut h = harness_with(s);
+    let (rect, scale) = {
+        let app = h.state();
+        (app.slide_rect.expect("the slide is on screen"), app.canvas_scale)
+    };
+    let x = h.state().session.active().unwrap().shape(id).unwrap().xfrm.unwrap();
+    let pos = egui::pos2(rect.min.x + (x.x + x.w / 2.0) as f32 * scale, rect.min.y + (x.y + x.h / 2.0) as f32 * scale);
+    for _ in 0..2 {
+        h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+        h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+        h.run_steps(1);
+    }
+    h.run_steps(3);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.id.as_str()), Some("equation"), "the double-click opened the dialog");
+    assert_eq!(tex_field(&h).as_deref(), Some("a+b"));
+    // The keyboard is in the editor: typing lands at the end of the TeX, after the caret.
+    h.event(egui::Event::Text("+c".into()));
+    h.run_steps(2);
+    assert_eq!(tex_field(&h).as_deref(), Some("a+b+c"));
+}
