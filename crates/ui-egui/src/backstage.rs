@@ -153,7 +153,7 @@ pub enum ExportTask {
 pub struct Backstage {
     pub page: Page,
     /// The open presentations (count, active) when it opened: a change closes it.
-    pub docs: (usize, Option<usize>),
+    pub docs: (usize, Option<u64>),
     /// Keyboard focus in the side menu (an index into [`entries`], top then bottom).
     pub focus: Option<usize>,
     /// Search text on Home, New and Open.
@@ -180,7 +180,9 @@ pub struct Backstage {
 }
 
 impl Backstage {
-    pub fn new(page: Page, docs: (usize, Option<usize>)) -> Backstage {
+    /// Construct the Backstage view at a page with the current document identity, so a replaced deck
+    /// can be detected.
+    pub fn new(page: Page, docs: (usize, Option<u64>)) -> Backstage {
         Backstage {
             page,
             docs,
@@ -347,7 +349,7 @@ pub fn show(app: &mut SlideApp, ui: &mut Ui) {
         ui.spacing_mut().item_spacing.y = 0.0;
         if has_doc {
             let (r, resp) = ui.allocate_exact_size(vec2(NAV_W, BACK_H), Sense::click());
-            resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Back")));
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Back")));
             let hovered = resp.hovered();
             if hovered {
                 ui.painter().rect_filled(Rect::from_center_size(pos2(r.left() + 26.0, r.center().y), vec2(34.0, 34.0)), 17.0, t.hover);
@@ -447,11 +449,12 @@ pub fn show(app: &mut SlideApp, ui: &mut Ui) {
 
 // ---------------------------------------------------------------- side menu
 
+/// Draw one clickable Backstage navigation row and return its interaction response.
 fn nav_item(ui: &mut Ui, nav: Nav, bs: &Backstage, index: usize, t: &Tokens) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(NAV_W, ITEM_H), Sense::click());
     let selected = nav == Nav::Page(bs.page);
     let label = tl!(nav.label());
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, selected, label));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, label));
     let p = ui.painter();
     let row = rect.shrink2(vec2(6.0, 1.0));
     if resp.hovered() {
@@ -507,7 +510,7 @@ fn tile(ui: &mut Ui, label: &str, theme: Option<&deckcraft_model::Theme>, big: b
     let t = Tokens::get(ui.ctx());
     let thumb_w = if big { 200.0 } else { 160.0 };
     let (rect, resp) = ui.allocate_exact_size(vec2(thumb_w + 16.0, thumb_w * 9.0 / 16.0 + 44.0), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
     let p = ui.painter();
     if resp.hovered() {
         p.rect_filled(rect, CornerRadius::same(4), t.hover);
@@ -615,7 +618,7 @@ fn recent_list(app: &mut SlideApp, ui: &mut Ui, query: &str, limit: usize) {
         let missing = !app.recent_exists(&path);
         let (name, folder) = split_path(&path);
         let (rect, resp) = ui.allocate_exact_size(vec2(width, 44.0), Sense::click());
-        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &name));
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &name));
         let p = ui.painter();
         if resp.hovered() {
             p.rect_filled(rect, CornerRadius::same(3), t.hover);
@@ -646,7 +649,7 @@ fn recent_list(app: &mut SlideApp, ui: &mut Ui, query: &str, limit: usize) {
             Rect::from_min_max(pos2(visible_right - 32.0, rect.top() + 5.0), pos2(visible_right, rect.bottom() - 5.0)),
             Sense::click(),
         );
-        x.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Remove from Recent")));
+        x.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Remove from Recent")));
         if x.hovered() {
             ui.painter().rect_filled(x.rect, CornerRadius::same(3), t.hover);
         }
@@ -666,7 +669,7 @@ fn square_button(ui: &mut Ui, icon: Icon, label: &str, enabled: bool) -> egui::R
     let t = Tokens::get(ui.ctx());
     let label = tl!(label);
     let (rect, resp) = ui.allocate_exact_size(vec2(88.0, 80.0), if enabled { Sense::click() } else { Sense::hover() });
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, label));
     let p = ui.painter();
     p.rect_filled(rect, CornerRadius::same(3), if resp.hovered() && enabled { t.hover } else { t.card });
     p.rect_stroke(rect, CornerRadius::same(3), Stroke::new(1.0, if resp.hovered() && enabled { t.accent } else { t.border }), StrokeKind::Inside);
@@ -683,7 +686,7 @@ fn place_row(ui: &mut Ui, icon: Icon, label: &str, selected: bool, width: f32) -
     let t = Tokens::get(ui.ctx());
     let label = tl!(label);
     let (rect, resp) = ui.allocate_exact_size(vec2(width, 44.0), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, selected, label));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, label));
     let p = ui.painter();
     if selected {
         p.rect_filled(rect, CornerRadius::same(2), t.selected);
@@ -963,13 +966,18 @@ fn save_as(app: &mut SlideApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcom
     ui.add_space(14.0);
     let current = SAVE_TYPES.iter().find(|s| s.0 == bs.file_type).map_or(SAVE_TYPES[0].1, |s| s.1);
     ui.horizontal(|ui| {
-        egui::ComboBox::from_id_salt("backstage_save_type").width(340.0).selected_text(tl!(current)).show_ui(ui, |ui| {
-            for (id, label, _) in SAVE_TYPES {
-                if ui.selectable_label(bs.file_type == id, tl!(label)).clicked() {
-                    bs.file_type = id;
+        egui::ComboBox::from_id_salt("backstage_save_type")
+            .width(340.0)
+            .selected_text(tl!(current))
+            .show_ui(ui, |ui| {
+                for (id, label, _) in SAVE_TYPES {
+                    if ui.selectable_label(bs.file_type == id, tl!(label)).clicked() {
+                        bs.file_type = id;
+                    }
                 }
-            }
-        });
+            })
+            .response
+            .widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, tl!("Save as type")));
         let web = app.services.pick_save.is_none();
         let label = if web { tl!("Download") } else { tl!("Save") };
         let save = ui.add(egui::Button::new(RichText::new(label).color(t.accent_text)).fill(t.accent).min_size(vec2(84.0, 26.0)));
@@ -1084,7 +1092,7 @@ fn print(app: &mut SlideApp, ui: &mut Ui, bs: &mut Backstage) {
                 PrintScope::Current => "Print Current Slide",
                 PrintScope::Custom => "Custom Range",
             };
-            egui::ComboBox::from_id_salt("backstage_print_scope").width(240.0).selected_text(tl!(scope)).show_ui(ui, |ui| {
+            let combo = egui::ComboBox::from_id_salt("backstage_print_scope").width(240.0).selected_text(tl!(scope)).show_ui(ui, |ui| {
                 for (s, label) in
                     [(PrintScope::All, "Print All Slides"), (PrintScope::Current, "Print Current Slide"), (PrintScope::Custom, "Custom Range")]
                 {
@@ -1094,6 +1102,7 @@ fn print(app: &mut SlideApp, ui: &mut Ui, bs: &mut Backstage) {
                     }
                 }
             });
+            combo.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, tl!("Print range")));
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 let l = ui.label(tl!("Slides:"));
@@ -1106,7 +1115,7 @@ fn print(app: &mut SlideApp, ui: &mut Ui, bs: &mut Backstage) {
             });
             ui.add_space(4.0);
             let layout = LAYOUTS.iter().find(|l| l.0 == bs.print_layout).map_or("Full Page Slides", |l| l.1);
-            egui::ComboBox::from_id_salt("backstage_print_layout").width(240.0).selected_text(tl!(layout)).show_ui(ui, |ui| {
+            let combo = egui::ComboBox::from_id_salt("backstage_print_layout").width(240.0).selected_text(tl!(layout)).show_ui(ui, |ui| {
                 for (id, label) in LAYOUTS {
                     if ui.selectable_label(bs.print_layout == id, tl!(label)).clicked() {
                         bs.print_layout = id;
@@ -1114,27 +1123,38 @@ fn print(app: &mut SlideApp, ui: &mut Ui, bs: &mut Backstage) {
                     }
                 }
             });
+            combo.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, tl!("Print layout")));
             ui.add_space(4.0);
             // PowerPoint prints full-page slides on slide-shaped pages; paper and orientation are
             // for notes pages and handouts.
             ui.add_enabled_ui(bs.print_layout != "slides", |ui| {
                 let paper = deckcraft_engine::cmd::file::PAPERS.iter().find(|p| p.0 == bs.print_paper).map_or("Letter", |p| p.1);
-                egui::ComboBox::from_id_salt("backstage_print_paper").width(240.0).selected_text(tl!(paper)).show_ui(ui, |ui| {
-                    for (id, label, _) in deckcraft_engine::cmd::file::PAPERS {
-                        if ui.selectable_label(bs.print_paper == id, tl!(label)).clicked() {
-                            bs.print_paper = id;
+                egui::ComboBox::from_id_salt("backstage_print_paper")
+                    .width(240.0)
+                    .selected_text(tl!(paper))
+                    .show_ui(ui, |ui| {
+                        for (id, label, _) in deckcraft_engine::cmd::file::PAPERS {
+                            if ui.selectable_label(bs.print_paper == id, tl!(label)).clicked() {
+                                bs.print_paper = id;
+                            }
                         }
-                    }
-                });
+                    })
+                    .response
+                    .widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, tl!("Paper size")));
                 ui.add_space(4.0);
                 let orient = if bs.print_landscape { "Landscape Orientation" } else { "Portrait Orientation" };
-                egui::ComboBox::from_id_salt("backstage_print_orientation").width(240.0).selected_text(tl!(orient)).show_ui(ui, |ui| {
-                    for (land, label) in [(false, "Portrait Orientation"), (true, "Landscape Orientation")] {
-                        if ui.selectable_label(bs.print_landscape == land, tl!(label)).clicked() {
-                            bs.print_landscape = land;
+                egui::ComboBox::from_id_salt("backstage_print_orientation")
+                    .width(240.0)
+                    .selected_text(tl!(orient))
+                    .show_ui(ui, |ui| {
+                        for (land, label) in [(false, "Portrait Orientation"), (true, "Landscape Orientation")] {
+                            if ui.selectable_label(bs.print_landscape == land, tl!(label)).clicked() {
+                                bs.print_landscape = land;
+                            }
                         }
-                    }
-                });
+                    })
+                    .response
+                    .widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, tl!("Orientation")));
             });
             ui.add_space(4.0);
             if ui.checkbox(&mut bs.print_hidden, tl!("Print Hidden Slides")).changed() {
@@ -1278,12 +1298,13 @@ fn preview(app: &mut SlideApp, ui: &mut Ui, bs: &mut Backstage, doc: &deckcraft_
     });
 }
 
-/// A small icon button named `label`, translated here (pass English).
+/// Draw a small icon button named `label` (translated here: pass English) and return whether it
+/// was clicked while enabled.
 fn icon_button(ui: &mut Ui, icon: Icon, label: &str, enabled: bool) -> bool {
     let t = Tokens::get(ui.ctx());
     let label = tl!(label);
     let (r, resp) = ui.allocate_exact_size(vec2(22.0, 22.0), if enabled { Sense::click() } else { Sense::hover() });
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, label));
     if resp.hovered() && enabled {
         ui.painter().rect_filled(r, CornerRadius::same(3), t.hover);
     }
@@ -1330,7 +1351,7 @@ fn export(app: &mut SlideApp, ui: &mut Ui, bs: &mut Backstage) {
                 ExportTask::Handouts => {
                     ui.label(RichText::new(tl!("Create Handouts")).font(theme::font(16.0)).color(t.text));
                     bullets(ui, &["Several slides on each page of a PDF", "Three a page leaves lines for notes", "Print them for your audience"]);
-                    egui::ComboBox::from_id_salt("backstage_handouts")
+                    let combo = egui::ComboBox::from_id_salt("backstage_handouts")
                         .width(240.0)
                         .selected_text(crate::i18n::fmt(tl!("{n} slides per page"), &[("n", &bs.handouts_per_page.to_string())]))
                         .show_ui(ui, |ui| {
@@ -1346,6 +1367,7 @@ fn export(app: &mut SlideApp, ui: &mut Ui, bs: &mut Backstage) {
                                 }
                             }
                         });
+                    combo.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, tl!("Slides per page")));
                     ui.add_space(10.0);
                     if square_button(ui, Icon::Notes, "Create Handouts", true).clicked() {
                         app.export_as("pdf", json!({"layout": "handouts", "perPage": bs.handouts_per_page}));
@@ -1358,7 +1380,7 @@ fn export(app: &mut SlideApp, ui: &mut Ui, bs: &mut Backstage) {
                         let selected = bs.file_type == *id;
                         let (label, detail) = (tl!(label), tl!(detail));
                         let (rect, resp) = ui.allocate_exact_size(vec2(520.0, 46.0), Sense::click());
-                        resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, selected, label));
+                        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, label));
                         let p = ui.painter();
                         if selected {
                             p.rect_filled(rect, CornerRadius::same(2), t.selected);
@@ -1409,16 +1431,18 @@ fn account(app: &mut SlideApp, ui: &mut Ui) {
             ui.set_width(340.0);
             heading(ui, "Appearance");
             let dark = app.ui.brightness == theme::Brightness::Dark;
-            egui::ComboBox::from_id_salt("backstage_appearance").width(260.0).selected_text(if dark { tl!("Dark") } else { tl!("Light") }).show_ui(
-                ui,
-                |ui| {
+            egui::ComboBox::from_id_salt("backstage_appearance")
+                .width(260.0)
+                .selected_text(if dark { tl!("Dark") } else { tl!("Light") })
+                .show_ui(ui, |ui| {
                     for (on, label) in [(false, "Light"), (true, "Dark")] {
                         if ui.selectable_label(dark == on, tl!(label)).clicked() {
                             let _ = app.run("view.dark", json!({"on": on}));
                         }
                     }
-                },
-            );
+                })
+                .response
+                .widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, tl!("Appearance")));
             ui.add_space(16.0);
             heading(ui, "User Information");
             dim(ui, tl!("DeckCraft has no accounts: there is nothing to sign in to, and your presentations stay on your device."));

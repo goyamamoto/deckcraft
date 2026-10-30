@@ -304,7 +304,7 @@ fn entry(ui: &mut Ui, selected: bool, label: &str, width: f32) -> egui::Response
         f.layout_job(job)
     });
     ui.painter().galley(pos2(r.min.x + 6.0, r.center().y - galley.size().y / 2.0), galley, t.text);
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, selected, label));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, label));
     resp
 }
 
@@ -354,7 +354,7 @@ pub fn font_box(
     fetch: &mut dyn FnMut() -> FontList,
     extra: Option<&mut dyn FnMut(&mut Ui)>,
 ) -> BoxResult {
-    let state_id = ui.id().with(("fontbox", id));
+    let state_id = ui.scope_id().with(("fontbox", id));
     let te_id = state_id.with("edit");
     let mut st: BoxState = ui.data(|d| d.get_temp(state_id)).unwrap_or_default();
     let had_focus = ui.memory(|m| m.has_focus(te_id));
@@ -387,7 +387,7 @@ pub fn font_box(
             let shown = st.text.clone();
             let access = name.to_string();
             resp.widget_info(move || {
-                let mut info = egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, enabled, access.clone());
+                let mut info = egui::WidgetInfo::labeled(egui::Role::TextInput, enabled, access.clone());
                 info.current_text_value = Some(shown.clone());
                 info
             });
@@ -433,7 +433,7 @@ pub fn font_box(
             }
             let (ar, aresp) = ui.allocate_exact_size(vec2(18.0, resp.rect.height().max(22.0)), if enabled { Sense::click() } else { Sense::hover() });
             let arrow_name = crate::i18n::fmt(tl!("{name} list"), &[("name", name)]);
-            aresp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, &arrow_name));
+            aresp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, &arrow_name));
             let lit = enabled && (resp.hovered() || aresp.hovered() || focused);
             let border = egui::Stroke::new(1.0, if lit { t.text_faint } else { t.border });
             let shape = egui::epaint::RectShape::new(resp.rect.union(ar), egui::CornerRadius::same(4), t.field_bg, border, egui::StrokeKind::Inside);

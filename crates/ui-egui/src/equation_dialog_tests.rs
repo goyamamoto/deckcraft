@@ -31,6 +31,12 @@ fn open(h: &mut Harness<'static, SlideApp>) {
     assert_eq!(h.state().dialog.as_ref().map(|d| d.id.as_str()), Some("equation"));
 }
 
+/// The dialog's Insert button. The ribbon's Insert tab is a button of that name too (egui 0.37
+/// names the tabs); the dialog's is drawn last.
+fn click_insert(h: &mut Harness<'static, SlideApp>) {
+    h.query_all_by_label("Insert").last().expect("the dialog's Insert button").click();
+}
+
 fn tex_field(h: &Harness<'_, SlideApp>) -> Option<String> {
     h.state().dialog.as_ref().and_then(|d| d.fields.get("tex").cloned())
 }
@@ -61,7 +67,7 @@ fn typing_tex_previews_it_and_cmd_enter_inserts_and_remembers_it() {
     open(&mut h);
     h.event(egui::Event::Text("x^2".into()));
     h.run_steps(2);
-    h.get_by_label("Insert").click();
+    click_insert(&mut h);
     h.run_steps(3);
     assert_eq!(h.state().ui.equations, vec!["x^2".to_string(), "\\frac{a}{b}".to_string()]);
 }
@@ -139,7 +145,7 @@ fn opening_the_dialog_beside_an_equation_edits_it() {
     assert_eq!(sel.ordered(), ((0, 4), (0, 7)), "the equation is selected, so Insert replaces it");
     h.event(egui::Event::Text("+1".into()));
     h.run_steps(2);
-    h.get_by_label("Insert").click();
+    click_insert(&mut h);
     h.run_steps(3);
     let st = h.state().session.active().unwrap();
     let t = st.selection.text.clone().unwrap();
@@ -161,7 +167,7 @@ fn the_dialog_edits_a_selected_equation_box_in_place() {
     assert_eq!((t.shape, t.ordered()), (id, ((0, 0), (0, 3))));
     h.event(egui::Event::Text(" + 1".into()));
     h.run_steps(2);
-    h.get_by_label("Insert").click();
+    click_insert(&mut h);
     h.run_steps(3);
     let st = h.state().session.active().unwrap();
     assert!(st.selection.text.is_none(), "editing left again");
@@ -222,7 +228,7 @@ fn the_display_style_switch_follows_the_context_and_sets_the_equation() {
     h.event(egui::Event::Text(" + b".into()));
     h.run_steps(2);
     assert_eq!(tex_field(&h).as_deref(), Some("\\sum_i a_i + b"));
-    h.get_by_label("Insert").click();
+    click_insert(&mut h);
     h.run_steps(3);
     let st = h.state().session.active().unwrap();
     let sh = st.selected_shapes().first().cloned().cloned().unwrap();

@@ -7,10 +7,12 @@ the regression test that guards it.
 
 | Crate | Version | Licence | Local patches | Guard |
 |---|---|---|---|---|
-| winit | 0.30.13 | Apache-2.0 (`winit/LICENSE`) | `patches/winit/01-macos-ime-surrounding-text.md` | `apps/deckcraft/tests/it/winit_vendor.rs`, `apps/deckcraft/tests/it/winit_macos_ime_surrounding_text.rs` |
+| winit | 0.30.13, storytold/winit `a517b38` (the suite's branch the egui 0.37 fork builds against) | Apache-2.0 (`winit/LICENSE`) | `patches/winit/01-macos-ime-surrounding-text.md` | `apps/deckcraft/tests/it/winit_vendor.rs`, `apps/deckcraft/tests/it/winit_macos_ime_surrounding_text.rs` |
 
 The winit patch was ported from WordCraft's vendored copy of the same winit release (a sibling
-Craft app, AGENTS.md §2); its patch sites are marked `DeckCraft patch`.
+Craft app, AGENTS.md §2) and, with upstream's move to egui 0.37, onto storytold/winit's
+`craft/0.30.13` branch, which already carries the suite's own input-method patches (W1–W27 in
+`winit/PATCHES.md`); our patch is "D1" there. Its patch sites are marked `DeckCraft patch`.
 
 The workspace manifest patches crates.io to `vendor/winit` (`[patch.crates-io]`), so every
 crate in the build that depends on winit (eframe, egui-winit, accesskit_winit…) takes this copy;
@@ -20,9 +22,11 @@ forbid `unsafe`), and `cargo fmt --all`/`clippy --workspace` leave it alone. Onl
 sources differ from the published crate: Windows, Linux, FreeBSD and the web build the upstream
 code unchanged.
 
-Re-vendoring: copy `src/`, `Cargo.toml`, `LICENSE`, `README.md`, `build.rs` and
-`.cargo_vcs_info.json` from the published crate (`~/.cargo/registry/src/*/winit-<version>/`;
-examples, tests and docs are left out), re-apply each patch in order, and run the guards
-(`cargo test -p deckcraft --test it`). `patches/winit/source-delta.json` lists every file that
-differs from the pristine crate, with both checksums, so a review can diff exactly those. Drop
-the override once a winit release carries the change.
+Re-vendoring: rebase the patch commit (`patches/winit/source-delta.json` names it) onto the
+storytold/winit revision upstream DeckCraft pins, then copy `Cargo.toml`, `build.rs`, `LICENSE`,
+`README.md`, `PATCHES.md`, `FEATURES.md`, `src/`, `dpi/` (the fork's workspace member),
+`examples/` and `tests/` (its manifest names them) from that commit (`git archive`; docs are left
+out), and run the guards (`cargo test -p deckcraft --test it`, and `cargo test` in the fork for its
+own). `source-delta.json` lists every file that differs from the storytold revision, with both
+checksums, so a review can diff exactly those. Drop the override once storytold's winit (or a winit
+release) carries the change.

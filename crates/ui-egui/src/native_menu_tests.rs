@@ -67,7 +67,7 @@ impl Setup {
         raw.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 900.0)));
         let Setup { app, ctx, menu, .. } = self;
         raw_input(menu, app, &mut raw);
-        app.raw_input_hook(&mut raw);
+        app.raw_input_hook(ctx, &mut raw);
         let mut output = ctx.run_ui(raw, |ui| {
             run(menu, app, ui.ctx());
             app.logic(ui.ctx());
@@ -353,10 +353,10 @@ fn text_field_edits_never_touch_the_slide() {
             let mut raw = egui::RawInput { time: Some(s.time), ..Default::default() };
             let Setup { app, ctx, menu, .. } = s;
             raw_input(menu, app, &mut raw);
-            app.raw_input_hook(&mut raw);
+            app.raw_input_hook(ctx, &mut raw);
             let mut output = ctx.run_ui(raw, |ui| {
                 run(menu, app, ui.ctx());
-                ui.add(egui::TextEdit::singleline(&mut field).id(egui::Id::new("field"))).request_focus();
+                ui.add(egui::TextEdit::singleline(&mut field).id(egui::Id::unique("field"))).request_focus();
                 sync(menu, app, ui.ctx());
             });
             output.textures_delta.clear();

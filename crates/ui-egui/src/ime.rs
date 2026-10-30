@@ -14,8 +14,10 @@
 //! selection, puts it back when the composition is dismissed, and the commit replaces it for good
 //! as one undo step).
 //!
-//! The text is that of the shape or table cell being edited on the slide. The notes pane and the
-//! interface's text fields are egui text edits, which report nothing (as before the patch).
+//! The text is that of the shape or table cell being edited on the slide, and an empty paragraph
+//! while a selected shape takes typing (typing replaces its text, so a composition begun there
+//! starts the paragraph reported once editing has begun). The notes pane and the interface's text
+//! fields are egui text edits, which report nothing (as before the patch).
 //! Ranges are in UTF-16 code units, as the platform counts them.
 
 use std::ops::Range;
@@ -36,7 +38,8 @@ pub struct ImeSurrounding {
 #[derive(Clone, Debug, Default)]
 pub struct ImeState {
     /// What the input method may read this frame (the caret's paragraph and the selection), set
-    /// while the slide's text has the keyboard; the desktop app reports it to the platform.
+    /// while the slide's text has the keyboard (an empty paragraph while a selected shape takes
+    /// typing); the desktop app reports it to the platform.
     pub surrounding: Option<ImeSurrounding>,
     /// The range of `surrounding` (UTF-16 code units) the input method asked to replace with the
     /// composition arriving in this frame's `Preedit`, or the text of its `Commit` (reconversion

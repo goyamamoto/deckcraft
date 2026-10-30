@@ -190,7 +190,14 @@ pub fn font_definitions(extra: &[std::sync::Arc<deckcraft_fonts::FontFace>]) -> 
     for (i, f) in deckcraft_fonts::CRAFT_FONTS.iter().enumerate() {
         let wanted = (f.family == "Inter" && (f.style == "Regular" || f.style == "SemiBold" || f.style == "Bold"))
             || (f.family == "BIZ UDPGothic" && (f.style == "Regular" || f.style == "Bold"))
-            || (f.family == "Noto Sans Arabic");
+            // Exact craft-fonts family names: the Korean face is "NanumGothic" (no space), and
+            // the symbol faces are "Noto Sans Symbols" / "Noto Sans Symbols 2". A near-miss here
+            // would leave Hangul and the ◉ laser toggle without a glyph. Hebrew backs the
+            // Language dialog's native "עברית" label where no system font supplies it.
+            || matches!(f.family, "Noto Sans Arabic" | "Noto Sans Hebrew" | "NanumGothic" | "Noto Sans Symbols" | "Noto Sans Symbols 2")
+            // This opt-in native face follows the existing families. Keep per-character
+            // fallback and Latin metrics; no Chinese payload enters the wasm allowlist.
+            || (cfg!(not(target_arch = "wasm32")) && f.family == "LXGW WenKai Lite" && f.style == "Regular");
         if !wanted {
             continue;
         }
@@ -214,6 +221,15 @@ pub fn font_definitions(extra: &[std::sync::Arc<deckcraft_fonts::FontFace>]) -> 
     let mut bold: Vec<String> = face("Inter", "SemiBold").chain(face("BIZ UDPGothic", "Bold")).collect();
     bold.extend(defs.families.get(&FontFamily::Proportional).cloned().unwrap_or_default());
     defs.families.insert(FontFamily::Name("bold".into()), bold);
+    // Hack is already bundled for Monospace and covers the interface's arrows and triangles.
+    // Keep it after every proportional face so ordinary text metrics stay unchanged.
+    if defs.font_data.contains_key("Hack") {
+        for chain in defs.families.values_mut() {
+            if !chain.iter().any(|name| name == "Hack") {
+                chain.push("Hack".into());
+            }
+        }
+    }
     let platform = add_platform_japanese_faces(&mut defs);
     add_fallback_faces(&mut defs, extra);
     // A Chinese, Japanese or Korean interface without Inter (a build without craft-fonts) puts its
@@ -286,8 +302,8 @@ fn add_platform_japanese_faces(defs: &mut FontDefinitions) -> Option<(String, Op
     Some((regular, bold))
 }
 
-/// An installed face's bytes for egui, which keeps font data `'static`: copied once and kept for
-/// the process (a couple of faces), so installing the interface fonts again copies nothing.
+/// An installed face's bytes for [`FontData::from_static`]: copied once and kept for the process
+/// (a couple of faces), so installing the interface fonts again copies nothing.
 fn static_bytes(f: &deckcraft_fonts::FontFace) -> &'static [u8] {
     use std::collections::HashMap;
     use std::sync::{LazyLock, Mutex, PoisonError};
@@ -319,26 +335,30 @@ pub fn add_fallback_faces(defs: &mut FontDefinitions, faces: &[std::sync::Arc<de
 /// metrics sits higher or lower: Japanese in Hiragino or BIZ UDPGothic next to Latin in Inter or
 /// Ubuntu drew above the Latin baseline, and the half-width brackets and dots of 英語 (米国) and
 /// フォント… looked dropped. Each fallback face gets the shift that undoes the centring, worked out
-/// against the proportional family's first face (the interface text); that face itself is never
-/// moved.
+/// against the proportional family's first face (the interface text). A face that is the first of
+/// any family is never moved: an offset is the face's own wherever it draws, so it would lift that
+/// family's text off its line (Hack leads Monospace and is also a late fallback of the others).
+/// egui 0.37's `FallbackAlign::Baseline` would put fallbacks on the baseline too, but it makes the
+/// row tall enough for the face's descent and line gap, so every row with kana in Hiragino (half an
+/// em of line gap) would grow; the faces keep the default `FallbackAlign::Center` and this offset.
 fn align_baselines(defs: &mut FontDefinitions) {
     // Ascent and line height in ems of the font size, at the face's own scale (egui draws its
     // emoji faces at 0.81).
     let metrics = |defs: &FontDefinitions, name: &str| {
         let d = defs.font_data.get(name)?;
         let s = d.tweak.scale;
-        deckcraft_fonts::em_metrics(&d.font, d.index).map(|(a, de, l)| (a * s, (a - de + l) * s, s))
+        deckcraft_fonts::em_metrics(d.bytes(), d.index).map(|(a, de, l)| (a * s, (a - de + l) * s, s))
     };
     let mut families: Vec<FontFamily> = defs.families.keys().filter(|f| **f != FontFamily::Proportional).cloned().collect();
     families.push(FontFamily::Proportional);
-    let anchor = defs.families.get(&FontFamily::Proportional).and_then(|l| l.first()).cloned();
+    let firsts: Vec<String> = defs.families.values().filter_map(|l| l.first().cloned()).collect();
     for family in families {
         let Some(list) = defs.families.get(&family).cloned() else { continue };
         let Some(((ascent, height, _), rest)) = list.split_first().and_then(|(first, rest)| Some((metrics(defs, first)?, rest))) else {
             continue;
         };
         for name in rest {
-            if Some(name) == anchor.as_ref() {
+            if firsts.contains(name) {
                 continue;
             }
             let Some((a, h, scale)) = metrics(defs, name) else { continue };
@@ -357,12 +377,14 @@ fn align_baselines(defs: &mut FontDefinitions) {
 }
 
 /// Whether the interface fonts of `family` in `defs` draw `c` with a glyph of their own: one of the
-/// family's faces maps it. egui's own `has_glyph` says no for every character of the face that also
-/// draws its missing-glyph box (◻), which the Japanese interface faces have, so it can't be asked.
+/// family's faces maps it. Read from the definitions alone (egui 0.36's `has_glyph` said no for
+/// every character of the face that also drew its missing-glyph box (◻), which the Japanese
+/// interface faces have), so [`crate::uifonts`] can ask it without holding egui's fonts while it
+/// searches the font database.
 pub fn draws(defs: &FontDefinitions, family: &FontFamily, c: char) -> bool {
     defs.families
         .get(family)
-        .is_some_and(|list| list.iter().filter_map(|n| defs.font_data.get(n)).any(|d| deckcraft_fonts::maps_char(&d.font, d.index, c)))
+        .is_some_and(|list| list.iter().filter_map(|n| defs.font_data.get(n)).any(|d| deckcraft_fonts::maps_char(d.bytes(), d.index, c)))
 }
 
 pub fn bold(size: f32) -> egui::FontId {
@@ -379,10 +401,15 @@ pub fn to_color32(c: deckcraft_color::Rgba) -> Color32 {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     /// Each character of `text` laid out in the interface fonts at interface sizes, and whether it
     /// has ink (a glyph image).
     fn drawn(text: &str) -> Vec<(char, f32, bool)> {
         let ctx = egui::Context::default();
+        // A replacement glyph also gets a nonempty atlas rectangle. Fail before layout when no
+        // font can draw a character, so `uv_rect` cannot mistake tofu for real ink.
+        ctx.set_missing_glyph_policy(egui::MissingGlyphPolicy::Panic);
         ctx.set_fonts(super::font_definitions(&[]));
         let mut o = ctx.run_ui(Default::default(), |_| {});
         o.textures_delta.clear();
@@ -390,7 +417,11 @@ mod tests {
         ctx.fonts_mut(|f| {
             for size in [11.0, 12.0, 13.0, 16.0] {
                 for family in [egui::FontFamily::Proportional, egui::FontFamily::Name("bold".into())] {
-                    let g = f.layout_no_wrap(text.to_string(), egui::FontId::new(size, family), egui::Color32::WHITE);
+                    let font = egui::FontId::new(size, family);
+                    for c in text.chars() {
+                        assert!(f.has_glyph(&font, c), "no font supplies {c:?} at {size} px in {font:?}");
+                    }
+                    let g = f.layout_no_wrap(text.to_string(), font, egui::Color32::WHITE);
                     for gl in g.rows.iter().flat_map(|r| &r.glyphs) {
                         out.push((gl.chr, size, gl.uv_rect.size.x > 0.0 && gl.uv_rect.size.y > 0.0));
                     }
@@ -402,6 +433,163 @@ mod tests {
         out
     }
 
+    /// The UI font library supplies default text fonts and an explicit monochrome emoji face,
+    /// independent of kittest defaults.
+    #[test]
+    fn the_ui_library_has_default_fonts_and_explicit_monochrome_emoji_for_tests() {
+        // `egui`'s `default_fonts` is no longer a default feature and kittest's own dev
+        // dependencies do not propagate. This library enables it (and the test build enables
+        // `monochrome_emoji_fonts`) explicitly.
+        let defs = FontDefinitions::default();
+        assert!(defs.font_data.contains_key("Hack"), "default_fonts must be enabled by deckcraft-ui-egui itself");
+        assert!(defs.font_data.contains_key("Ubuntu-Light"));
+        assert!(defs.font_data.contains_key("NotoEmoji-Regular"), "monochrome_emoji_fonts is an explicit test feature");
+        assert!(defs.families.contains_key(&FontFamily::Proportional));
+        // The production font policy still owns the UI families: craft faces first, then egui's.
+        let ours = super::font_definitions(&[]);
+        assert!(ours.families.contains_key(&FontFamily::Name("bold".into())));
+        assert!(ours.font_data.contains_key("Hack"));
+    }
+
+    /// When the Chinese face is present (required builds guarantee it), exactly one LXGW WenKai
+    /// Lite Regular is embedded, and Chinese labels have glyph coverage and ink; builds without the
+    /// optional face skip this test.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn native_chinese_fallback_draws_initial_document_labels() {
+        let faces: Vec<_> = deckcraft_fonts::CRAFT_FONTS.iter().filter(|f| f.family == "LXGW WenKai Lite").collect();
+        if faces.is_empty() {
+            assert!(option_env!("CRAFT_FONTS_REQUIRED").is_none(), "required native font input must include the reviewed Chinese fallback");
+            eprintln!("optional Chinese input absent: bundled Chinese coverage was not qualified");
+            return;
+        }
+        assert_eq!(faces.len(), 1);
+        assert_eq!(faces[0].style, "Regular");
+        assert_eq!(faces[0].bytes.len(), 13_949_472);
+        let face = skrifa::FontRef::new(faces[0].bytes).unwrap();
+        use skrifa::MetadataProvider as _;
+        assert!(face.charmap().map('简').is_some(), "the approved fallback supplies the original missing glyph");
+        let defs = font_definitions(&[]);
+        for family in [FontFamily::Proportional, FontFamily::Name("bold".into())] {
+            let chain = &defs.families[&family];
+            let chinese = chain.iter().position(|name| name.contains("LXGW WenKai Lite")).unwrap();
+            let japanese = chain.iter().position(|name| name.contains("BIZ UDPGothic")).unwrap();
+            assert!(japanese < chinese, "retain existing glyph selection and Latin metrics");
+            assert_eq!(chain.iter().filter(|name| name.contains("LXGW WenKai Lite")).count(), 1);
+        }
+        let text = "简体中文演示文稿";
+        let ctx = egui::Context::default();
+        ctx.set_missing_glyph_policy(egui::MissingGlyphPolicy::Panic);
+        ctx.set_fonts(defs);
+        let mut output = ctx.run_ui(Default::default(), |_| {});
+        output.textures_delta.clear();
+        ctx.fonts_mut(|fonts| {
+            for family in [FontFamily::Proportional, FontFamily::Name("bold".into())] {
+                let font = egui::FontId::new(13.0, family);
+                for c in text.chars() {
+                    assert!(fonts.has_glyph(&font, c), "the embedded fallback does not supply {c:?} in {font:?}");
+                }
+            }
+        });
+        let ink = drawn(text);
+        assert_eq!(ink.len(), text.chars().count() * 4 * 2);
+        for (c, size, visible) in ink {
+            assert!(visible, "Chinese label {c:?} has no ink at {size} px");
+        }
+    }
+
+    /// When the face is present (required builds guarantee it), the native Hebrew fallback is exactly
+    /// one static Regular Noto Sans Hebrew face with glyph coverage and ink for language labels.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn native_hebrew_fallback_is_one_regular_face_and_draws_language_labels() {
+        let faces: Vec<_> = deckcraft_fonts::CRAFT_FONTS.iter().filter(|f| f.family == "Noto Sans Hebrew").collect();
+        if faces.is_empty() {
+            assert!(option_env!("CRAFT_FONTS_REQUIRED").is_none(), "required native font input must include Noto Sans Hebrew Regular");
+            eprintln!("optional font input absent: native Hebrew coverage was not qualified");
+            return;
+        }
+        assert_eq!(faces.len(), 1, "one static face, without variable named instances");
+        assert_eq!(faces[0].style, "Regular");
+        assert_eq!(faces[0].bytes.len(), 66_156, "use the approved full static Regular face");
+        use skrifa::raw::{ReadError, TableProvider};
+        let face = skrifa::FontRef::new(faces[0].bytes).unwrap();
+        assert_eq!(face.os2().unwrap().us_weight_class(), 400, "the embedded bytes must be Regular, not a renamed Thin face");
+        assert!(matches!(face.fvar(), Err(ReadError::TableIsMissing(_))), "embed one static face, not variable named instances");
+        let defs = super::font_definitions(&[]);
+        let names: Vec<_> = defs.font_data.keys().filter(|name| name.contains("Noto Sans Hebrew")).collect();
+        assert_eq!(names.len(), 1);
+        for family in [FontFamily::Proportional, FontFamily::Name("bold".into())] {
+            assert_eq!(defs.families[&family].iter().filter(|name| *name == names[0]).count(), 1);
+        }
+        let ctx = egui::Context::default();
+        ctx.set_fonts(defs);
+        let mut output = ctx.run_ui(Default::default(), |_| {});
+        output.textures_delta.clear();
+        ctx.fonts_mut(|fonts| {
+            for family in [FontFamily::Proportional, FontFamily::Name("bold".into())] {
+                let font = egui::FontId::new(13.0, family);
+                for c in "עבריתשלוםdeck42".chars() {
+                    assert!(fonts.has_glyph(&font, c), "missing language-label glyph {c:?}");
+                }
+            }
+        });
+        // This checks ink and coverage only, not bidi ordering or GPOS mark positioning.
+        for (c, size, ink) in drawn("עבריתשלוםdeck42") {
+            assert!(ink, "{c:?} has no ink at {size} px");
+        }
+    }
+
+    /// Hebrew fallback preserves logical-order editing in mixed-direction text.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn native_hebrew_fallback_keeps_mixed_text_editing_in_logical_order() {
+        if !deckcraft_fonts::CRAFT_FONTS.iter().any(|f| f.family == "Noto Sans Hebrew") {
+            assert!(option_env!("CRAFT_FONTS_REQUIRED").is_none(), "required native Hebrew face is absent");
+            return;
+        }
+        let ctx = egui::Context::default();
+        ctx.set_fonts(super::font_definitions(&[]));
+        let id = egui::Id::unique("mixed-hebrew-label-edit");
+        let mut text = "deck שלום 42".to_owned();
+        let frame = |text: &mut String, events: Vec<egui::Event>| {
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(500.0, 100.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    ui.memory_mut(|m| m.request_focus(id));
+                    ui.add(egui::TextEdit::singleline(text).id(id));
+                },
+            );
+            output.drop_without_applying_deltas();
+        };
+        frame(&mut text, vec![]);
+        // Character offsets remain logical even though the Hebrew glyphs are drawn right-to-left.
+        let mut state = egui::TextEdit::load_state(&ctx, id).unwrap();
+        state.cursor.set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(7))));
+        egui::TextEdit::store_state(&ctx, id, state);
+        frame(&mut text, vec![egui::Event::Text("א".into())]);
+        assert_eq!(text, "deck שלאום 42");
+        let state = egui::TextEdit::load_state(&ctx, id).unwrap();
+        assert_eq!(state.cursor.char_range().unwrap().primary.index.0, 8);
+        frame(
+            &mut text,
+            vec![egui::Event::Key { key: egui::Key::Backspace, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }],
+        );
+        assert_eq!(text, "deck שלום 42");
+        ctx.fonts_mut(|fonts| {
+            let galley = fonts.layout_no_wrap(text.clone(), egui::FontId::proportional(13.0), egui::Color32::WHITE);
+            let row = &galley.rows[0];
+            let x = |c| row.glyphs.iter().find(|g| g.chr == c).unwrap().pos.x;
+            assert!(x('ש') > x('ל') && x('ל') > x('ו') && x('ו') > x('ם'), "Hebrew paints in visual RTL order");
+            assert!(x('4') < x('2'), "the adjacent number keeps its LTR order");
+        });
+        frame(&mut text, vec![]); // consume the atlas updates from the explicit layout above
+    }
+
     #[test]
     fn fallback_faces_share_the_interface_baseline() {
         // egui centres a fallback face's line in the first face's, so a face with other vertical
@@ -411,6 +599,13 @@ mod tests {
         let list = defs.families.get(&egui::FontFamily::Proportional).unwrap().clone();
         let tweak = |n: &str| defs.font_data.get(n).unwrap().tweak.y_offset_factor;
         assert_eq!(tweak(&list[0]), 0.0);
+        // Nor does a face that leads another family: Hack leads Monospace and is also a late
+        // fallback of the interface chains (for arrows), and Monospace text stays on its line.
+        for (family, chain) in &defs.families {
+            if let Some(first) = chain.first() {
+                assert_eq!(tweak(first), 0.0, "{first} leads {family:?}");
+            }
+        }
         let ctx = egui::Context::default();
         ctx.set_fonts(defs.clone());
         let mut o = ctx.run_ui(Default::default(), |_| {});
@@ -424,9 +619,9 @@ mod tests {
         });
         // The fallback face that draws the emoji.
         let fallback = list.iter().skip(1).find(|n| {
-            defs.font_data
-                .get(*n)
-                .is_some_and(|d| deckcraft_fonts::maps_char(&d.font, d.index, '\u{1F600}') && deckcraft_fonts::em_metrics(&d.font, d.index).is_some())
+            defs.font_data.get(*n).is_some_and(|d| {
+                deckcraft_fonts::maps_char(d.bytes(), d.index, '\u{1F600}') && deckcraft_fonts::em_metrics(d.bytes(), d.index).is_some()
+            })
         });
         let shift = fallback.map(|n| tweak(n)).unwrap();
         assert!(shift != 0.0, "the emoji face's metrics differ from the first face's");
@@ -481,14 +676,18 @@ mod tests {
         }
         let defs_shift =
             defs.font_data.iter().find(|(n, _)| n.starts_with("platform ") && !n.contains("W6")).map_or(0.0, |(_, d)| d.tweak.y_offset_factor);
-        // The face draws them, though egui's has_glyph says otherwise for the face that also has
-        // its missing-glyph box (◻).
+        // The face draws them (egui 0.36's has_glyph said otherwise for the face that also has its
+        // missing-glyph box (◻); 0.37's agrees, checked below).
         assert!("あ漢A".chars().all(|c| super::draws(&defs, &egui::FontFamily::Proportional, c)));
         assert!(!super::draws(&defs, &egui::FontFamily::Proportional, '\u{0378}'), "unassigned: nothing draws it");
         let ctx = egui::Context::default();
         ctx.set_fonts(defs);
         let mut o = ctx.run_ui(Default::default(), |_| {});
         o.textures_delta.clear();
+        ctx.fonts_mut(|f| {
+            let font = egui::FontId::proportional(13.0);
+            assert!("あ漢A".chars().all(|c| f.has_glyph(&font, c)), "egui's has_glyph agrees with draws");
+        });
         // Kana sit on the Latin baseline in the platform's face, its line gap (half an em in
         // Hiragino) and all: egui adds the face's offset when it paints.
         let shift = defs_shift;
