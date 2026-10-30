@@ -49,24 +49,9 @@ impl eframe::App for App {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }
-    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
-        // macOS: the committed text the input method asked to replace with this frame's
-        // composition or commit (再変換), from the vendored winit (`deckcraft_ui_egui::ime`).
-        // It belongs to this frame's events, which winit queues with it: a frame without them
-        // drops it, so a range left by one that never reached its commit can't make a later
-        // commit elsewhere (a full-width space, the Character Viewer) replace unrelated text.
-        // The input method talks to the focused window, whose input this is.
-        #[cfg(target_os = "macos")]
-        {
-            let named = winit::platform::macos::take_ime_replacement_range();
-            let ime = raw.events.iter().any(|e| matches!(e, egui::Event::Ime(egui::ImeEvent::Preedit { .. } | egui::ImeEvent::Commit(_))));
-            let vp = raw.viewport_id;
-            Host::with(|h| {
-                if let Some(w) = h.window_of_viewport_mut(vp) {
-                    w.app.ime.replace = named.filter(|_| ime);
-                }
-            });
-        }
+    /// Forward native raw input to the window host once per pass: it goes to the window the input
+    /// is for (`Host::raw_input_hook`), after the macOS adjustments below.
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
         // macOS: egui draws a text field's caret only while its viewport has the focus, and the
         // focus event winit sends as the first window opens can go missing (the caret then showed
         // only once another window had taken the focus and given it back). AppKit knows better:
@@ -86,7 +71,27 @@ impl eframe::App for App {
                 raw.focused = key;
             }
         }
-        Host::with(|h| h.raw_input_hook(raw));
+        // macOS: the committed text the input method asked to replace with this frame's
+        // composition or commit (再変換), from the vendored winit (`deckcraft_ui_egui::ime`).
+        // It belongs to this frame's events, which winit queues with it: a frame without them
+        // drops it, so a range left by one that never reached its commit can't make a later
+        // commit elsewhere (a full-width space, the Character Viewer) replace unrelated text.
+        // The input method talks to the focused window, whose input this is: another window's
+        // frame (one playing a video, say) running first leaves the range alone.
+        #[cfg(target_os = "macos")]
+        {
+            let ime = raw.events.iter().any(|e| matches!(e, egui::Event::Ime(egui::ImeEvent::Preedit { .. } | egui::ImeEvent::Commit(_))));
+            if ime || raw.focused {
+                let named = winit::platform::macos::take_ime_replacement_range();
+                let vp = raw.viewport_id;
+                Host::with(|h| {
+                    if let Some(w) = h.window_of_viewport_mut(vp) {
+                        w.app.ime.replace = named.filter(|_| ime);
+                    }
+                });
+            }
+        }
+        Host::with(|h| h.raw_input_hook(ctx, raw));
     }
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         Host::with(|h| h.ui(egui::ViewportId::ROOT, ui));
@@ -275,6 +280,8 @@ fn app_icon() -> Option<egui::IconData> {
     eframe::icon_data::from_png_bytes(png).map_err(|e| log::warn!("app icon: {e}")).ok()
 }
 
+/// Install logging, parse startup arguments and environment, launch the native app, and
+/// propagate an eframe startup failure.
 fn main() -> eframe::Result {
     // First, so every start-up record (and the engine's panic hook, installed with the first
     // Session) is captured; see `logging`.
@@ -352,6 +359,9 @@ fn main() -> eframe::Result {
         "DeckCraft",
         options,
         Box::new(move |cc| {
+            // Once for the egui context, which every presentation window's viewport shares (the
+            // hooks key their state by viewport).
+            deckcraft_ui_egui::install_ime_pass_hooks(&cc.egui_ctx);
             // Japanese editing tags typed Japanese `ja-JP` and draws Han text without a language
             // the Japanese way.
             let east_asian = east_asian_editing();

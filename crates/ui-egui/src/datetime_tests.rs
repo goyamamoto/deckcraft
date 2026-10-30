@@ -39,6 +39,7 @@ fn date_run(h: &Harness<'_, SlideApp>) -> Option<deckcraft_model::Run> {
         .cloned()
 }
 
+/// Insert opens date/time settings, and OK inserts exactly one field.
 #[test]
 fn insert_opens_the_dialog_and_ok_inserts_one_field() {
     let mut h = harness();
@@ -46,7 +47,7 @@ fn insert_opens_the_dialog_and_ok_inserts_one_field() {
     h.run_steps(2);
     assert_eq!(h.state().dialog.as_ref().map(|d| d.id.as_str()), Some("dateTime"));
     let _ = h.get_by_label("Update automatically");
-    let _ = h.get_by_label("English (United States)");
+    assert_eq!(h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Language").value().as_deref(), Some("English (United States)"));
     let now = deckcraft_text::datetime::DateTime::now_local().unwrap();
     let sample = deckcraft_text::datetime::field_text("datetime2", Some("en-US"), now).unwrap();
     h.get_by_label(&sample).click();
@@ -76,7 +77,8 @@ fn japanese_lists_the_thirteen_formats_and_inserts_a_ja_jp_era_date() {
     h.get_by_label(&english).click();
     h.run_steps(1);
     assert!(h.query_by_label("Calendar type:").is_none(), "English has no calendar choice");
-    h.get_by_label("English (United States)").click();
+    // The combo boxes are named by their field (egui 0.37), their value shown in it.
+    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Language").click();
     h.run_steps(2);
     h.get_by_label("Japanese").click();
     h.run_steps(2);
@@ -91,7 +93,7 @@ fn japanese_lists_the_thirteen_formats_and_inserts_a_ja_jp_era_date() {
     }
     // 2026年10月24日 is a Western-calendar date; picking the Japanese era picks its first format.
     let _ = h.get_by_label("Calendar type:");
-    h.get_by_label("Gregorian").click_accesskit();
+    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Calendar type").click_accesskit();
     h.run_steps(2);
     h.get_by_label("Japanese era").click_accesskit();
     h.run_steps(2);

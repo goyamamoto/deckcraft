@@ -39,6 +39,8 @@ pub struct State {
     image: deckcraft_render::Image,
 }
 
+/// Derive a unique egui id for an eyedropper menu target name (one per presentation window,
+/// [`crate::wid`]).
 fn key(name: &str) -> Id {
     crate::wid(name)
 }

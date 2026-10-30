@@ -1,31 +1,73 @@
 {
   "crate": "winit",
   "version": "0.30.13",
-  "pristine_archive_sha256": "a6755fa58a9f8350bd1e472d4c3fcc25f824ec358933bba33306d0b63df5978d",
+  "source": "https://github.com/storytold/winit",
+  "source_rev": "a517b3846ee8457d84ee4975110bfda6797c44dc",
+  "patch_commit": "d354e8a83ad1b3fe453d2b8ada8829028590d891",
   "changed_source_files": [
+    {
+      "path": "Cargo.toml",
+      "patches": [
+        "01"
+      ],
+      "pristine_sha256": "ab0f0adb584b406b19e087f0e3006c3c419e62dff22cb682040774f0d2f1f7f7",
+      "vendor_sha256": "60e84dd66cb2b4651854e1a2f65c72cc0e44a92bd58097b440477a198f1b4fcf"
+    },
+    {
+      "path": "PATCHES.md",
+      "patches": [
+        "01"
+      ],
+      "pristine_sha256": "7b53d3025796ca6e9921a80d3f06f21295d61950d5ba3eb77bf7a6a8d37d2b60",
+      "vendor_sha256": "aad666b05f6058570a7ceb35d81bc2c35a1f6dea8b75918c6c58c8a58d1dc598"
+    },
     {
       "path": "src/platform/macos.rs",
       "patches": [
         "01"
       ],
-      "pristine_sha256": "c6685a9e320715b00124d66eb5e9be088cf1f165678e832a86459f0026d215e9",
-      "vendor_sha256": "19eb2666730850cbfb64358862b77740c7f570b335c6e89837cfb644217b97cb"
+      "pristine_sha256": "b5eefe259ed52a09dc4b50b7925dfc85b8ea20a2d37e0e9af86a382248682965",
+      "vendor_sha256": "2864fccad54b6e1dd4ecd6dba33dcab373b4590a9871f13865bae2f4759e67bc"
+    },
+    {
+      "path": "src/platform_impl/macos/ime_surrounding.rs",
+      "patches": [
+        "01"
+      ],
+      "pristine_sha256": null,
+      "vendor_sha256": "da6af47db76fe4830ee1417f7edba7dbf1a1e72dfb3c9df41070a0f62d38ffa0"
     },
     {
       "path": "src/platform_impl/macos/mod.rs",
       "patches": [
         "01"
       ],
-      "pristine_sha256": "584af72536847910a3e461fb40b9a0f9a375da3200f7ecf38f5d989b3c143d9d",
-      "vendor_sha256": "c9b4018a3432e6db6f5eaaafcf48164c017b8eb155838d9c4045d41f782925ec"
+      "pristine_sha256": "2b05195d61dc26efd51a9d7a5ab80e3b92b59349a08e96c5e21658b4fe46ec9d",
+      "vendor_sha256": "730be33f166d8d96643a3dbff7fb933ecd252c46298d5bc2a6b08043d7aebdf8"
     },
     {
       "path": "src/platform_impl/macos/view.rs",
       "patches": [
         "01"
       ],
-      "pristine_sha256": "de63351d7a757d58883600c3f1702fc369cb77b2ae323a4efca7cb520e9da90e",
-      "vendor_sha256": "47cd1cab9f05593196e1e726ccd9277278dd0f20a459e3c6ec51a60f9f9042cc"
+      "pristine_sha256": "cd8a1db428d732bbf220e649f031cc0ecdb64a89718abacf4bc9b1c269951788",
+      "vendor_sha256": "1cc902cd6680967ab3fd4d7810fd2a2145ff6001506c2971a794766aee3bd9fe"
+    },
+    {
+      "path": "tests/ime_patches.rs",
+      "patches": [
+        "01"
+      ],
+      "pristine_sha256": "9da49f55bc036dba11e8f5a18a2cbf760e704d1bb7caf5f1c8f059a64a15d902",
+      "vendor_sha256": "3e0ce5b8c4206a9d65bc9cc81b6261376e260c739e2656ee3e2568a1b48c96f1"
+    },
+    {
+      "path": "tests/macos_ime_surrounding.rs",
+      "patches": [
+        "01"
+      ],
+      "pristine_sha256": null,
+      "vendor_sha256": "e81f0606d65bb801d97f56200f4a65a693789b7e3f41663064883e5e12f5d309"
     }
   ]
 }

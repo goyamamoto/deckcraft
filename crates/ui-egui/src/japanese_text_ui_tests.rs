@@ -299,7 +299,9 @@ fn paragraph_dialog_has_an_asian_typography_page_applied_in_one_undo() {
     h.state_mut().dialog.as_mut().unwrap().fields.insert("fontAlgn".into(), "ctr".into());
     // Tabs… and back keeps the page and the changes.
     h.get_by_label("Tabs…").click_accesskit();
-    h.run_steps(2);
+    // The click switches the dialog at the end of one pass, and egui 0.37 keeps the new window
+    // invisible for its first (sizing) frame: wait for its first visible frame.
+    h.run_steps(3);
     assert_eq!(h.state().dialog.as_ref().map(|d| d.id.as_str()), Some("tabs"));
     h.get_by_label("OK").click_accesskit();
     h.run_steps(2);

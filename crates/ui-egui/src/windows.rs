@@ -328,6 +328,9 @@ impl Host {
         let (first, rest) = self.windows.split_at_mut(b);
         let (Some(low), Some(high)) = (first.get_mut(a), rest.first_mut()) else { return };
         let (holder_w, this_w) = if h < i { (low, high) } else { (high, low) };
+        // The holder's composition ends here, as its own settle: its input method is told in its
+        // next frame (`SlideApp::settle_composition_for_handover`).
+        holder_w.app.settle_composition_for_handover();
         holder_w.app.swap_document_state(&mut this_w.app);
         // The session carries the holder's view: keep it for the holder, give this window its own.
         if let Some(mut view) = this_w.view.take() {
@@ -346,6 +349,12 @@ impl Host {
         let Some(group) = self.groups.iter_mut().find(|group| group.id == g) else { return };
         let now = doc_mark(&this.app);
         if group.seen == now {
+            return;
+        }
+        // An input method's composition shows in the other windows once it is committed: woken
+        // now, their frame would take the presentation over (`take_turn`), which settles the
+        // composition, and the input method's conversion would end after every key.
+        if this.app.session.active().is_some_and(|d| d.composition.is_some()) {
             return;
         }
         group.seen = now;
@@ -409,6 +418,7 @@ impl Host {
             let (first, rest) = self.windows.split_at_mut(b);
             if let (Some(low), Some(high)) = (first.get_mut(a), rest.first_mut()) {
                 let (next_w, this_w) = if ni < i { (low, high) } else { (high, low) };
+                this_w.app.settle_composition_for_handover();
                 this_w.app.swap_document_state(&mut next_w.app);
                 if let Some(mut view) = next_w.view.take() {
                     next_w.app.session.swap_view(&mut view);
@@ -458,7 +468,6 @@ impl Host {
                 ctx.request_repaint_of(w.viewport);
             }
         }
-        self.pass_screenshots_on(vp, ctx);
         self.pool_fonts();
         self.sync_untitled(i);
         let snapshot = self.snapshot(id);
@@ -570,33 +579,10 @@ impl Host {
         }
     }
 
-    /// A screenshot (`ui.screenshot`) comes back as an event in whichever viewport's frame runs
-    /// next, not necessarily the window that asked: one taken of another window goes to that
-    /// window's app (this window's own frame handles its own).
-    fn pass_screenshots_on(&mut self, vp: ViewportId, ctx: &egui::Context) {
-        let foreign: Vec<(ViewportId, u64, std::sync::Arc<egui::ColorImage>)> = ctx.input(|i| {
-            i.raw
-                .events
-                .iter()
-                .filter_map(|e| match e {
-                    egui::Event::Screenshot { viewport_id, .. } if *viewport_id != vp => {
-                        crate::screenshot_event(e).map(|(token, image)| (*viewport_id, token, image))
-                    }
-                    _ => None,
-                })
-                .collect()
-        });
-        for (owner, token, image) in foreign {
-            if let Some(w) = self.window_of_viewport_mut(owner) {
-                w.app.screenshot_arrived(token, &image);
-            }
-        }
-    }
-
     /// eframe's raw input hook, for the viewport the input is for: the menu bar's events go to
     /// the window in use (the one the menu shows), then the window's own hook runs with its
     /// presentation in hand.
-    pub fn raw_input_hook(&mut self, raw: &mut egui::RawInput) {
+    pub fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
         let Some(i) = self.index_of_viewport(raw.viewport_id) else { return };
         self.take_turn(i);
         if self.is_active_viewport(raw.viewport_id) {
@@ -605,7 +591,7 @@ impl Host {
                 native_menu::raw_input(menu, &mut windows[i].app, raw);
             }
         }
-        self.windows[i].app.raw_input_hook(raw);
+        self.windows[i].app.raw_input_hook(ctx, raw);
     }
 
     /// The root pass: every other window is declared, so egui keeps it; a window being closed is
@@ -1203,6 +1189,19 @@ mod tests {
         events: Vec<ViewportEvent>,
         input: Vec<egui::Event>,
     ) -> BTreeMap<ViewportId, Vec<ViewportCommand>> {
+        pass_with_ime(h, ctx, vp, rect, focused, events, input).0
+    }
+
+    /// [`pass`], with what the pass told the input method.
+    fn pass_with_ime(
+        h: &mut Host,
+        ctx: &egui::Context,
+        vp: ViewportId,
+        rect: Rect,
+        focused: bool,
+        events: Vec<ViewportEvent>,
+        input: Vec<egui::Event>,
+    ) -> (BTreeMap<ViewportId, Vec<ViewportCommand>>, Option<egui::output::IMEOutput>) {
         let info = ViewportInfo {
             parent: (vp != ViewportId::ROOT).then_some(ViewportId::ROOT),
             events,
@@ -1221,14 +1220,15 @@ mod tests {
             ..Default::default()
         };
         raw.viewports.insert(vp, info);
-        h.raw_input_hook(&mut raw);
+        h.raw_input_hook(ctx, &mut raw);
         let out = ctx.run_ui(raw, |ui| {
             h.logic(vp, ui.ctx());
             h.ui(vp, ui);
         });
         let sent = out.viewport_output.iter().map(|(id, v)| (*id, v.commands.clone())).collect();
+        let ime = out.platform_output.ime.clone();
         out.drop_without_applying_deltas();
-        sent
+        (sent, ime)
     }
 
     /// [`pass`] for the window `id`.
@@ -1803,16 +1803,61 @@ mod tests {
         assert!(!h.exit_requested());
     }
 
+    /// Two windows on one presentation take turns with it. A composition in one window doesn't
+    /// wake the other (its frame would take the presentation over); when the other takes its turn
+    /// anyway, the composition is settled as the composing window's own: that window's next frame
+    /// interrupts its input method and drops a pre-edit still queued for the old composition,
+    /// rather than composing it again after the text the settle kept, and the other window has
+    /// nothing to interrupt.
+    #[test]
+    fn a_composition_is_settled_for_its_own_window_when_another_takes_the_presentation() {
+        let (mut h, ctx) = host();
+        crate::install_ime_pass_hooks(&ctx);
+        settle(&mut h, &ctx);
+        let first = h.active().unwrap().id;
+        run(&mut h, first, "file.new", json!({})).unwrap();
+        run(&mut h, first, "view.newWindow", json!({})).unwrap();
+        settle(&mut h, &ctx);
+        let second = ids(&h)[1];
+        let preedit = |t: &str| egui::Event::Ime(egui::ImeEvent::Preedit { text: t.into(), active_range_chars: None });
+        let title_text = |h: &Host| {
+            let d = h.get(first).unwrap().app.session.active().unwrap();
+            d.doc.slides[0].shapes[0].text.as_ref().map(|t| t.text()).unwrap_or_default()
+        };
+        pass_id(&mut h, &ctx, first, R1, true, vec![], vec![]);
+        let title = h.get(first).unwrap().app.session.active().unwrap().doc.slides[0].shapes[0].id.0;
+        run(&mut h, first, "text.edit", json!({"id": title})).unwrap();
+        for _ in 0..3 {
+            pass_id(&mut h, &ctx, first, R1, true, vec![], vec![]);
+        }
+        let shown = h.groups[0].seen.clone();
+        pass_id(&mut h, &ctx, first, R1, true, vec![], vec![preedit("に")]);
+        assert_eq!(title_text(&h), "に");
+        assert!(h.get(first).unwrap().app.session.active().unwrap().composition.is_some(), "composing");
+        assert_eq!(h.groups[0].seen, shown, "the other window isn't woken to show the composition");
+
+        // The second window takes its turn: nothing to interrupt there.
+        let second_vp = vp(&h, second);
+        let (_, ime) = pass_with_ime(&mut h, &ctx, second_vp, R2, false, vec![], vec![]);
+        assert!(ime.is_none_or(|i| !i.should_interrupt_composition), "the second window's input method composes nothing");
+        // The first window's next frame: に is kept as typed text, a pre-edit queued for the old
+        // composition is dropped, and its input method is told to drop its copy.
+        let (_, ime) = pass_with_ime(&mut h, &ctx, ViewportId::ROOT, R1, true, vec![], vec![preedit("にほ")]);
+        assert_eq!(title_text(&h), "に", "not composed again after the kept text");
+        assert!(h.get(first).unwrap().app.session.active().unwrap().composition.is_none());
+        assert!(ime.is_some_and(|i| i.should_interrupt_composition), "the composing window's input method is interrupted");
+    }
+
     /// Fixed widget ids are kept apart per window, and are the plain ids outside a window host.
     #[test]
     fn fixed_widget_ids_are_per_window() {
         crate::set_window_salt(0);
-        assert_eq!(crate::wid("canvas"), egui::Id::new("canvas"));
+        assert_eq!(crate::wid("canvas"), egui::Id::unique("canvas"));
         crate::set_window_salt(1);
         let one = crate::wid("canvas");
         crate::set_window_salt(2);
         let two = crate::wid("canvas");
         crate::set_window_salt(0);
-        assert!(one != two && one != egui::Id::new("canvas"));
+        assert!(one != two && one != egui::Id::unique("canvas"));
     }
 }

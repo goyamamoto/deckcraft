@@ -8,7 +8,7 @@ use deckcraft_model::style::{Gradient, GradientShape, GradientStop, PatternFill}
 use egui::{Color32, CornerRadius, Rect, Sense, Stroke, Ui, pos2, vec2};
 use serde_json::{Value, json};
 
-use crate::i18n::tc;
+use crate::i18n::{fmt, tc};
 use crate::ribbon::cref_param;
 use crate::theme::{self, Tokens};
 use crate::widgets;
@@ -114,7 +114,7 @@ const KINDS: [&str; 4] = ["Linear", "Radial", "Rectangular", "Path"];
 pub fn gradient_editor(ui: &mut Ui, id: &str, g: &Gradient, sc: &ColorScheme) -> Option<Gradient> {
     let t = Tokens::get(ui.ctx());
     let mut out: Option<Gradient> = None;
-    let sel_id = ui.id().with((id, "stop"));
+    let sel_id = ui.scope_id().with((id, "stop"));
     let mut sel: usize = ui.data_mut(|d| d.get_temp(sel_id).unwrap_or(0)).min(g.stops.len().saturating_sub(1));
 
     // Preset variations of the first stop's colour.
@@ -175,8 +175,8 @@ pub fn gradient_editor(ui: &mut Ui, id: &str, g: &Gradient, sc: &ColorScheme) ->
         GradientShape::Path { .. } => "Radial",
     };
     ui.horizontal(|ui| {
-        ui.add_sized(vec2(70.0, 20.0), egui::Label::new(tl!("Type")));
-        egui::ComboBox::from_id_salt((id, "kind")).selected_text(tc("gradient", kind)).width(120.0).show_ui(ui, |ui| {
+        let field = ui.add_sized(vec2(70.0, 20.0), egui::Label::new(tl!("Type")));
+        let combo = egui::ComboBox::from_id_salt((id, "kind")).selected_text(tc("gradient", kind)).width(120.0).show_ui(ui, |ui| {
             for k in KINDS {
                 if ui.selectable_label(kind == k, tc("gradient", k)).clicked() && kind != k {
                     let focus = match &g.shape {
@@ -193,6 +193,7 @@ pub fn gradient_editor(ui: &mut Ui, id: &str, g: &Gradient, sc: &ColorScheme) ->
                 }
             }
         });
+        let _ = combo.response.labelled_by(field.id);
     });
     ui.horizontal_wrapped(|ui| {
         ui.add_sized(vec2(70.0, 20.0), egui::Label::new(tl!("Direction")));
@@ -218,7 +219,7 @@ pub fn gradient_editor(ui: &mut Ui, id: &str, g: &Gradient, sc: &ColorScheme) ->
     if let GradientShape::Linear { angle, .. } = &g.shape {
         ui.horizontal(|ui| {
             ui.add_sized(vec2(70.0, 20.0), egui::Label::new(tl!("Angle")));
-            if let Some(a) = widgets::spinner(ui, &format!("{id}-angle"), *angle, 15.0, "°", 70.0) {
+            if let Some(a) = widgets::spinner(ui, &format!("{id}-angle"), tl!("Angle"), *angle, 15.0, "°", 70.0) {
                 out = Some(Gradient { shape: GradientShape::Linear { angle: a.rem_euclid(360.0), scaled: false }, ..g.clone() });
             }
         });
@@ -228,15 +229,17 @@ pub fn gradient_editor(ui: &mut Ui, id: &str, g: &Gradient, sc: &ColorScheme) ->
     ui.add_space(4.0);
     ui.label(tl!("Gradient stops"));
     let (bar, bar_resp) = ui.allocate_exact_size(vec2(ui.available_width().min(260.0), 18.0), Sense::click());
+    bar_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Unknown, true, tl!("Gradient bar")));
     paint_bar(ui, bar, g, sc);
     let (marks, _) = ui.allocate_exact_size(vec2(bar.width(), 14.0), Sense::hover());
-    let drag_id = ui.id().with((id, "drag"));
+    let drag_id = ui.scope_id().with((id, "drag"));
     let mut dragging: Option<(usize, f64)> = ui.data_mut(|d| d.get_temp(drag_id));
     for (i, s) in g.stops.iter().enumerate() {
         let pos = dragging.filter(|d| d.0 == i).map_or(s.pos, |d| d.1);
         let x = bar.min.x + pos as f32 * bar.width();
         let r = Rect::from_center_size(pos2(x, marks.center().y), vec2(10.0, 12.0));
-        let resp = ui.interact(r, ui.id().with((id, "mark", i)), Sense::click_and_drag());
+        let resp = ui.interact(r, ui.scope_id().with((id, "mark", i)), Sense::click_and_drag());
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, fmt(tl!("Gradient stop {n}"), &[("n", &(i + 1).to_string())])));
         let fill = c32(&s.color, sc);
         let stroke = if i == sel { Stroke::new(2.0, t.accent) } else { Stroke::new(1.0, t.handle_stroke) };
         let tri = vec![pos2(x, r.min.y), pos2(r.max.x, r.min.y + 4.0), pos2(r.max.x, r.max.y), pos2(r.min.x, r.max.y), pos2(r.min.x, r.min.y + 4.0)];
@@ -303,7 +306,7 @@ pub fn gradient_editor(ui: &mut Ui, id: &str, g: &Gradient, sc: &ColorScheme) ->
         });
         ui.horizontal(|ui| {
             ui.add_sized(vec2(70.0, 20.0), egui::Label::new(tl!("Position")));
-            if let Some(v) = widgets::spinner(ui, &format!("{id}-pos-{sel}"), (s.pos * 100.0).round(), 5.0, "%", 70.0) {
+            if let Some(v) = widgets::spinner(ui, &format!("{id}-pos-{sel}"), tl!("Position"), (s.pos * 100.0).round(), 5.0, "%", 70.0) {
                 let mut ng = g.clone();
                 ng.stops[sel].pos = (v / 100.0).clamp(0.0, 1.0);
                 ng.stops.sort_by(|a, b| a.pos.total_cmp(&b.pos));
@@ -311,10 +314,10 @@ pub fn gradient_editor(ui: &mut Ui, id: &str, g: &Gradient, sc: &ColorScheme) ->
             }
         });
         ui.horizontal(|ui| {
-            ui.add_sized(vec2(70.0, 20.0), egui::Label::new(tl!("Transparency")));
-            let key = ui.id().with((id, "tr", sel));
+            let label = ui.add_sized(vec2(70.0, 20.0), egui::Label::new(tl!("Transparency")));
+            let key = ui.scope_id().with((id, "tr", sel));
             let mut tr: f32 = ui.data_mut(|d| d.get_temp(key).unwrap_or(((1.0 - alpha_of(&s.color)) * 100.0) as f32));
-            let r = ui.add(egui::Slider::new(&mut tr, 0.0..=100.0).suffix("%"));
+            let r = ui.add(egui::Slider::new(&mut tr, 0.0..=100.0).suffix("%")).labelled_by(label.id);
             if r.changed() {
                 ui.data_mut(|d| d.insert_temp(key, tr));
             }
@@ -488,7 +491,7 @@ pub fn pattern_editor(ui: &mut Ui, pt: &PatternFill, sc: &ColorScheme) -> Option
             let stroke = if on || resp.hovered() || resp.has_focus() { Stroke::new(2.0, t.accent) } else { Stroke::new(1.0, t.border) };
             ui.painter().rect_stroke(r.shrink(1.0), CornerRadius::same(2), stroke, egui::StrokeKind::Inside);
             let label = pattern_label(name);
-            resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, on, label));
+            resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, label));
             if resp.on_hover_text(label).clicked() && !on {
                 out = Some(PatternFill { preset: name.to_string(), ..pt.clone() });
             }
@@ -502,7 +505,7 @@ pub fn pattern_editor(ui: &mut Ui, pt: &PatternFill, sc: &ColorScheme) -> Option
             ui.painter().rect(sw, CornerRadius::same(3), c32(cur, sc), Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
             let r = widgets::drop_button(ui, "", vec2(24.0, 20.0), true);
             let name = format!("{label} color");
-            r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &name));
+            r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &name));
             widgets::color_popup(&r).show(|ui| {
                 if let Some(Some(c)) = widgets::color_grid(ui, sc, None) {
                     out = Some(if foreground { PatternFill { fg: c, ..pt.clone() } } else { PatternFill { bg: c, ..pt.clone() } });
