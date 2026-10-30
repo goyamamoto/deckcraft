@@ -51,6 +51,8 @@ pub mod thumbs;
 pub mod toast;
 pub mod uifonts;
 pub mod units;
+#[cfg(not(target_arch = "wasm32"))]
+mod updates_ui;
 pub mod widgets;
 pub mod windows;
 
@@ -513,6 +515,7 @@ pub const UI_COMMANDS: &[(&str, &str, Option<&str>, &str)] = &[
         "{layout?, perPage?, slides?, includeHidden?, frame?, paper?: letter|a4|legal|a3|b4|b5, orientation?: portrait|landscape}",
     ),
     ("app.about", "About DeckCraft", None, "{}"),
+    ("app.checkUpdates", "Check for Updates…", None, "{}"),
     ("app.palette", "Command Palette", Some("Cmd+Shift+P"), "{}"),
     ("app.preferences", "Preferences…", Some("Cmd+,"), "{}"),
     (
@@ -616,6 +619,8 @@ pub struct SlideApp {
     pub show: Option<show::Show>,
     /// Current slide's animations playing on the editor canvas (not the full-screen show).
     anim_preview: Option<AnimPreview>,
+    /// Where the Reuse Slides picker inserts: the presentation and slide current when it opened.
+    reuse_target: Option<FileTarget>,
     /// Audio/video playback (editor control bar, slide show, `media.*` commands).
     pub media: media::MediaHost,
     pub status: Option<(String, f64)>,
@@ -674,6 +679,8 @@ pub struct SlideApp {
     /// creating or closing a presentation leaves it.
     pub backstage: Option<backstage::Backstage>,
     pending_urls: Vec<String>,
+    #[cfg(not(target_arch = "wasm32"))]
+    updates_rt: updates_ui::Runtime,
     /// Text for the system clipboard from a Copy or Cut command, handed over on the next frame.
     pending_copy: Option<String>,
     /// Bounded screenshot completion slots for the control channel (egui 0.37 callbacks).
@@ -911,6 +918,7 @@ impl SlideApp {
             thesaurus_query: String::new(),
             show: None,
             anim_preview: None,
+            reuse_target: None,
             media: media::MediaHost::new(audio_out),
             status: None,
             opening: None,
@@ -939,6 +947,8 @@ impl SlideApp {
             integrated_titlebar: false,
             backstage: None,
             pending_urls: vec![],
+            #[cfg(not(target_arch = "wasm32"))]
+            updates_rt: updates_ui::Runtime::default(),
             pending_copy: None,
             capture: capture::Capture::default(),
             styled: false,
@@ -991,6 +1001,13 @@ impl SlideApp {
     /// MCP read it) and translated when painted ([`i18n::message`]: an `@msg` row or template).
     pub fn set_status(&mut self, msg: impl Into<String>) {
         self.status = Some((msg.into(), now_ms()));
+    }
+
+    /// Turn on the automatic check for a newer release at start-up (desktop shell only; tests and
+    /// the web build never touch the network on their own).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn enable_update_checks(&mut self) {
+        updates_ui::enable(self);
     }
 
     /// A message that must be seen wherever the user is: a toast, which also shows over the start
@@ -1698,6 +1715,12 @@ impl SlideApp {
                 return Ok(json!({"printed": self.print_pdf(p.clone())}));
             }
             "app.about" => self.dialog = Some(dialogs::Dialog::new("about")),
+            "app.checkUpdates" => {
+                #[cfg(not(target_arch = "wasm32"))]
+                updates_ui::request_check(self);
+                #[cfg(target_arch = "wasm32")]
+                return Err("updates are handled by the browser: reload the page".into());
+            }
             "app.palette" => self.palette = Some((String::new(), 0)),
             "app.preferences" => self.dialog = Some(dialogs::Dialog::new("preferences")),
             "app.language" => return self.language_command(p),
@@ -1995,25 +2018,55 @@ impl SlideApp {
             return;
         };
         let Some(path) = pick("open") else { return };
+        // Read the file once: the list shown and the slides inserted come from the same bytes, even
+        // if the file changes while the dialog is open. Without a reader the path is used as is.
+        let mut source = json!({});
+        match self.services.read.as_ref().map(|r| r(&path)) {
+            Some(Ok(bytes)) => {
+                let name = std::path::Path::new(&path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                source["name"] = json!(name);
+                source["data"] = json!(deckcraft_engine::cmd::base64_encode(&bytes));
+            }
+            Some(Err(e)) => {
+                self.set_status(e.to_string());
+                return;
+            }
+            None => source["path"] = json!(path),
+        }
         // Offer the file's slides to choose from; all of them are ticked to begin with.
-        match self.session.execute("slide.reuseList", &json!({"path": path})) {
+        match self.session.execute("slide.reuseList", &source) {
             Ok(list) => {
                 let mut d = dialogs::Dialog::new("reuseSlides");
-                d.params = json!({"path": path, "keep": keep, "slides": list["slides"]});
+                d.params = json!({"path": path, "source": source, "keep": keep, "slides": list["slides"]});
+                self.reuse_target = Some(self.capture_file_target());
                 self.dialog = Some(d);
             }
             Err(e) => self.set_status(e.to_string()),
         }
     }
 
-    /// Insert the slides `picked` (indices) of the presentation at `path` after the current slide.
-    pub fn reuse_slides(&mut self, path: &str, keep: bool, picked: &[usize]) {
-        match self.session.execute("slide.reuse", &json!({"path": path, "keepFormatting": keep, "slides": picked})) {
-            Ok(r) => {
-                let n = r["slides"].as_u64().unwrap_or(0);
-                self.set_status(format!("Inserted {n} slides from {path}"));
+    /// Insert the slides `picked` (indices) of `source` (the `name` + `data`, or `path`, that
+    /// `slide.reuseList` listed) after the slide that was current when the picker opened, in that
+    /// presentation, even if another one is active now; if it is closed or the slide is gone,
+    /// nothing is inserted. Returns whether they were inserted.
+    pub fn reuse_slides(&mut self, source: &Value, keep: bool, picked: &[usize]) -> bool {
+        let mut args = if source.is_object() { source.clone() } else { json!({}) };
+        args["keepFormatting"] = json!(keep);
+        args["slides"] = json!(picked);
+        let result = match self.reuse_target {
+            Some(target) if !self.viewing_target(&target) => self.execute_on_target(&target, "Reuse Slides", "slide.reuse", &args),
+            _ => self.session.execute("slide.reuse", &args).map(|_| ()).map_err(|e| e.to_string()),
+        };
+        match result {
+            Ok(()) => {
+                self.reuse_target = None;
+                self.set_status(format!("Inserted {} slides", picked.len()));
+                true
             }
-            Err(e) => self.set_status(e.to_string()),
+            Err(e) => {
+                self.set_status(e);
+                false
+            }
         }
     }
 
@@ -2387,6 +2440,8 @@ impl SlideApp {
         if !self.synthetic_batch_is_live(ctx) {
             self.drain_control(ctx);
             self.poll_opening();
+            #[cfg(not(target_arch = "wasm32"))]
+            updates_ui::tick(self, ctx);
             // Inbox results are host file bytes and do not need fonts or a painted frame. A
             // window that starts hidden must still apply a file picked before its first UI pass.
             self.drain_inbox();
@@ -3786,6 +3841,8 @@ impl SlideApp {
         toast::note_missing_fonts(self);
         toast::show(self, &ctx);
         dialogs::show(self, &ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        updates_ui::show(self, &ctx);
         menus::palette(self, &ctx);
         for url in std::mem::take(&mut self.pending_urls) {
             ctx.open_url(egui::OpenUrl::new_tab(url));
@@ -3999,6 +4056,8 @@ mod last_color_tests;
 #[cfg(test)]
 mod replacefonts_tests;
 #[cfg(test)]
+mod reuse_picker_tests;
+#[cfg(test)]
 mod slide_size_tests;
 #[cfg(test)]
 mod split_button_tests;
@@ -4006,6 +4065,8 @@ mod split_button_tests;
 mod texture_limit_tests;
 #[cfg(test)]
 mod ui_soak_tests;
+#[cfg(test)]
+mod units_tests;
 
 #[cfg(test)]
 #[path = "datetime_tests.rs"]
@@ -4013,9 +4074,6 @@ mod datetime_tests;
 
 #[cfg(test)]
 mod inbox_tests;
-
-#[cfg(test)]
-mod units_tests;
 
 #[cfg(test)]
 mod tests {
@@ -5019,6 +5077,76 @@ mod tests {
         let d = harness.state().session.active().unwrap();
         let body = d.doc.slides[0].shapes[0].text.as_ref().unwrap();
         assert_eq!(body.paragraphs[0].runs[0].props.lang.as_deref(), Some("fr-FR"));
+    }
+
+    /// Review > Language > Whole presentation marks every text box, not only the selected one.
+    #[test]
+    fn the_language_dialog_marks_the_whole_presentation() {
+        use egui_kittest::kittest::Queryable;
+        let mut harness = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
+            |ui, app: &mut SlideApp| {
+                app.logic(ui.ctx());
+                app.ui(ui);
+            },
+            SlideApp::new(Session::with_new(), Services::default()),
+        );
+        harness.run_steps(2);
+        let s = &mut harness.state_mut().session;
+        let title = s.active().unwrap().doc.slides[0].shapes[0].id.0;
+        s.execute("text.edit", &json!({"id": title})).unwrap();
+        s.execute("text.insert", &json!({"text": "Hola"})).unwrap();
+        s.execute("slide.new", &json!({"title": "Adiós"})).unwrap();
+        s.execute("text.edit", &json!({"id": s.active().unwrap().doc.slides[1].shapes[0].id.0})).unwrap();
+        s.execute("text.selectAll", &json!({})).unwrap();
+        harness.state_mut().run("app.dialog", json!({"id": "language"})).unwrap();
+        harness.run_steps(4);
+        harness.get_by_label("Whole presentation").click();
+        harness.run_steps(2);
+        harness.get_by_label("Español (España)").click();
+        harness.run_steps(2);
+        harness.get_by_label("OK").click();
+        harness.run_steps(2);
+        assert!(harness.state().dialog.is_none());
+        let d = harness.state().session.active().unwrap();
+        for sl in &d.doc.slides {
+            let body = sl.shapes[0].text.as_ref().unwrap();
+            assert_eq!(body.paragraphs[0].runs[0].props.lang.as_deref(), Some("es-ES"));
+        }
+    }
+
+    /// With nothing selected, Review > Language applies to the whole presentation without
+    /// choosing it, and Selected text can't be picked.
+    #[test]
+    fn the_language_dialog_marks_the_whole_presentation_with_nothing_selected() {
+        use egui_kittest::kittest::{NodeT, Queryable};
+        let mut harness = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
+            |ui, app: &mut SlideApp| {
+                app.logic(ui.ctx());
+                app.ui(ui);
+            },
+            SlideApp::new(Session::with_new(), Services::default()),
+        );
+        harness.run_steps(2);
+        let s = &mut harness.state_mut().session;
+        let title = s.active().unwrap().doc.slides[0].shapes[0].id.0;
+        s.execute("text.edit", &json!({"id": title})).unwrap();
+        s.execute("text.insert", &json!({"text": "Hola"})).unwrap();
+        s.execute("slide.new", &json!({"title": "Adiós"})).unwrap();
+        s.execute("edit.select", &json!({"ids": []})).unwrap();
+        assert!(s.active().unwrap().selection.text.is_none() && s.active().unwrap().selection.shapes.is_empty());
+        harness.state_mut().run("app.dialog", json!({"id": "language"})).unwrap();
+        harness.run_steps(4);
+        assert!(harness.get_by_label("Selected text").accesskit_node().is_disabled());
+        harness.get_by_label("Español (España)").click();
+        harness.run_steps(2);
+        harness.get_by_label("OK").click();
+        harness.run_steps(2);
+        assert!(harness.state().dialog.is_none());
+        let d = harness.state().session.active().unwrap();
+        for sl in &d.doc.slides {
+            let body = sl.shapes[0].text.as_ref().unwrap();
+            assert_eq!(body.paragraphs[0].runs[0].props.lang.as_deref(), Some("es-ES"));
+        }
     }
 
     /// Speaker notes keep their formatting when edited in the notes pane: typing into a bold

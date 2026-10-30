@@ -6,10 +6,15 @@ use deckcraft_model::resolve;
 use deckcraft_model::text::{Align, Anchor, AutoFit, Bullet, Caps, ParaProps, RunProps, Spacing, Strike, TabStop, TextDir};
 use deckcraft_model::{ColorRef, ColorTransform, Effects, Fill, Line, SchemeSlot, Shape, ShapeKind};
 use serde_json::{Value, json};
+use std::sync::Arc;
 
 use super::text::{format_body, format_para, format_run};
-use super::*;
+use super::{
+    CommandSpec, always, bad, base64_decode, bool_or, bool_param, cmd, color_param, edit_shapes, f64_or, f64_param, has_doc, has_text,
+    has_text_or_shapes, ids_param, ok, str_param,
+};
 use crate::{Result, Session};
+use deckcraft_model::ShapeId;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -73,9 +78,18 @@ pub fn specs() -> Vec<CommandSpec> {
             "Language",
             ["Review", "Language"],
             None,
-            "{lang?, noProof?: bool} (proofing language of the selected text, and Do Not Check Spelling; with nothing selected, the language of new text: the deck's default, text that had it only from there keeping it) → {default?: true}",
+            "{lang?, noProof?: bool} (proofing language of the selected text, and Do Not Check Spelling; with nothing selected, the language of new text: the deck's default and the text styles that repeat it, text that had it only from there keeping it) → {default?: true}",
             has_doc,
             language
+        ),
+        cmd!(
+            "format.languageAll",
+            "Language for All Text",
+            ["Review", "Language"],
+            None,
+            "{lang?, noProof?: bool} (proofing language of every text in the presentation: slides, tables, notes, masters and layouts, and the default for new text; one undo step)",
+            has_doc,
+            language_all
         ),
         cmd!("format.highlight", "Text Highlight Color", ["Home", "Font"], None, "{color? (absent = none)}", has_text_or_shapes, highlight),
         cmd!(
@@ -496,19 +510,17 @@ fn text_transparency(s: &mut Session, p: &Value) -> Result<Value> {
         r.fill = Some(f);
     })
 }
-fn language(s: &mut Session, p: &Value) -> Result<Value> {
+/// The `lang` and `noProof` params of the language commands, checked: a run-props setter.
+fn language_edit(id: &str, p: &Value) -> Result<impl Fn(&mut RunProps) + Send + Sync + 'static> {
     let lang = str_param(p, "lang").map(str::to_string);
     let no_proof = bool_param(p, "noProof");
     if lang.is_none() && no_proof.is_none() {
-        return Err(bad("format.language", "give `lang` or `noProof`"));
+        return Err(bad(id, "give `lang` or `noProof`"));
     }
     if lang.as_deref().is_some_and(|l| l.is_empty() || l.len() > 35 || !l.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')) {
-        return Err(bad("format.language", "`lang` is a language tag such as en-US"));
+        return Err(bad(id, "`lang` is a language tag such as en-US"));
     }
-    if s.doc().is_ok_and(|st| st.selection.text.is_none() && st.selection.shapes.is_empty()) {
-        return default_language(s, lang, no_proof);
-    }
-    format_run(s, &move |r| {
+    Ok(move |r: &mut RunProps| {
         if let Some(l) = &lang {
             r.lang = Some(l.clone());
         }
@@ -517,34 +529,105 @@ fn language(s: &mut Session, p: &Value) -> Result<Value> {
         }
     })
 }
+/// Review › Language on the selected text (or the selected shapes' text); with nothing selected,
+/// the language of new text ([`default_language`]).
+fn language(s: &mut Session, p: &Value) -> Result<Value> {
+    let f = language_edit("format.language", p)?;
+    if s.doc().is_ok_and(|st| st.selection.text.is_none() && st.selection.shapes.is_empty()) {
+        return default_language(s, str_param(p, "lang"), &f);
+    }
+    format_run(s, &f)
+}
 /// `format.language` with nothing selected: the language of new text, the one the status bar
 /// shows then. The deck's default text style (`a:defPPr`) takes it. Text that had the old default
 /// only from there keeps that language, now written on its runs, as typed text in PowerPoint
 /// carries its own: a Japanese deck switched to English keeps its Japanese text Japanese (its
-/// fonts, line breaking and dates), and what is typed next is English.
-fn default_language(s: &mut Session, lang: Option<String>, no_proof: Option<bool>) -> Result<Value> {
+/// fonts, line breaking and dates), and what is typed next is English. The text styles that
+/// repeat the old default take the new one too ([`restyle_default_lang`]): after Whole
+/// presentation (`format.languageAll`) every level names it, and new text would keep it. `lang` is
+/// the new language and `f` its checked setter ([`language_edit`]).
+fn default_language(s: &mut Session, lang: Option<&str>, f: &dyn Fn(&mut RunProps)) -> Result<Value> {
     s.edit(|doc, _| {
         let old = doc.default_text_style.default.as_ref().and_then(|d| d.run.lang.clone()).filter(|l| !l.trim().is_empty());
-        if let (Some(old), Some(new)) = (&old, &lang)
+        if let (Some(old), Some(new)) = (&old, lang)
             && !old.eq_ignore_ascii_case(new)
         {
             keep_default_lang(doc, old);
         }
-        let def = doc.default_text_style.default.get_or_insert_with(Default::default);
-        if let Some(l) = lang {
-            def.run.lang = Some(l);
-        }
-        if let Some(n) = no_proof {
-            def.run.no_proof = n.then_some(true);
+        f(&mut doc.default_text_style.default.get_or_insert_with(Default::default).run);
+        if let Some(old) = &old {
+            restyle_default_lang(doc, old, f);
         }
         Ok(())
     })?;
     Ok(json!({"default": true}))
 }
 
-/// Write language `old` on every run that has it only from the deck's default text style (none of
-/// its own, none from its shape, placeholder or master styles): on slides, layouts and masters,
-/// tables included.
+/// The text style levels that name language `old` (the deck's default before
+/// [`default_language`] changes it) take the new one (`f`): the deck's default text style, the
+/// masters' title, body and other styles, and the list styles of the text on slides, notes,
+/// layouts and masters. Whole presentation (`format.languageAll`) writes its language on each,
+/// and there they would hide the deck's default from new text. A level in another language (a box
+/// kept in German) is left alone. The text on slides, layouts and masters that had `old` from
+/// these levels already has it written on its runs ([`keep_default_lang`]).
+fn restyle_default_lang(doc: &mut deckcraft_model::Presentation, old: &str, f: &dyn Fn(&mut RunProps)) {
+    use deckcraft_model::text::ListStyle;
+    let style = |l: &mut ListStyle| {
+        let mut changed = false;
+        for lv in l.levels.iter_mut().flatten().chain(l.default.as_mut()).filter(|lv| lv.run.lang.as_deref() == Some(old)) {
+            f(&mut lv.run);
+            changed = true;
+        }
+        changed
+    };
+    fn shapes(list: &mut [Shape], style: &dyn Fn(&mut ListStyle) -> bool, depth: usize) -> bool {
+        let mut changed = false;
+        for sh in list.iter_mut().filter(|_| depth <= 64) {
+            if let Some(t) = sh.text.as_mut() {
+                changed |= style(&mut t.list_style);
+            }
+            if let deckcraft_model::ShapeKind::Table(t) = &mut sh.kind {
+                for c in t.rows.iter_mut().flat_map(|r| r.cells.iter_mut()) {
+                    changed |= style(&mut c.text.list_style);
+                }
+            }
+            if let Some(children) = sh.children_mut() {
+                changed |= shapes(children, style, depth + 1);
+            }
+        }
+        changed
+    }
+    // Copies first, so slides and masters with nothing to change stay shared with the undo step.
+    for sl in &mut doc.slides {
+        let mut list = sl.shapes.clone();
+        let mut notes = sl.notes.list_style.clone();
+        let changed = shapes(&mut list, &style, 0);
+        if style(&mut notes) || changed {
+            let sl = Arc::make_mut(sl);
+            sl.shapes = list;
+            sl.notes.list_style = notes;
+        }
+    }
+    let extra = [doc.notes_master.as_mut(), doc.handout_master.as_mut()];
+    for m in doc.masters.iter_mut().chain(extra.into_iter().flatten()) {
+        let mut copy = (**m).clone();
+        let mut changed = shapes(&mut copy.shapes, &style, 0);
+        for l in &mut copy.layouts {
+            changed |= shapes(&mut l.shapes, &style, 0);
+        }
+        for l in [&mut copy.title_style, &mut copy.body_style, &mut copy.other_style] {
+            changed |= style(l);
+        }
+        if changed {
+            *m = Arc::new(copy);
+        }
+    }
+    style(&mut doc.default_text_style);
+}
+
+/// Write language `old` on every run that has it only from the text styles (none of its own): the
+/// deck's default text style, or the levels [`restyle_default_lang`] moves to the new language. On
+/// slides, layouts and masters, tables included.
 fn keep_default_lang(doc: &mut deckcraft_model::Presentation, old: &str) {
     use deckcraft_model::text::TextBody;
     fn body(ctx: &resolve::Ctx, sh: &Shape, b: &mut TextBody, old: &str) -> bool {
@@ -585,7 +668,7 @@ fn keep_default_lang(doc: &mut deckcraft_model::Presentation, old: &str) {
         if shapes(&ctx, &mut list, old, 0)
             && let Some(s) = doc.slides.get_mut(i)
         {
-            std::sync::Arc::make_mut(s).shapes = list;
+            Arc::make_mut(s).shapes = list;
         }
     }
     for (i, m) in before.masters.iter().enumerate() {
@@ -601,7 +684,7 @@ fn keep_default_lang(doc: &mut deckcraft_model::Presentation, old: &str) {
         if (own_changed || !layouts.is_empty())
             && let Some(dm) = doc.masters.get_mut(i)
         {
-            let dm = std::sync::Arc::make_mut(dm);
+            let dm = Arc::make_mut(dm);
             if own_changed {
                 dm.shapes = own;
             }
@@ -614,6 +697,61 @@ fn keep_default_lang(doc: &mut deckcraft_model::Presentation, old: &str) {
     }
 }
 
+/// Every run in the deck, and the text styles new text inherits from, in one language.
+fn language_all(s: &mut Session, p: &Value) -> Result<Value> {
+    let f = language_edit("format.languageAll", p)?;
+    /// Runs, end marks and the body's own list style levels and `a:defPPr` (never creating one).
+    fn body(t: &mut deckcraft_model::text::TextBody, f: &dyn Fn(&mut RunProps)) {
+        ed::format_all(t, f);
+        t.list_style.levels.iter_mut().flatten().chain(t.list_style.default.as_mut()).for_each(|lv| f(&mut lv.run));
+    }
+    /// Every text body in `list`: shapes, table cells and groups (nested at most 64 deep).
+    fn shapes(list: &mut [Shape], f: &dyn Fn(&mut RunProps), depth: usize) {
+        if depth > 64 {
+            return;
+        }
+        for sh in list {
+            if let Some(t) = &mut sh.text {
+                body(t, f);
+            }
+            match &mut sh.kind {
+                deckcraft_model::ShapeKind::Table(t) => t.rows.iter_mut().flat_map(|r| &mut r.cells).for_each(|c| body(&mut c.text, f)),
+                deckcraft_model::ShapeKind::Group { children, .. } => shapes(children, f, depth + 1),
+                _ => {}
+            }
+        }
+    }
+    /// A master or presentation text style's levels and `a:defPPr`: what new text inherits.
+    fn styles(l: &mut deckcraft_model::text::ListStyle, f: &dyn Fn(&mut RunProps)) {
+        // Level 1 always, so a deck without a default text style gets one.
+        if l.level(0).is_none() {
+            l.set(0, Default::default());
+        }
+        l.levels.iter_mut().flatten().chain(l.default.as_mut()).for_each(|lv| f(&mut lv.run));
+    }
+    s.edit(|doc, _| {
+        for sl in &mut doc.slides {
+            let sl = Arc::make_mut(sl);
+            shapes(&mut sl.shapes, &f, 0);
+            body(&mut sl.notes, &f);
+        }
+        let extra = [doc.notes_master.as_mut(), doc.handout_master.as_mut()];
+        for m in doc.masters.iter_mut().chain(extra.into_iter().flatten()) {
+            let m = Arc::make_mut(m);
+            shapes(&mut m.shapes, &f, 0);
+            m.layouts.iter_mut().for_each(|l| shapes(&mut l.shapes, &f, 0));
+            [&mut m.title_style, &mut m.body_style, &mut m.other_style].into_iter().for_each(|l| styles(l, &f));
+        }
+        // The deck's `a:defPPr` too, made if missing: the language of new text, which format.language
+        // sets with nothing selected and the status bar shows then.
+        if doc.default_text_style.default.is_none() {
+            doc.default_text_style.default = Some(Default::default());
+        }
+        styles(&mut doc.default_text_style, &f);
+        Ok(())
+    })?;
+    ok()
+}
 fn highlight(s: &mut Session, p: &Value) -> Result<Value> {
     let c = color_param(p, "color");
     format_run(s, &move |r| r.highlight = c.clone())
@@ -2476,6 +2614,63 @@ mod tests {
         s.execute("text.select", &json!({"anchor": [0, 0], "caret": [0, 6]})).unwrap();
         s.execute("format.language", &json!({"noProof": true})).unwrap();
         assert_eq!(selection_language(&s), (Some("ja-JP".to_string()), true), "the first selected character, 日");
+    }
+
+    /// Review ▸ Language ▸ Whole presentation also sets the deck's `a:defPPr`, the language of new
+    /// text that format.language sets with nothing selected, so the status bar names the new
+    /// language then: on a Japanese deck (which has one) and on a deck that had none.
+    #[test]
+    fn language_all_sets_the_decks_default_language_too() {
+        let mut s = Session::new();
+        s.execute("file.new", &json!({"eastAsian": "ja-JP"})).unwrap();
+        s.execute("edit.select", &json!({"ids": []})).unwrap();
+        s.execute("format.languageAll", &json!({"lang": "en-US"})).unwrap();
+        assert_eq!(selection_language(&s), (Some("en-US".to_string()), false), "a Japanese deck's default");
+
+        let mut s = Session::with_new();
+        s.execute("edit.select", &json!({"ids": []})).unwrap();
+        assert_eq!(selection_language(&s).0, None);
+        s.execute("format.languageAll", &json!({"lang": "es-ES", "noProof": true})).unwrap();
+        let d = s.doc().unwrap().doc.default_text_style.default.clone().unwrap_or_default();
+        assert_eq!((d.run.lang.as_deref(), d.run.no_proof), (Some("es-ES"), Some(true)), "made when missing");
+        assert_eq!(selection_language(&s).0.as_deref(), Some("es-ES"));
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(selection_language(&s).0, None, "one undo step");
+    }
+
+    /// After Whole presentation every text style names its language. With nothing selected,
+    /// format.language still sets the language of new text: the styles that repeat the old
+    /// default take the new one, a box's style in another language stays, and existing text
+    /// keeps its own.
+    #[test]
+    fn language_with_nothing_selected_after_the_whole_presentation() {
+        let mut s = Session::with_new();
+        let old = text_shape(&mut s, "Hallo");
+        let german = text_shape(&mut s, "Tschüss");
+        s.execute("edit.select", &json!({"ids": []})).unwrap();
+        s.execute("format.languageAll", &json!({"lang": "de-DE"})).unwrap();
+        s.edit(|doc, sel| {
+            let list = crate::shapes_mut(doc, sel).unwrap();
+            // A run without a language of its own, as typed text has.
+            deckcraft_model::find_shape_mut(list, old).unwrap().text.as_mut().unwrap().paragraphs[0].runs[0].props.lang = None;
+            // A box whose own list style names another language.
+            let lv = deckcraft_model::text::LevelStyle { run: RunProps { lang: Some("de-CH".into()), ..Default::default() }, ..Default::default() };
+            deckcraft_model::find_shape_mut(list, german).unwrap().text.as_mut().unwrap().list_style.set(0, lv);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(s.execute("format.language", &json!({"lang": "fr-FR"})).unwrap()["default"], true);
+        assert_eq!(selection_language(&s).0.as_deref(), Some("fr-FR"));
+        assert_eq!(runs_of(&s, old)[0].props.lang.as_deref(), Some("de-DE"), "existing text keeps its language");
+        let st = s.doc().unwrap();
+        assert_eq!(st.doc.default_text_style.level(0).unwrap().run.lang.as_deref(), Some("fr-FR"));
+        assert!(st.doc.masters.iter().all(|m| m.body_style.level(0).is_some_and(|l| l.run.lang.as_deref() == Some("fr-FR"))));
+        let boxed = st.doc.slides.iter().find_map(|sl| deckcraft_model::find_shape(&sl.shapes, german)).unwrap();
+        assert_eq!(boxed.text.as_ref().unwrap().list_style.level(0).unwrap().run.lang.as_deref(), Some("de-CH"), "another language stays");
+        // New text takes the new language.
+        let new = text_shape(&mut s, "Bonjour");
+        s.execute("text.edit", &json!({"id": new.0})).unwrap();
+        assert_eq!(s.execute("format.state", &json!({})).unwrap()["lang"], "fr-FR");
     }
 
     #[test]

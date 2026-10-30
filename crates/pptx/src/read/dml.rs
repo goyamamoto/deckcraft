@@ -583,6 +583,56 @@ pub fn text_body(imp: &mut Imp, part: &Part, tx: &El) -> TextBody {
 
 const MAX_PARAGRAPH_RUNS: usize = 10_000;
 
+/// The run properties of `e`'s `rPr` child, or the defaults.
+fn run_props(imp: &mut Imp, part: &Part, e: &El) -> RunProps {
+    e.child("rPr").map(|r| rpr(imp, part, r)).unwrap_or_default()
+}
+
+/// Appends the runs of an `a:r` text, where a vertical tab or line feed is a line break, as it
+/// lays out and as export writes it.
+fn push_text_runs(para: &mut Paragraph, props: RunProps, text: &str) {
+    for (i, piece) in text.split(['\u{b}', '\n']).enumerate() {
+        if para.runs.len() >= MAX_PARAGRAPH_RUNS {
+            break;
+        }
+        if i > 0 {
+            para.runs.push(Run { text: String::new(), props: props.clone(), kind: RunKind::Break });
+        }
+        if !piece.is_empty() {
+            if para.runs.len() >= MAX_PARAGRAPH_RUNS {
+                break;
+            }
+            para.runs.push(Run { text: piece.to_string(), props: props.clone(), kind: RunKind::Text });
+        }
+    }
+}
+
+/// Appends an Office Math (a14:m) run: its plain text and its OMML. The run's formatting (the math
+/// font, size, colour) is the first `a:rPr` inside: PowerPoint writes one in every `m:r` (`m:rPr`
+/// is the equation's own style, not DrawingML's).
+fn push_math_run(imp: &mut Imp, para: &mut Paragraph, part: &Part, e: &El) {
+    if para.runs.len() < MAX_PARAGRAPH_RUNS {
+        let mut text = String::new();
+        let mut ts = vec![];
+        e.find_all("t", &mut ts);
+        for t in ts {
+            text.push_str(&t.text());
+        }
+        let mut rprs = vec![];
+        e.find_all("rPr", &mut rprs);
+        let props = rprs.iter().find(|r| r.prefix() == "a").map(|r| rpr(imp, part, r)).unwrap_or_default();
+        let omml = e.elements().map(|c| part.keep_inner(c)).collect::<String>();
+        // The run's text is the equation's linear form (what Find searches and the fallback
+        // shows), as DeckCraft writes it; the pieces of `m:t` when the OMML has nothing it reads.
+        let text = deckcraft_math::omml::read(&omml)
+            .filter(|m| !m.is_empty())
+            .map(|m| deckcraft_math::linear::linear(&m))
+            .filter(|t| !t.is_empty())
+            .unwrap_or(text);
+        para.runs.push(Run { text, props, kind: RunKind::Math { omml } });
+    }
+}
+
 pub fn paragraph(imp: &mut Imp, part: &Part, p: &El) -> Paragraph {
     let mut para = Paragraph::default();
     for e in p.elements() {
@@ -596,63 +646,24 @@ pub fn paragraph(imp: &mut Imp, part: &Part, p: &El) -> Paragraph {
                 }
             }
             "r" => {
-                let props = e.child("rPr").map(|r| rpr(imp, part, r)).unwrap_or_default();
+                let props = run_props(imp, part, e);
                 let text: String = e.child("t").map(|t| t.text()).unwrap_or_default();
-                // A vertical tab or line feed inside text is a line break, as it lays out and as export writes it.
-                for (i, piece) in text.split(['\u{b}', '\n']).enumerate() {
-                    if para.runs.len() >= MAX_PARAGRAPH_RUNS {
-                        break;
-                    }
-                    if i > 0 {
-                        para.runs.push(Run { text: String::new(), props: props.clone(), kind: RunKind::Break });
-                    }
-                    if !piece.is_empty() {
-                        if para.runs.len() >= MAX_PARAGRAPH_RUNS {
-                            break;
-                        }
-                        para.runs.push(Run { text: piece.to_string(), props: props.clone(), kind: RunKind::Text });
-                    }
-                }
+                push_text_runs(&mut para, props, &text);
             }
             "br" => {
                 if para.runs.len() < MAX_PARAGRAPH_RUNS {
-                    let props = e.child("rPr").map(|r| rpr(imp, part, r)).unwrap_or_default();
+                    let props = run_props(imp, part, e);
                     para.runs.push(Run { text: String::new(), props, kind: RunKind::Break });
                 }
             }
             "fld" => {
                 if para.runs.len() < MAX_PARAGRAPH_RUNS {
-                    let props = e.child("rPr").map(|r| rpr(imp, part, r)).unwrap_or_default();
+                    let props = run_props(imp, part, e);
                     let text = e.child("t").map(|t| t.text()).unwrap_or_default();
                     para.runs.push(Run { text, props, kind: RunKind::Field { field: e.attr("type").unwrap_or("").to_string() } });
                 }
             }
-            "m" => {
-                if para.runs.len() < MAX_PARAGRAPH_RUNS {
-                    // Office Math (a14:m) — keep the OMML and its plain text. The run's formatting
-                    // (the math font, size, colour) is the first `a:rPr` inside: PowerPoint writes
-                    // one in every `m:r` (`m:rPr` is the equation's own style, not DrawingML's).
-                    let mut text = String::new();
-                    let mut ts = vec![];
-                    e.find_all("t", &mut ts);
-                    for t in ts {
-                        text.push_str(&t.text());
-                    }
-                    let mut rprs = vec![];
-                    e.find_all("rPr", &mut rprs);
-                    let props = rprs.iter().find(|r| r.prefix() == "a").map(|r| rpr(imp, part, r)).unwrap_or_default();
-                    let omml = e.elements().map(|c| part.keep_inner(c)).collect::<String>();
-                    // The run's text is the equation's linear form (what Find searches and the
-                    // fallback shows), as DeckCraft writes it; the pieces of `m:t` when the OMML
-                    // has nothing it reads.
-                    let text = deckcraft_math::omml::read(&omml)
-                        .filter(|m| !m.is_empty())
-                        .map(|m| deckcraft_math::linear::linear(&m))
-                        .filter(|t| !t.is_empty())
-                        .unwrap_or(text);
-                    para.runs.push(Run { text, props, kind: RunKind::Math { omml } });
-                }
-            }
+            "m" => push_math_run(imp, &mut para, part, e),
             "endParaRPr" => para.end_props = rpr(imp, part, e),
             _ => {}
         }
