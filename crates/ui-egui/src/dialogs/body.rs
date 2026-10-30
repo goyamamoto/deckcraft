@@ -1,0 +1,1337 @@
+use super::about::{about, credits_block};
+use super::alt_text::alt_text_starts_decorative;
+use super::columns::columns_dialog;
+use super::date_time::date_time_dialog;
+use super::equation::equation_dialog;
+use super::export::gif_options;
+use super::find::find_dialog;
+use super::font::font_dialog;
+use super::grid_options::grid_options;
+use super::header_footer::header_footer_dialog;
+use super::hyperlink::{hyperlink_command, hyperlink_seed_of, hyperlink_should_apply};
+use super::language::selected_language;
+use super::paragraph::paragraph_dialog;
+use super::photo_album::photo_album_dialog;
+use super::preferences::{language_picker, preferences_snapshot, restore_preferences, units_picker};
+use super::size_position::size_position_dialog;
+use super::slide_size::{put_slide_dim, slide_dim_points};
+use super::tabs::tabs_dialog;
+use super::theme_colors::theme_colors_dialog;
+use super::theme_fonts::theme_fonts_dialog;
+use super::trim::{seconds_text_to_ms, trim_seed};
+use super::zoom::zoom_dialog;
+use super::*;
+
+/// Returns true when the dialog should close.
+pub(super) fn body(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
+    let run = |app: &mut SlideApp, id: &str, p: Value| {
+        let _ = app.run(id, p);
+    };
+    match d.id.as_str() {
+        "table" => {
+            field(ui, d, tl!("Number of columns:"), "cols", "5");
+            field(ui, d, tl!("Number of rows:"), "rows", "2");
+            let (ok, cancel) = buttons(ui, "Insert");
+            if ok {
+                let (r, c) = (num(d, "rows", 2.0) as usize, num(d, "cols", 5.0) as usize);
+                run(app, "insert.table", json!({"rows": r, "cols": c}));
+            }
+            ok || cancel
+        }
+        "slideSize" => {
+            let cur = app.session.active().map(|s| s.doc.slide_size).unwrap_or(deckcraft_model::defaults::WIDE);
+            // Width and height in the measurement unit (Preferences, else the region's: 33.867 cm,
+            // 13.333"), each field showing its unit as PowerPoint does. Each keeps its exact size in
+            // points (`wPt`) beside the text shown, so a preset, Portrait or an untouched field is
+            // not nudged off by the rounding (33.867 cm or 13.333" read back is not 960 pt).
+            let unit = app.session.units();
+            if !d.fields.contains_key("wPt") {
+                put_slide_dim(d, "w", cur.width, unit);
+                put_slide_dim(d, "h", cur.height, unit);
+            }
+            let label = ui.label(tl!("Slides sized for:"));
+            // The preset is kept by its English name; only the shown text is translated.
+            let preset = d.get("preset", "");
+            let combo =
+                egui::ComboBox::from_id_salt("sizes").selected_text(if preset.is_empty() { tl!("Custom") } else { tl!(&preset) }).show_ui(ui, |ui| {
+                    for (label, w, h) in deckcraft_model::defaults::SLIDE_SIZES {
+                        if ui.selectable_label(preset == *label, tl!(label)).clicked() {
+                            d.fields.insert("preset".into(), label.to_string());
+                            put_slide_dim(d, "w", *w, unit);
+                            put_slide_dim(d, "h", *h, unit);
+                        }
+                    }
+                });
+            let _ = combo.response.labelled_by(label.id);
+            field(ui, d, tl!("Width:"), "w", "");
+            field(ui, d, tl!("Height:"), "h", "");
+            let (w, h) = (slide_dim_points(d, "w", unit, cur.width), slide_dim_points(d, "h", unit, cur.height));
+            ui.horizontal(|ui| {
+                ui.label(tl!("Orientation:"));
+                let portrait = ui.radio(h > w, tl!("Portrait")).clicked();
+                let landscape = ui.radio(w >= h, tl!("Landscape")).clicked();
+                // Picking the other orientation swaps the width and height fields.
+                if portrait && w > h || landscape && h > w {
+                    put_slide_dim(d, "w", h, unit);
+                    put_slide_dim(d, "h", w, unit);
+                }
+            });
+            let maximize = check(ui, d, tl!("Maximize content (else ensure fit)"), "max", false);
+            let (ok, cancel) = buttons(ui, "OK");
+            if ok {
+                // Text that isn't a length keeps the dialog open and says which field.
+                let (Some(w), Some(h)) = (length_value(d, "w", unit), length_value(d, "h", unit)) else {
+                    let which = if length_value(d, "w", unit).is_none() { "Width must be a length" } else { "Height must be a length" };
+                    app.set_status(which);
+                    return false;
+                };
+                run(app, "design.slideSize", json!({"w": w, "h": h, "scale": if maximize { "maximize" } else { "ensureFit" }}));
+            }
+            ok || cancel
+        }
+        "sizePosition" => size_position_dialog(app, ui, d),
+        "headerFooter" => header_footer_dialog(app, ui, d),
+        "hyperlink" => {
+            let seed = hyperlink_seed_of(app.session.active());
+            let slide_default = seed.slide.to_string();
+            let mode = d.get("mode", seed.mode);
+            ui.horizontal(|ui| {
+                if ui.selectable_label(mode == "url", tl!("Web Page or File")).clicked() {
+                    d.fields.insert("mode".into(), "url".into());
+                }
+                if ui.selectable_label(mode == "slide", tl!("This Document")).clicked() {
+                    d.fields.insert("mode".into(), "slide".into());
+                }
+                if ui.selectable_label(mode == "email", tl!("Email Address")).clicked() {
+                    d.fields.insert("mode".into(), "email".into());
+                }
+            });
+            match mode.as_str() {
+                "slide" => {
+                    let titles: Vec<String> = app
+                        .session
+                        .active()
+                        .map(|s| s.doc.slides.iter().enumerate().map(|(i, sl)| format!("{}. {}", i + 1, sl.title())).collect())
+                        .unwrap_or_default();
+                    let sel = d.get("slide", &slide_default).parse::<usize>().unwrap_or(0);
+                    egui::ScrollArea::vertical().max_height(180.0).show(ui, |ui| {
+                        for (i, t) in titles.iter().enumerate() {
+                            if ui.selectable_label(sel == i, t).clicked() {
+                                d.fields.insert("slide".into(), i.to_string());
+                            }
+                        }
+                    });
+                }
+                "email" => field(ui, d, tl!("Email address:"), "email", &seed.email),
+                _ => field(ui, d, tl!("Address:"), "url", &seed.url),
+            }
+            field(ui, d, tl!("ScreenTip:"), "tip", &seed.tip);
+            let (ok, cancel) = buttons(ui, "OK");
+            if ok {
+                let mode_now = d.get("mode", seed.mode);
+                let url = d.get("url", &seed.url);
+                let email = d.get("email", &seed.email);
+                let slide = d.get("slide", &slide_default).parse::<usize>().unwrap_or(0);
+                let tip = d.get("tip", &seed.tip);
+                if hyperlink_should_apply(&seed, &mode_now, &url, &email, slide) {
+                    run(app, "insert.hyperlink", hyperlink_command(&mode_now, &url, &email, slide, &tip, seed.highlight));
+                }
+            }
+            ok || cancel
+        }
+        "setupShow" => {
+            let sh = app.session.active().map(|s| s.doc.show.clone()).unwrap_or_default();
+            let ty = d.get("type", &sh.show_type);
+            ui.label(tl!("Show type"));
+            for (l, v) in [
+                ("Presented by a speaker (full screen)", "speaker"),
+                ("Browsed by an individual (window)", "browsed"),
+                ("Browsed at a kiosk (full screen)", "kiosk"),
+            ] {
+                if ui.radio(ty == v, tl!(l)).clicked() {
+                    d.fields.insert("type".into(), v.into());
+                }
+            }
+            let lp = check(ui, d, tl!("Loop continuously until 'Esc'"), "loop", sh.loop_until_esc);
+            let nn = check(ui, d, tl!("Show without narration"), "nn", sh.without_narration);
+            let na = check(ui, d, tl!("Show without animation"), "na", sh.without_animation);
+            let ut = check(ui, d, tl!("Use timings, if present"), "ut", sh.use_timings);
+            let names: Vec<String> = app.session.active().map(|s| s.doc.custom_shows.iter().map(|c| c.name.clone()).collect()).unwrap_or_default();
+            let chosen = d.fields.entry("custom".into()).or_insert_with(|| sh.custom_show.clone().unwrap_or_default()).clone();
+            let field = ui.label(tl!("Slides"));
+            let label = if chosen.is_empty() { tl!("All slides").to_string() } else { chosen.clone() };
+            let combo = egui::ComboBox::from_id_salt("setup_custom").selected_text(label).show_ui(ui, |ui| {
+                if ui.selectable_label(chosen.is_empty(), tl!("All slides")).clicked() {
+                    d.fields.insert("custom".into(), String::new());
+                }
+                for n in &names {
+                    if ui.selectable_label(&chosen == n, n).clicked() {
+                        d.fields.insert("custom".into(), n.clone());
+                    }
+                }
+            });
+            let _ = combo.response.labelled_by(field.id);
+            let (ok, cancel) = buttons(ui, "OK");
+            if ok {
+                let ty = d.get("type", "speaker");
+                let custom = d.fields.get("custom").cloned().unwrap_or_default();
+                run(app, "show.setup", json!({"type": ty, "loop": lp, "noNarration": nn, "noAnimation": na, "useTimings": ut, "custom": custom}));
+            }
+            ok || cancel
+        }
+        "quit" => {
+            let names: Vec<String> = app.session.documents().iter().filter(|d| d.is_dirty()).map(|d| d.title()).collect();
+            if names.is_empty() {
+                app.quit_confirmed = true;
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                return true;
+            }
+            let question = match names.as_slice() {
+                [name] => i18n::fmt(tl!("Do you want to save the changes you made to “{name}”?"), &[("name", name)]),
+                _ => i18n::fmt(tl!("Do you want to save the changes you made to {count} presentations?"), &[("count", &names.len().to_string())]),
+            };
+            ui.label(egui::RichText::new(question).strong());
+            ui.label(tl!("Your changes will be lost if you don't save them."));
+            ui.add_space(8.0);
+            let mut done = false;
+            ui.horizontal(|ui| {
+                let t = Tokens::get(ui.ctx());
+                if ui.add(egui::Button::new(tl!("Don't Save")).min_size(vec2(84.0, 24.0))).clicked() {
+                    // This window's presentations only: other windows keep their recovery copies.
+                    let uids: Vec<u64> = app.session.documents().iter().map(|d| d.uid).collect();
+                    for uid in uids {
+                        let _ = app.session.execute("file.recovery.discard", &json!({"uid": uid}));
+                    }
+                    app.quit_confirmed = true;
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                    done = true;
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let save =
+                        ui.add(egui::Button::new(egui::RichText::new(tl!("Save")).color(t.accent_text)).fill(t.accent).min_size(vec2(72.0, 24.0)));
+                    if save.clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        if app.save_all() {
+                            app.quit_confirmed = true;
+                            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                        }
+                        done = true;
+                    }
+                    if ui.add(egui::Button::new(tl!("Cancel")).min_size(vec2(72.0, 24.0))).clicked() {
+                        done = true;
+                    }
+                });
+            });
+            done
+        }
+        "close" => {
+            // File › Close and Ctrl+W on a presentation with unsaved changes.
+            let Some(name) = app.session.active().map(|d| d.title()) else { return true };
+            ui.label(egui::RichText::new(i18n::fmt(tl!("Do you want to save the changes you made to “{name}”?"), &[("name", &name)])).strong());
+            ui.label(tl!("Your changes will be lost if you don't save them."));
+            ui.add_space(8.0);
+            let mut done = false;
+            ui.horizontal(|ui| {
+                let t = Tokens::get(ui.ctx());
+                if ui.add(egui::Button::new(tl!("Don't Save")).min_size(vec2(84.0, 24.0))).clicked() {
+                    run(app, "file.close", json!({}));
+                    done = true;
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let save =
+                        ui.add(egui::Button::new(egui::RichText::new(tl!("Save")).color(t.accent_text)).fill(t.accent).min_size(vec2(72.0, 24.0)));
+                    if save.clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        app.save();
+                        // In the browser a save is a download: the presentation stays "unsaved".
+                        let web = app.services.pick_save.is_none() && app.services.download.is_some();
+                        if web || app.session.active().is_some_and(|d| !d.is_dirty()) {
+                            run(app, "file.close", json!({}));
+                        }
+                        done = true;
+                    }
+                    if ui.add(egui::Button::new(tl!("Cancel")).min_size(vec2(72.0, 24.0))).clicked() {
+                        done = true;
+                    }
+                });
+            });
+            done
+        }
+        "zoom" => zoom_dialog(app, ui, d),
+        "comment" => {
+            let mut v = d.get("text", "");
+            ui.add(egui::TextEdit::multiline(&mut v).hint_text(tl!("Comment")).desired_rows(4).desired_width(320.0));
+            d.fields.insert("text".into(), v.clone());
+            let (ok, cancel) = buttons(ui, "Post");
+            if ok && !v.trim().is_empty() {
+                run(app, "comment.add", json!({"text": v}));
+                app.ui.pane = Some("comments".into());
+            }
+            ok || cancel
+        }
+        "bullets" => {
+            // The current paragraph's list, as the dialog's starting point.
+            let cur = app.session.execute("format.state", &json!({})).ok().unwrap_or(Value::Null);
+            let numbered = cur.get("numbering").and_then(Value::as_bool).unwrap_or(false);
+            let tab = d.get("tab", if numbered { "numbered" } else { "bulleted" });
+            ui.horizontal(|ui| {
+                for (k, l) in [("bulleted", "Bulleted"), ("numbered", "Numbered")] {
+                    if ui.selectable_label(tab == k, tl!(l)).clicked() {
+                        d.fields.insert("tab".into(), k.into());
+                    }
+                }
+            });
+            ui.separator();
+            let style_key = if tab == "numbered" { "scheme" } else { "char" };
+            let current = d.get(style_key, if tab == "numbered" { "arabicPeriod" } else { "•" });
+            // Numbered: the Numbering gallery (format.numberingSchemes), with the East Asian schemes
+            // (① ② ③, １． ２． ３．, 一． 二． 三．) when editing in an East Asian language.
+            let styles: Vec<(String, String)> = if tab == "numbered" {
+                let gallery = crate::ribbon::numbering_gallery(app);
+                crate::ribbon::note_samples(app, ui.ctx(), &gallery);
+                gallery
+            } else {
+                ["•", "○", "■", "□", "◆", "➢", "✓", "–", "★"].iter().map(|c| (c.to_string(), c.to_string())).collect()
+            };
+            egui::Grid::new("bullet-styles").show(ui, |ui| {
+                for (i, (k, l)) in styles.iter().enumerate() {
+                    let r = ui.add_sized(
+                        vec2(if tab == "numbered" { 88.0 } else { 44.0 }, 40.0),
+                        egui::Button::selectable(current == *k, egui::RichText::new(l.as_str()).size(16.0)),
+                    );
+                    if r.clicked() {
+                        d.fields.insert(style_key.into(), k.clone());
+                    }
+                    if (i + 1) % if tab == "numbered" { 4 } else { 5 } == 0 {
+                        ui.end_row();
+                    }
+                }
+            });
+            if tab == "bulleted" {
+                field(ui, d, tl!("Custom character:"), "custom", "");
+            } else {
+                field(ui, d, tl!("Start at:"), "start", "1");
+            }
+            field(ui, d, tl!("Size (% of text):"), "size", "100");
+            let colors = [
+                ("", "Automatic"),
+                ("tx1", "Text"),
+                ("accent1", "Accent 1"),
+                ("accent2", "Accent 2"),
+                ("accent3", "Accent 3"),
+                ("accent4", "Accent 4"),
+                ("accent5", "Accent 5"),
+                ("accent6", "Accent 6"),
+            ];
+            let color = d.get("color", "");
+            ui.horizontal(|ui| {
+                let field = ui.add_sized(vec2(120.0, 20.0), egui::Label::new(tl!("Color:")));
+                let combo = egui::ComboBox::from_id_salt("bullet-color")
+                    .selected_text(tl!(colors.iter().find(|c| c.0 == color).map_or("Automatic", |c| c.1)))
+                    .show_ui(ui, |ui| {
+                        for (k, l) in colors {
+                            if ui.selectable_label(color == k, tl!(l)).clicked() {
+                                d.fields.insert("color".into(), k.into());
+                            }
+                        }
+                    });
+                let _ = combo.response.labelled_by(field.id);
+            });
+            ui.horizontal(|ui| {
+                if ui.button(tl!("None")).on_hover_text(tl!("Remove bullets and numbering")).clicked() {
+                    d.fields.insert("none".into(), "1".into());
+                }
+            });
+            let (ok, cancel) = buttons(ui, "OK");
+            let none = d.fields.contains_key("none");
+            if none {
+                run(app, if tab == "numbered" { "format.numbering" } else { "format.bullets" }, json!({"on": false}));
+            } else if ok {
+                let mut p = json!({"on": true});
+                let size = d.get("size", "100");
+                if let Some(size) = crate::widgets::parse_number(size.trim().trim_end_matches(['%', '％'])) {
+                    p["size"] = json!(size.clamp(25.0, 400.0));
+                }
+                if !color.is_empty() {
+                    p["color"] = json!(color);
+                }
+                if tab == "numbered" {
+                    p["scheme"] = json!(d.get("scheme", "arabicPeriod"));
+                    let start = crate::widgets::parse_number(&d.get("start", "1")).filter(|v| v.fract() == 0.0).unwrap_or(1.0);
+                    p["start"] = json!(start.clamp(1.0, 32767.0) as u64);
+                    run(app, "format.numbering", p);
+                } else {
+                    let custom = d.get("custom", "");
+                    let ch = custom.chars().find(|c| !c.is_whitespace()).map(String::from).unwrap_or_else(|| d.get("char", "•"));
+                    p["char"] = json!(ch);
+                    run(app, "format.bullets", p);
+                }
+            }
+            ok || cancel || none
+        }
+        "action" => {
+            use deckcraft_model::text::Action;
+            let tab = d.get("tab", "click");
+            // Start from the selected shape's current setting for this tab.
+            let (cur, slides, shows) = app
+                .session
+                .active()
+                .map(|st| {
+                    let sh = st.selected_shapes().first().map(|x| if tab == "hover" { x.hover.clone() } else { x.click.clone() }).unwrap_or(None);
+                    let slides: Vec<(deckcraft_model::SlideId, String)> =
+                        st.doc.slides.iter().enumerate().map(|(i, sl)| (sl.id, format!("{}. {}", i + 1, sl.title()))).collect();
+                    let shows: Vec<String> = st.doc.custom_shows.iter().map(|c| c.name.clone()).collect();
+                    (sh, slides, shows)
+                })
+                .unwrap_or_default();
+            let (cur_kind, cur_arg) = match cur.as_ref().map(|h| &h.action) {
+                None => ("none", String::new()),
+                Some(Action::NextSlide) => ("next", String::new()),
+                Some(Action::PreviousSlide) => ("previous", String::new()),
+                Some(Action::FirstSlide) => ("first", String::new()),
+                Some(Action::LastSlide) => ("last", String::new()),
+                Some(Action::LastViewed) => ("lastViewed", String::new()),
+                Some(Action::EndShow) => ("endShow", String::new()),
+                Some(Action::PlayMedia) => ("playMedia", String::new()),
+                Some(Action::Url { url }) => ("url", url.clone()),
+                Some(Action::CustomShow { name, .. }) => ("customShow", name.clone()),
+                Some(Action::Program { path }) => ("program", path.clone()),
+                Some(Action::Slide { slide }) => ("slide", slides.iter().position(|(id, _)| id == slide).unwrap_or(0).to_string()),
+            };
+            ui.horizontal(|ui| {
+                for (k, l) in [("click", "Mouse Click"), ("hover", "Mouse Over")] {
+                    if ui.selectable_label(tab == k, tl!(l)).clicked() && tab != k {
+                        d.fields.clear();
+                        d.fields.insert("tab".into(), k.into());
+                    }
+                }
+            });
+            ui.separator();
+            ui.label(if tab == "hover" { tl!("Action on mouse over") } else { tl!("Action on click") });
+            let kind = d.get("kind", cur_kind);
+            let hyperlink = !matches!(kind.as_str(), "none" | "program" | "playMedia");
+            let pick = |d: &mut Dialog, ui: &mut Ui, k: &str, l: &str| {
+                if ui.radio(d.get("kind", cur_kind) == k, tl!(l)).clicked() {
+                    d.fields.insert("kind".into(), k.into());
+                }
+            };
+            pick(d, ui, "none", "None");
+            ui.horizontal(|ui| {
+                let field = ui.radio(hyperlink, tl!("Hyperlink to:"));
+                if field.clicked() && !hyperlink {
+                    d.fields.insert("kind".into(), "next".into());
+                }
+                let targets = [
+                    ("next", "Next Slide"),
+                    ("previous", "Previous Slide"),
+                    ("first", "First Slide"),
+                    ("last", "Last Slide"),
+                    ("lastViewed", "Last Slide Viewed"),
+                    ("endShow", "End Show"),
+                    ("customShow", "Custom Show…"),
+                    ("slide", "Slide…"),
+                    ("url", "URL…"),
+                ];
+                let shown = targets.iter().find(|t| t.0 == kind).map_or("Next Slide", |t| t.1);
+                ui.add_enabled_ui(hyperlink, |ui| {
+                    let combo = egui::ComboBox::from_id_salt("action-target").selected_text(tl!(shown)).show_ui(ui, |ui| {
+                        for (k, l) in targets {
+                            if ui.selectable_label(kind == k, tl!(l)).clicked() {
+                                d.fields.insert("kind".into(), k.into());
+                            }
+                        }
+                    });
+                    let _ = combo.response.labelled_by(field.id);
+                });
+            });
+            let kind = d.get("kind", cur_kind);
+            match kind.as_str() {
+                "url" => field(ui, d, tl!("Address:"), "arg", if cur_kind == "url" { &cur_arg } else { "https://" }),
+                "slide" => {
+                    let sel = d.get("arg", if cur_kind == "slide" { &cur_arg } else { "0" }).parse::<usize>().unwrap_or(0);
+                    egui::ScrollArea::vertical().max_height(140.0).show(ui, |ui| {
+                        for (i, (_, t)) in slides.iter().enumerate() {
+                            if ui.selectable_label(sel == i, t).clicked() {
+                                d.fields.insert("arg".into(), i.to_string());
+                            }
+                        }
+                    });
+                }
+                "customShow" => {
+                    if shows.is_empty() {
+                        ui.label(tl!("This presentation has no custom shows (Slide Show ▸ Custom Slide Show)."));
+                    }
+                    let sel = d.get("arg", if cur_kind == "customShow" { &cur_arg } else { shows.first().map_or("", String::as_str) });
+                    for n in &shows {
+                        if ui.selectable_label(&sel == n, n).clicked() {
+                            d.fields.insert("arg".into(), n.clone());
+                        }
+                    }
+                }
+                _ => {}
+            }
+            pick(d, ui, "program", "Run program:");
+            if d.get("kind", cur_kind) == "program" {
+                field(ui, d, tl!("Program:"), "arg", if cur_kind == "program" { &cur_arg } else { "" });
+            }
+            pick(d, ui, "playMedia", "Play the shape's media");
+            let hl = check(ui, d, tl!("Highlight click"), "highlight", cur.as_ref().is_none_or(|h| h.highlight_click));
+            let (ok, cancel) = buttons(ui, "OK");
+            if ok {
+                let kind = d.get("kind", cur_kind);
+                let arg = d.get("arg", &cur_arg);
+                let mut p = json!({"on": tab, "action": kind, "highlight": hl});
+                match kind.as_str() {
+                    "url" => p["url"] = json!(arg),
+                    "slide" => p["slide"] = json!(arg.parse::<usize>().unwrap_or(0)),
+                    "customShow" => p["show"] = json!(arg),
+                    "program" => p["path"] = json!(arg),
+                    _ => {}
+                }
+                run(app, "shape.action", p);
+            }
+            ok || cancel
+        }
+        "altText" => {
+            let (cur, deco_now) = app
+                .session
+                .active()
+                .map(|s| {
+                    let shapes = s.selected_shapes();
+                    let cur = shapes.first().map(|x| x.descr.clone()).unwrap_or_default();
+                    let deco = alt_text_starts_decorative(shapes.iter().map(|x| x.decorative));
+                    (cur, deco)
+                })
+                .unwrap_or_default();
+            ui.label(tl!("How would you describe this object and its context to someone who is blind or has low vision?"));
+            let mut v = d.get("text", &cur);
+            ui.add(egui::TextEdit::multiline(&mut v).hint_text(tl!("Alt text")).desired_rows(4).desired_width(340.0));
+            d.fields.insert("text".into(), v.clone());
+            let deco = check(ui, d, tl!("Mark as decorative"), "deco", deco_now);
+            let (ok, cancel) = buttons(ui, "OK");
+            if ok {
+                run(app, "shape.altText", json!({"text": v, "decorative": deco}));
+            }
+            ok || cancel
+        }
+        "outline" => {
+            ui.label(tl!("Paste or type an outline. Unindented lines become slide titles; tab-indented lines become bullets."));
+            let mut v = d.get("text", "");
+            ui.add(egui::TextEdit::multiline(&mut v).hint_text(tl!("Outline")).desired_rows(10).desired_width(380.0).code_editor());
+            d.fields.insert("text".into(), v.clone());
+            let (ok, cancel) = buttons(ui, "Insert");
+            if ok {
+                run(app, "slide.fromOutline", json!({"text": v}));
+            }
+            ok || cancel
+        }
+        "reuseSlides" => {
+            let path = d.params.get("path").and_then(Value::as_str).unwrap_or("").to_string();
+            let slides: Vec<(usize, String)> = d
+                .params
+                .get("slides")
+                .and_then(Value::as_array)
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| {
+                            Some((usize::try_from(x.get("index")?.as_u64()?).ok()?, x.get("title").and_then(Value::as_str).unwrap_or("").to_string()))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let name = std::path::Path::new(&path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or(path.clone());
+            ui.label(i18n::fmt(tl!("Insert slides from {name} after the current slide:"), &[("name", &name)]));
+            // Unticked slides are remembered by index; everything starts ticked.
+            let off = |d: &Dialog, i: usize| d.fields.get(&format!("off{i}")).is_some_and(|v| v == "1");
+            ui.horizontal(|ui| {
+                if ui.small_button(tl!("Select All")).clicked() {
+                    for (i, _) in &slides {
+                        d.fields.remove(&format!("off{i}"));
+                    }
+                }
+                if ui.small_button(tl!("Select None")).clicked() {
+                    for (i, _) in &slides {
+                        d.fields.insert(format!("off{i}"), "1".into());
+                    }
+                }
+            });
+            egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
+                for (i, title) in &slides {
+                    let mut on = !off(d, *i);
+                    let label = if title.trim().is_empty() {
+                        i18n::fmt(tl!("{n}  (no title)"), &[("n", &(i + 1).to_string())])
+                    } else {
+                        format!("{}  {}", i + 1, title.trim())
+                    };
+                    if ui.checkbox(&mut on, label).changed() {
+                        if on {
+                            d.fields.remove(&format!("off{i}"));
+                        } else {
+                            d.fields.insert(format!("off{i}"), "1".into());
+                        }
+                    }
+                }
+            });
+            let mut keep = d.params.get("keep").and_then(Value::as_bool).unwrap_or(false);
+            if ui.checkbox(&mut keep, tl!("Keep source formatting")).changed()
+                && let Some(o) = d.params.as_object_mut()
+            {
+                o.insert("keep".into(), json!(keep));
+            }
+            let picked: Vec<usize> = slides.iter().map(|(i, _)| *i).filter(|i| !off(d, *i)).collect();
+            let (ok, cancel) = buttons(ui, "Insert");
+            if ok {
+                if picked.is_empty() {
+                    app.set_status("Tick at least one slide to insert".to_string());
+                    return false;
+                }
+                // A failed insert keeps the dialog (and the ticked slides) open; the error is in the status bar.
+                let source = d.params.get("source").cloned().unwrap_or_default();
+                return app.reuse_slides(&source, keep, &picked);
+            }
+            cancel
+        }
+        "renameSection" | "renameShape" | "renameLayout" => {
+            let cur = d.params.get("name").and_then(Value::as_str).unwrap_or("").to_string();
+            field(ui, d, tl!("Name:"), "name", &cur);
+            let (ok, cancel) = buttons(ui, "Rename");
+            if ok {
+                let name = d.get("name", "");
+                match d.id.as_str() {
+                    "renameSection" => run(app, "section.rename", json!({"index": d.params.get("index").cloned().unwrap_or_default(), "name": name})),
+                    "renameShape" => run(app, "shape.rename", json!({"id": d.params.get("id").cloned().unwrap_or_default(), "name": name})),
+                    _ => run(app, "master.renameLayout", json!({"name": name})),
+                }
+            }
+            ok || cancel
+        }
+        "font" => font_dialog(app, ui, d),
+        "paragraph" => paragraph_dialog(app, ui, d),
+        "tabs" => tabs_dialog(app, ui, d),
+        "export" => {
+            ui.label(tl!("Export the presentation as:"));
+            let fmt = d.get("fmt", "pdf");
+            for (l, f) in [
+                ("PDF document (.pdf)", "pdf"),
+                ("PNG images (current slide)", "png"),
+                ("PNG images (all slides)", "pngAll"),
+                ("JPEG image (current slide)", "jpeg"),
+                ("PowerPoint Presentation (.pptx)", "pptx"),
+                ("Outline (.txt)", "outline"),
+                ("Animated GIF (.gif)", "gif"),
+                ("Outline/RTF (.rtf)", "rtf"),
+            ] {
+                if ui.radio(fmt == f, tl!(l)).clicked() {
+                    d.fields.insert("fmt".into(), f.into());
+                }
+            }
+            let pdf_layout = d.get("pdfLayout", "slides");
+            if fmt == "pdf" {
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    let field = ui.label(tl!("Print layout:"));
+                    let combo = egui::ComboBox::from_id_salt("pdf_layout")
+                        .selected_text(tl!(match pdf_layout.as_str() {
+                            "notes" => "Notes Pages",
+                            "h1" => "Handouts (1 slide per page)",
+                            "h2" => "Handouts (2 slides per page)",
+                            "h3" => "Handouts (3 slides per page)",
+                            "h4" => "Handouts (4 slides per page)",
+                            "h6" => "Handouts (6 slides per page)",
+                            "h9" => "Handouts (9 slides per page)",
+                            _ => "Full Page Slides",
+                        }))
+                        .show_ui(ui, |ui| {
+                            for (k, l) in [
+                                ("slides", "Full Page Slides"),
+                                ("notes", "Notes Pages"),
+                                ("h1", "Handouts (1 slide per page)"),
+                                ("h2", "Handouts (2 slides per page)"),
+                                ("h3", "Handouts (3 slides per page)"),
+                                ("h4", "Handouts (4 slides per page)"),
+                                ("h6", "Handouts (6 slides per page)"),
+                                ("h9", "Handouts (9 slides per page)"),
+                            ] {
+                                if ui.selectable_label(pdf_layout == k, tl!(l)).clicked() {
+                                    d.fields.insert("pdfLayout".into(), k.into());
+                                }
+                            }
+                        });
+                    let _ = combo.response.labelled_by(field.id);
+                });
+                let mut hidden = d.get("pdfHidden", "false") == "true";
+                if ui.checkbox(&mut hidden, tl!("Include hidden slides")).changed() {
+                    d.fields.insert("pdfHidden".into(), hidden.to_string());
+                }
+            }
+            let png = matches!(fmt.as_str(), "png" | "pngAll");
+            if png {
+                ui.add_space(4.0);
+                let mut clear = d.get("pngTransparent", "false") == "true";
+                if ui
+                    .checkbox(&mut clear, tl!("Transparent background"))
+                    .on_hover_text(tl!("Leave the slide background out: only what is on the slide is drawn"))
+                    .changed()
+                {
+                    d.fields.insert("pngTransparent".into(), clear.to_string());
+                }
+            }
+            let gif_params = if fmt == "gif" { gif_options(app, ui, d) } else { Ok(Value::Null) };
+            if let Err(e) = &gif_params {
+                // Kept in English (it is also the status message); shown translated.
+                ui.label(egui::RichText::new(i18n::message(e)).color(Tokens::get(ui.ctx()).text_dim));
+            }
+            let pdf_params = {
+                let (layout, per) = match pdf_layout.as_str() {
+                    "notes" => ("notes", 0),
+                    l if l.starts_with('h') => ("handouts", l[1..].parse().unwrap_or(6)),
+                    _ => ("slides", 0),
+                };
+                json!({"layout": layout, "perPage": per, "includeHidden": d.get("pdfHidden", "false") == "true"})
+            };
+            let (ok, cancel) = buttons(ui, "Export");
+            if ok {
+                let gif_params = match gif_params {
+                    Ok(v) => v,
+                    // Keep the dialog open so the range or width can be corrected.
+                    Err(e) => {
+                        app.set_status(e);
+                        return false;
+                    }
+                };
+                let extra = match fmt.as_str() {
+                    "pdf" => pdf_params,
+                    "gif" => gif_params,
+                    _ if png && d.get("pngTransparent", "false") == "true" => json!({"transparentBackground": true}),
+                    _ => json!({}),
+                };
+                app.export_as(&fmt, extra);
+            }
+            ok || cancel
+        }
+        "replaceFonts" => {
+            let used: Vec<String> =
+                app.session.execute("font.used", &json!({})).ok().and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
+            // The deck's fonts, its East Asian ones included (ＭＳ Ｐゴシック beside Calibri), by
+            // the names it uses; the replacement from the installed fonts by their names in the
+            // interface language, found by any of their names.
+            let mut from = d.get("from", used.first().map(String::as_str).unwrap_or(""));
+            let list = crate::fontpick::font_list(app, ui.ctx());
+            egui::Grid::new("replace_fonts").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
+                let field = ui.label(tl!("Replace:"));
+                let combo = egui::ComboBox::from_id_salt("rf_from").width(240.0).selected_text(from.clone()).show_ui(ui, |ui| {
+                    for f in &used {
+                        ui.selectable_value(&mut from, f.clone(), f);
+                    }
+                });
+                let _ = combo.response.labelled_by(field.id);
+                ui.end_row();
+                ui.label(tl!("With:"));
+                let to = d.get("to", "");
+                let r = crate::fontpick::font_box(
+                    ui,
+                    "rf_to",
+                    240.0,
+                    &to,
+                    true,
+                    tl!("Font name"),
+                    crate::fontpick::Offer::Families,
+                    &mut || list.clone(),
+                    None,
+                );
+                if let Some(text) = r.pick.map(|p| p.value()).or(r.edited) {
+                    d.fields.insert("to".into(), text);
+                }
+                ui.end_row();
+            });
+            if let Some(msg) = d.fields.get("result") {
+                ui.label(egui::RichText::new(msg.clone()).color(Tokens::get(ui.ctx()).text_dim));
+            }
+            d.fields.insert("from".into(), from.clone());
+            let to = d.get("to", "");
+            let (ok, cancel) = buttons(ui, "Replace");
+            if ok && !from.is_empty() && !to.trim().is_empty() {
+                let n = app.run("font.replace", json!({"from": from, "to": to.trim()})).ok().and_then(|v| v["replaced"].as_u64()).unwrap_or(0);
+                let msg = if n == 0 {
+                    crate::i18n::fmt(tl!("“{from}” isn't used explicitly."), &[("from", &from)])
+                } else {
+                    crate::i18n::fmt(tl!("Replaced “{from}” with “{to}”."), &[("from", &from), ("to", to.trim())])
+                };
+                d.fields.insert("result".into(), msg);
+                d.fields.remove("from");
+                // Stay open, like PowerPoint, so several fonts can be replaced in a row.
+                return cancel;
+            }
+            cancel
+        }
+        "symbol" => {
+            ui.label(tl!("Click a symbol to insert it at the insertion point."));
+            let groups: [(&str, &str); 6] = [
+                ("Punctuation", "–—‘’“”…•·§¶†‡‰′″‹›«»¡¿"),
+                ("Currency", "$€£¥¢₹₩₽₺₿"),
+                ("Math", "±×÷≠≈≤≥∞√∑∏∫∂∆∇∈∉∩∪⊂⊃∀∃¬∧∨⇒⇔°′"),
+                ("Greek", "αβγδεζηθικλμνξοπρστυφχψωΓΔΘΛΞΠΣΦΨΩ"),
+                ("Arrows", "←↑→↓↔↕⇐⇑⇒⇓↖↗↘↙⟵⟶"),
+                ("Shapes", "■□▪▫▲△▶▷▼▽◀◁◆◇○●◎★☆✓✔✗✘♠♣♥♦"),
+            ];
+            for (g, chars) in groups {
+                ui.label(egui::RichText::new(tl!(g)).font(theme::bold(12.0)));
+                ui.horizontal_wrapped(|ui| {
+                    for c in chars.chars() {
+                        if ui.add(egui::Button::new(egui::RichText::new(c.to_string()).size(16.0)).min_size(vec2(26.0, 26.0))).clicked() {
+                            if app.session.active().is_some_and(|s| s.selection.text.is_none()) {
+                                let _ = app.run("text.edit", json!({}));
+                            }
+                            let _ = app.run("insert.symbol", json!({"text": c.to_string()}));
+                        }
+                    }
+                });
+            }
+            let (ok, cancel) = buttons(ui, "Close");
+            ok || cancel
+        }
+        "equation" => equation_dialog(app, ui, d),
+        "pasteSpecial" => {
+            const OPTS: [(&str, &str); 4] = [
+                ("destinationTheme", "Use Destination Theme"),
+                ("keepSource", "Keep Source Formatting"),
+                ("picture", "Picture (PNG)"),
+                ("text", "Keep Text Only"),
+            ];
+            let has_shapes = !app.session.clipboard.shapes.is_empty();
+            let mut cur = d.get("as", "destinationTheme");
+            ui.label(tl!("As:"));
+            for (id, label) in OPTS {
+                let ok = has_shapes || matches!(id, "destinationTheme" | "text");
+                ui.add_enabled_ui(ok, |ui| ui.radio_value(&mut cur, id.to_string(), tl!(label)));
+            }
+            d.fields.insert("as".into(), cur.clone());
+            let (ok, cancel) = buttons(ui, "OK");
+            if ok {
+                run(app, "edit.pasteSpecial", json!({"as": cur}));
+            }
+            ok || cancel
+        }
+        "find" => find_dialog(app, ui, d),
+        "spelling" => {
+            // Words skipped with Ignore All while the dialog is open, one per line.
+            let ignored = d.get("ignore", "");
+            let ignore: Vec<&str> = ignored.lines().filter(|l| !l.is_empty()).collect();
+            let v = app.session.execute("review.spelling", &json!({"ignore": ignore})).unwrap_or_default();
+            let list = v.as_array().cloned().unwrap_or_default();
+            let info = app.session.execute("review.dictionary", &json!({})).unwrap_or_default();
+            let available = info.get("available").and_then(Value::as_bool).unwrap_or(false);
+            match info.get("found").and_then(Value::as_str) {
+                Some(f) if available => {
+                    let name = f.rsplit(['/', '\\']).next().unwrap_or(f);
+                    ui.label(egui::RichText::new(i18n::fmt(tl!("Dictionary: {name}"), &[("name", name)])).small().weak())
+                }
+                _ if available => {
+                    let lang = info.get("lang").and_then(Value::as_str).unwrap_or("");
+                    ui.label(egui::RichText::new(i18n::fmt(tl!("Dictionary: {name}"), &[("name", lang)])).small().weak())
+                }
+                _ => {
+                    let lang = info.get("lang").and_then(Value::as_str).unwrap_or("en-US");
+                    let folder = info.get("folders").and_then(Value::as_array).and_then(|a| a.get(1).or(a.first())).and_then(Value::as_str);
+                    let note = match folder {
+                        Some(folder) => i18n::fmt(
+                            tl!(
+                                "No {language} dictionary is installed, so only common misspellings are found. Put a Hunspell .aff/.dic pair in {folder}."
+                            ),
+                            &[("language", lang), ("folder", folder)],
+                        ),
+                        None => i18n::fmt(
+                            tl!(
+                                "No {language} dictionary is installed, so only common misspellings are found. Put a Hunspell .aff/.dic pair in a dictionaries folder."
+                            ),
+                            &[("language", lang)],
+                        ),
+                    };
+                    ui.label(egui::RichText::new(note).small().weak())
+                }
+            };
+            if list.is_empty() {
+                ui.label(tl!("The spelling check is complete. No issues found."));
+            }
+            let mut add_ignore = None;
+            egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                for item in &list {
+                    let w = item.get("word").and_then(Value::as_str).unwrap_or("");
+                    let slide = item.get("slide").cloned().unwrap_or_default();
+                    let shape = item.get("shape").cloned().unwrap_or_default();
+                    ui.horizontal(|ui| {
+                        let n = (slide.as_u64().unwrap_or(0) + 1).to_string();
+                        ui.label(i18n::fmt(tl!("Slide {n}: “{word}”"), &[("n", &n), ("word", w)]));
+                        if ui.small_button(tl!("Go to")).clicked() {
+                            let _ = app.run("slide.go", json!({"index": slide}));
+                            let _ = app.run("edit.select", json!({"ids": [shape]}));
+                        }
+                        if ui.small_button(tl!("Ignore All")).clicked() {
+                            add_ignore = Some(w.to_string());
+                        }
+                        if ui.small_button(tl!("Add to Dictionary")).clicked()
+                            && let Err(e) = app.session.execute("review.addToDictionary", &json!({"word": w}))
+                        {
+                            app.set_status(e.to_string());
+                        }
+                    });
+                    let sug: Vec<String> = item
+                        .get("suggestions")
+                        .and_then(Value::as_array)
+                        .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
+                        .unwrap_or_default();
+                    if item.get("repeated").and_then(Value::as_bool).unwrap_or(false) && !item.get("notes").and_then(Value::as_bool).unwrap_or(false)
+                    {
+                        ui.horizontal(|ui| {
+                            ui.add_space(16.0);
+                            ui.label(egui::RichText::new(tl!("Repeated word")).weak());
+                            if ui.small_button(tl!("Delete Repeated Word")).clicked() {
+                                let from = item.get("deleteFrom").and_then(Value::as_u64).unwrap_or(0) as usize;
+                                let end = item.get("end").and_then(Value::as_u64).unwrap_or(0) as usize;
+                                let para = item.get("para").and_then(Value::as_u64).unwrap_or(0) as usize;
+                                let text = app.session.active().and_then(|st| {
+                                    let sh = st.shape(deckcraft_model::ShapeId(shape.as_u64()? as u32))?;
+                                    let pp = match (item.get("row").and_then(Value::as_u64), item.get("col").and_then(Value::as_u64), &sh.kind) {
+                                        (Some(r), Some(c), deckcraft_model::ShapeKind::Table(tb)) => {
+                                            tb.cell(r as usize, c as usize)?.text.paragraphs.get(para)?.text()
+                                        }
+                                        _ => sh.text.as_ref()?.paragraphs.get(para)?.text(),
+                                    };
+                                    Some(pp.chars().skip(from).take(end.saturating_sub(from)).collect::<String>())
+                                });
+                                if let Some(gap) = text {
+                                    let mut p = json!({"shape": shape, "para": para, "start": from, "word": gap, "to": ""});
+                                    if let (Some(o), Some(r), Some(c)) = (p.as_object_mut(), item.get("row"), item.get("col")) {
+                                        o.insert("row".into(), r.clone());
+                                        o.insert("col".into(), c.clone());
+                                    }
+                                    run(app, "review.spellingChange", p);
+                                }
+                            }
+                        });
+                    }
+                    if !sug.is_empty() {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.add_space(16.0);
+                            ui.label(egui::RichText::new(tl!("Change to:")).weak());
+                            for to in &sug {
+                                let r = ui.small_button(to.as_str()).on_hover_text(tl!("Click to change this one; Shift-click to change all"));
+                                if r.clicked() {
+                                    let all = ui.input(|i| i.modifiers.shift);
+                                    if item.get("notes").and_then(Value::as_bool).unwrap_or(false) {
+                                        // A word in the notes: change that line of the slide's notes.
+                                        let si = slide.as_u64().unwrap_or(0) as usize;
+                                        let notes =
+                                            app.session.active().and_then(|d| d.doc.slides.get(si)).map(|s| s.notes_text()).unwrap_or_default();
+                                        let (pi, st) = (
+                                            item.get("para").and_then(Value::as_u64).unwrap_or(0) as usize,
+                                            item.get("start").and_then(Value::as_u64).unwrap_or(0) as usize,
+                                        );
+                                        let lines: Vec<String> = notes
+                                            .split('\n')
+                                            .enumerate()
+                                            .map(|(i, l)| {
+                                                if i != pi {
+                                                    return l.to_string();
+                                                }
+                                                let c: Vec<char> = l.chars().collect();
+                                                let n = w.chars().count();
+                                                if c.get(st..st + n).is_some_and(|x| x.iter().collect::<String>() == w) {
+                                                    c[..st].iter().chain(to.chars().collect::<Vec<_>>().iter()).chain(c[st + n..].iter()).collect()
+                                                } else {
+                                                    l.to_string()
+                                                }
+                                            })
+                                            .collect();
+                                        run(app, "slide.notes", json!({"text": lines.join("\n"), "index": si}));
+                                    } else {
+                                        let mut p = if all {
+                                            json!({"word": w, "to": to, "all": true})
+                                        } else {
+                                            json!({"shape": shape, "word": w, "to": to, "para": item.get("para"), "start": item.get("start")})
+                                        };
+                                        if !all && let (Some(o), Some(r), Some(c)) = (p.as_object_mut(), item.get("row"), item.get("col")) {
+                                            o.insert("row".into(), r.clone());
+                                            o.insert("col".into(), c.clone());
+                                        }
+                                        run(app, "review.spellingChange", p);
+                                    }
+                                }
+                            }
+                        });
+                    }
+                }
+            });
+            if let Some(w) = add_ignore {
+                d.fields.insert("ignore".into(), format!("{ignored}{w}\n"));
+            }
+            let (ok, cancel) = buttons(ui, "Close");
+            ok || cancel
+        }
+        "accessibility" => {
+            let v = app.session.execute("review.accessibility", &json!({})).unwrap_or_default();
+            let list = v.as_array().cloned().unwrap_or_default();
+            if list.is_empty() {
+                ui.label(tl!("No accessibility issues found. People with disabilities should not have difficulty reading this document."));
+            }
+            egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
+                for item in &list {
+                    ui.horizontal(|ui| {
+                        // The issue comes from the engine in English (an `@msg` row or template words
+                        // it); the shape's name is the document's.
+                        let n = (item.get("slide").and_then(Value::as_u64).unwrap_or(0) + 1).to_string();
+                        let issue = i18n::message(item.get("issue").and_then(Value::as_str).unwrap_or(""));
+                        let line = match item.get("name").and_then(Value::as_str) {
+                            Some(name) => i18n::fmt(tl!("Slide {n}: {issue} — {name}"), &[("n", &n), ("issue", &issue), ("name", name)]),
+                            None => i18n::fmt(tl!("Slide {n}: {issue}"), &[("n", &n), ("issue", &issue)]),
+                        };
+                        ui.label(line);
+                        if ui.small_button(tl!("Go to")).clicked() {
+                            let _ = app.run("slide.go", json!({"index": item.get("slide").cloned().unwrap_or_default()}));
+                            if let Some(id) = item.get("shape") {
+                                let _ = app.run("edit.select", json!({"ids": [id]}));
+                            }
+                        }
+                    });
+                }
+            });
+            let (ok, cancel) = buttons(ui, "Close");
+            ok || cancel
+        }
+        "language" => {
+            // Starts from the selected text's language and Do Not Check Spelling (with nothing
+            // selected, the language of new text, which the status bar shows then). It applies to
+            // the selected text (`format.language`), to every text in the presentation and the
+            // text styles new text takes its language from (`format.languageAll`: what there is
+            // with nothing selected), or, with nothing selected, only to new text (the deck's
+            // default; text already there keeps its language: `format.language` with nothing
+            // selected).
+            let (cur, np) = selected_language(app);
+            let lang = d.get("lang", &cur);
+            let mut no_proof = d.get("noProof", if np { "1" } else { "" }) == "1";
+            let has_sel = deckcraft_engine::cmd::has_text_or_shapes(&app.session).is_ok();
+            let allowed = |s: &str| matches!((s, has_sel), ("sel", true) | ("new", false) | ("all", _));
+            // It starts on the selected text, or the whole presentation with nothing selected,
+            // unless the opener asks for another the selection allows (`app.dialog {scope}`; the
+            // status bar's language, which shows the language of new text then, can open on "new").
+            let asked = d.params.get("scope").and_then(Value::as_str).filter(|&s| allowed(s)).map(str::to_string);
+            let start = asked.unwrap_or_else(|| (if has_sel { "sel" } else { "all" }).to_string());
+            let mut scope = d.get("scope", &start);
+            // A choice the selection doesn't allow falls back to the starting one.
+            if !allowed(scope.as_str()) {
+                scope = start;
+            }
+            ui.horizontal(|ui| {
+                ui.label(tl!("Apply to:"));
+                if ui.add_enabled(has_sel, egui::RadioButton::new(scope == "sel", tl!("Selected text"))).clicked() {
+                    scope = "sel".into();
+                }
+                if !has_sel && ui.radio(scope == "new", tl!("New text")).clicked() {
+                    scope = "new".into();
+                }
+                if ui.radio(scope == "all", tl!("Whole presentation")).clicked() {
+                    scope = "all".into();
+                }
+            });
+            d.fields.insert("scope".into(), scope.clone());
+            let new_text = scope == "new";
+            ui.label(match scope.as_str() {
+                "new" => tl!("Default language for new text:"),
+                "all" => tl!("Mark all text in the presentation as:"),
+                _ => tl!("Mark selected text as:"),
+            });
+            egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
+                // The selection's own language first when the list doesn't have it.
+                let own = (!crate::squiggles::LANGS.iter().any(|(_, t)| t.eq_ignore_ascii_case(&cur))).then(|| (cur.clone(), cur.clone()));
+                let all = own.into_iter().chain(crate::squiggles::LANGS.iter().map(|(n, t)| (n.to_string(), t.to_string())));
+                for (_native, tag) in all {
+                    // Native names are shown when the interface fonts can draw them; otherwise
+                    // the tag is the explicit fallback (egui 0.37 aborts on a missing glyph).
+                    let name = crate::squiggles::display_lang_name(ui.ctx(), &tag);
+                    let installed = deckcraft_engine::spell::dictionary(&tag).is_some();
+                    // Language names are written in the language itself.
+                    let label = if installed { i18n::fmt(tl!("{language}  (dictionary)"), &[("language", &name)]) } else { name };
+                    if ui.selectable_label(lang.eq_ignore_ascii_case(&tag), label).clicked() {
+                        d.fields.insert("lang".into(), tag);
+                    }
+                }
+            });
+            ui.add_space(4.0);
+            ui.label(egui::RichText::new(tl!("Spelling is checked for languages marked (dictionary).")).small().weak());
+            if !new_text && ui.checkbox(&mut no_proof, tl!("Do not check spelling or grammar")).changed() {
+                d.fields.insert("noProof".into(), if no_proof { "1".into() } else { String::new() });
+            }
+            let (ok, cancel) = buttons(ui, "OK");
+            if ok {
+                let lang = d.get("lang", &cur);
+                // New text has no Do Not Check Spelling to set.
+                match scope.as_str() {
+                    "new" => run(app, "format.language", json!({"lang": lang})),
+                    "all" => run(app, "format.languageAll", json!({"lang": lang, "noProof": no_proof})),
+                    _ => run(app, "format.language", json!({"lang": lang, "noProof": no_proof})),
+                }
+            }
+            ok || cancel
+        }
+        "customShow" => {
+            let shows = app.session.active().map(|s| s.doc.custom_shows.clone()).unwrap_or_default();
+            let mut started = false;
+            for s in &shows {
+                ui.horizontal(|ui| {
+                    ui.label(i18n::fmt(tl!("{name} ({count} slides)"), &[("name", &s.name), ("count", &s.slides.len().to_string())]));
+                    // Starts that show: worded as an action, not as "display".
+                    if ui.small_button(i18n::tc("customShow", "Show")).clicked() {
+                        run(app, "show.start", json!({"custom": s.name}));
+                        started = true;
+                    }
+                    if ui.small_button(tl!("Delete")).clicked() {
+                        let _ = app.run("show.customShow", json!({"name": s.name, "delete": true}));
+                    }
+                });
+            }
+            if started {
+                return true;
+            }
+            field(ui, d, tl!("New show name:"), "name", "Custom Show 1");
+            field(ui, d, tl!("Slides (e.g. 1,3,5):"), "slides", "1");
+            let (ok, cancel) = buttons(ui, "Create");
+            if ok {
+                let idx: Vec<usize> =
+                    d.get("slides", "").split(',').filter_map(|s| s.trim().parse::<usize>().ok()).filter(|v| *v > 0).map(|v| v - 1).collect();
+                run(app, "show.customShow", json!({"name": d.get("name", "Custom Show"), "slides": idx}));
+            }
+            ok || cancel
+        }
+        "chartData" => {
+            let ch = app.session.active().and_then(|s| {
+                s.selected_shapes()
+                    .into_iter()
+                    .find_map(|x| if let deckcraft_model::ShapeKind::Chart(c) = &x.kind { Some(((**c).clone(), x.id)) } else { None })
+            });
+            let Some((c, id)) = ch else {
+                ui.label(tl!("Select a chart first."));
+                let (ok, cancel) = buttons(ui, "Close");
+                return ok || cancel;
+            };
+            ui.label(tl!("Edit the data: first row = series names, first column = categories."));
+            let mut grid: Vec<Vec<String>> = d.params.get("grid").and_then(|g| serde_json::from_value(g.clone()).ok()).unwrap_or_else(|| {
+                let mut g = vec![std::iter::once(String::new()).chain(c.series.iter().map(|s| s.name.clone())).collect::<Vec<_>>()];
+                for (i, cat) in c.categories.iter().enumerate() {
+                    let mut row = vec![cat.clone()];
+                    for s in &c.series {
+                        row.push(s.values.get(i).copied().flatten().map(|v| v.to_string()).unwrap_or_default());
+                    }
+                    g.push(row);
+                }
+                g
+            });
+            egui::Grid::new("chartdata").striped(true).show(ui, |ui| {
+                for row in grid.iter_mut() {
+                    for cell in row.iter_mut() {
+                        ui.add(egui::TextEdit::singleline(cell).hint_text(tl!("Chart cell")).desired_width(70.0));
+                    }
+                    ui.end_row();
+                }
+            });
+            ui.horizontal(|ui| {
+                if ui.button(tl!("+ Row")).clicked() {
+                    let n = grid.first().map(Vec::len).unwrap_or(2);
+                    grid.push(vec![String::new(); n]);
+                }
+                if ui.button(tl!("+ Series")).clicked() {
+                    for r in grid.iter_mut() {
+                        r.push(String::new());
+                    }
+                }
+            });
+            d.params = json!({"grid": grid});
+            let (ok, cancel) = buttons(ui, "OK");
+            if ok {
+                let names: Vec<String> = grid.first().map(|r| r.iter().skip(1).cloned().collect()).unwrap_or_default();
+                let cats: Vec<String> = grid.iter().skip(1).map(|r| r.first().cloned().unwrap_or_default()).collect();
+                let series: Vec<Value> = names.iter().enumerate().map(|(k, n)| json!({"name": n, "values": grid.iter().skip(1).map(|r| r.get(k + 1).and_then(|v| v.trim().parse::<f64>().ok())).collect::<Vec<_>>()})).collect();
+                run(app, "chart.data", json!({"id": id.0, "categories": cats, "series": series}));
+            }
+            ok || cancel
+        }
+        "trim" => {
+            let seed = trim_seed(app.session.active());
+            field(ui, d, tl!("Start time (s):"), "start", &seed.start);
+            field(ui, d, tl!("End trim (s):"), "end", &seed.end);
+            field(ui, d, tl!("Fade in (s):"), "fin", &seed.fade_in);
+            field(ui, d, tl!("Fade out (s):"), "fout", &seed.fade_out);
+            let (ok, cancel) = buttons(ui, "OK");
+            if ok {
+                run(
+                    app,
+                    "media.options",
+                    json!({
+                        "trimStart": seconds_text_to_ms(&d.get("start", &seed.start)),
+                        "trimEnd": seconds_text_to_ms(&d.get("end", &seed.end)),
+                        "fadeIn": seconds_text_to_ms(&d.get("fin", &seed.fade_in)),
+                        "fadeOut": seconds_text_to_ms(&d.get("fout", &seed.fade_out)),
+                    }),
+                );
+            }
+            ok || cancel
+        }
+        "smartart" => {
+            ui.label(tl!("Pick a graphic; type one item per line."));
+            let kind = d.get("kind", "process");
+            ui.horizontal_wrapped(|ui| {
+                for (k, l) in [
+                    ("list", "Basic List"),
+                    ("process", "Basic Process"),
+                    ("cycle", "Basic Cycle"),
+                    ("hierarchy", "Hierarchy"),
+                    ("pyramid", "Pyramid"),
+                    ("matrix", "Matrix"),
+                ] {
+                    if ui.selectable_label(kind == k, tl!(l)).clicked() {
+                        d.fields.insert("kind".into(), k.into());
+                    }
+                }
+            });
+            let mut v = d.get("text", "Plan\nBuild\nLaunch");
+            ui.add(egui::TextEdit::multiline(&mut v).hint_text(tl!("SmartArt items")).desired_rows(5).desired_width(320.0));
+            d.fields.insert("text".into(), v.clone());
+            let (ok, cancel) = buttons(ui, "Insert");
+            if ok {
+                run(app, "insert.smartArt", json!({"kind": kind, "items": v.lines().filter(|l| !l.trim().is_empty()).collect::<Vec<_>>()}));
+                app.ui.pane = Some("smartart".into());
+            }
+            ok || cancel
+        }
+        "about" => {
+            let tab = d.get("tab", "about");
+            ui.horizontal(|ui| {
+                for (k, l) in [("about", "About"), ("contributors", "Contributors"), ("models", "Models")] {
+                    if ui.selectable_label(tab == k, tl!(l)).clicked() {
+                        d.fields.insert("tab".into(), k.into());
+                    }
+                }
+            });
+            ui.separator();
+            match tab.as_str() {
+                "contributors" | "models" => {
+                    credits_block(ui, tab == "models");
+                }
+                _ => about(app, ui),
+            }
+            let (ok, cancel) = buttons(ui, "Close");
+            ok || cancel
+        }
+        "autocorrect" => {
+            let pr = &mut app.session.prefs;
+            ui.checkbox(&mut pr.ac_two_initials, tl!("Correct TWo INitial CApitals"));
+            ui.checkbox(&mut pr.ac_sentence_caps, tl!("Capitalize first letter of sentences"));
+            ui.checkbox(&mut pr.ac_days, tl!("Capitalize names of days"));
+            ui.checkbox(&mut pr.ac_caps_lock, tl!("Correct accidental use of cAPS LOCK key"));
+            ui.checkbox(&mut pr.ac_fractions, tl!("Replace fractions (1/2) with fraction characters (½)"));
+            ui.checkbox(&mut pr.ac_ordinals, tl!("Ordinals (1st) with superscript"));
+            ui.checkbox(&mut pr.ac_lists, tl!("Automatic bulleted and numbered lists"));
+            ui.checkbox(&mut pr.autocorrect, tl!("Replace text as you type"));
+            ui.add_space(4.0);
+            let mut from = d.get("from", "");
+            let mut to = d.get("to", "");
+            ui.horizontal(|ui| {
+                let l = ui.label(tl!("Replace"));
+                ui.add(egui::TextEdit::singleline(&mut from).desired_width(90.0)).labelled_by(l.id);
+                let l = ui.label(tl!("With"));
+                ui.add(egui::TextEdit::singleline(&mut to).desired_width(130.0)).labelled_by(l.id);
+                if ui.add_enabled(!from.trim().is_empty(), egui::Button::new(tl!("Add"))).clicked() {
+                    run(app, "text.autocorrect", json!({"add": [from.trim(), to]}));
+                    from.clear();
+                    to.clear();
+                }
+            });
+            d.fields.insert("from".into(), from.clone());
+            d.fields.insert("to".into(), to);
+            let list = app.session.execute("text.autocorrect", &json!({})).ok().and_then(|v| v.get("entries").cloned());
+            let entries: Vec<(String, String)> = list.and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
+            let q = from.trim().to_lowercase();
+            egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
+                egui::Grid::new("ac-list").striped(true).show(ui, |ui| {
+                    for (k, v) in entries.iter().filter(|(k, _)| q.is_empty() || k.to_lowercase().starts_with(&q)) {
+                        ui.label(k);
+                        ui.label(v);
+                        if ui.small_button(tl!("Delete")).clicked() {
+                            run(app, "text.autocorrect", json!({"remove": k}));
+                        }
+                        ui.end_row();
+                    }
+                });
+            });
+            let (ok, cancel) = buttons(ui, "OK");
+            ok || cancel
+        }
+        "gridOptions" => grid_options(app, ui, d),
+        "columns" => columns_dialog(app, ui, d),
+        "preferences" => {
+            // The controls apply as they change, so the dialog remembers what it opened with and
+            // Cancel (or Esc, or the close button: see `show`) puts that back.
+            if d.params.get("before").is_none() {
+                d.params = json!({ "before": preferences_snapshot(app) });
+            }
+            ui.label(egui::RichText::new(tl!("General")).font(theme::bold(13.0)));
+            language_picker(app, ui);
+            // PowerPoint takes the unit from the system's measurement setting; DeckCraft follows
+            // the region too and also asks here.
+            units_picker(app, ui);
+            let mut dark = app.ui.brightness == theme::Brightness::Dark;
+            if ui.checkbox(&mut dark, tl!("Dark appearance")).changed() {
+                let _ = app.run("view.dark", json!({"on": dark}));
+            }
+            // While the pointer holds the slider its value only waits in the dialog: applying it
+            // would rescale the slider under the pointer and run it to an end (#767). It applies
+            // on release, and at once from the keyboard.
+            let pending = d.fields.get("uiScale").and_then(|v| v.parse::<f32>().ok());
+            let mut scale = pending.unwrap_or(app.ui.ui_scale);
+            let r = ui.add(egui::Slider::new(&mut scale, 0.75..=1.75));
+            // No visible label here (the row is laid out to fit); the accessible name only.
+            let enabled = r.enabled();
+            r.widget_info(|| egui::WidgetInfo::slider(enabled, f64::from(scale), tl!("Interface size")));
+            if r.is_pointer_button_down_on() {
+                if r.changed() || pending.is_some() {
+                    d.fields.insert("uiScale".into(), scale.to_string());
+                }
+            } else {
+                if r.changed() || pending.is_some() {
+                    app.ui.ui_scale = scale;
+                }
+                d.fields.remove("uiScale");
+            }
+            ui.label(egui::RichText::new(tl!("Editing")).font(theme::bold(13.0)));
+            ui.checkbox(&mut app.session.prefs.smart_guides, tl!("Show smart guides"));
+            ui.checkbox(&mut app.session.prefs.snap_to_grid, tl!("Snap objects to grid"));
+            ui.checkbox(&mut app.session.prefs.smart_quotes, tl!("Replace straight quotes with smart quotes"));
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut app.session.prefs.autocorrect, tl!("AutoCorrect as you type"));
+                if ui.button(tl!("AutoCorrect Options…")).clicked() {
+                    *d = Dialog::new("autocorrect");
+                }
+            });
+            if d.id != "preferences" {
+                return false;
+            }
+            ui.horizontal(|ui| {
+                let label = ui.label(tl!("Your name (comments):"));
+                // Name the field for assistive technology; a bare text edit next to a label is an
+                // unnamed input in egui 0.37's accessibility tree.
+                let _ = ui.add(egui::TextEdit::singleline(&mut app.session.prefs.author)).labelled_by(label.id);
+            });
+            let (ok, cancel) = buttons(ui, "Done");
+            if cancel {
+                restore_preferences(app, d);
+            }
+            ok || cancel
+        }
+        "photoAlbum" => photo_album_dialog(app, ui, d),
+        "themeColors" => theme_colors_dialog(app, ui, d),
+        "themeFonts" => theme_fonts_dialog(app, ui, d),
+        "dateTime" => date_time_dialog(app, ui, d),
+        _ => {
+            ui.label(i18n::fmt(tl!("“{name}” is not available yet."), &[("name", &d.id)]));
+            let (ok, cancel) = buttons(ui, "OK");
+            ok || cancel
+        }
+    }
+}
