@@ -34,6 +34,9 @@ sys-locale = "0.3"
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 sys-locale = { version = "0.3", features = ["js"] }
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+craft-update = { workspace = true }
+
 [dev-dependencies]
 skrifa = { workspace = true }
 # kittest's own dev-dependencies do not propagate; tests need both font features explicitly.

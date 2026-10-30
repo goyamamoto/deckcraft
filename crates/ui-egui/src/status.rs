@@ -116,7 +116,11 @@ pub fn status_bar(app: &mut SlideApp, ui: &mut Ui) {
             let resp = ui.interact(hit, ui.scope_id().with("status_lang"), Sense::click()).on_hover_text(tl!("Language"));
             resp.widget_info(|| named_with_value(tl!("Language"), &name));
             if resp.clicked() {
-                app.dialog = Some(crate::dialogs::Dialog::new("language"));
+                // With nothing selected it shows the language of new text, so its dialog opens on
+                // that ("New text"); with a selection, on the selected text.
+                let mut dialog = crate::dialogs::Dialog::new("language");
+                dialog.params = json!({"scope": "new"});
+                app.dialog = Some(dialog);
             }
         }
         if let Some(msg) = msg {

@@ -333,14 +333,16 @@ fn format_shape(app: &mut SlideApp, ui: &mut Ui) {
             let lock_id = crate::wid("fmt-lock-aspect");
             let mut lock: bool = ui.data_mut(|d| d.get_temp(lock_id).unwrap_or(false));
             let locked = lock;
-            // Lengths in the measurement unit (centimetres in Japan); the rotation in degrees.
-            let length = Some(app.session.units());
-            let mut fields = |ui: &mut Ui, label: &str, id: &str, v: f64, key: &str, cmd: &str, unit: Option<deckcraft_geom::Unit>| {
+            // Lengths in the measurement unit (Preferences, else the region's: centimetres in
+            // Japan); the rotation in degrees.
+            let len = app.session.units();
+            let mut fields = |ui: &mut Ui, label: &str, id: &str, v: f64, key: &str, cmd: &str, angle: bool| {
                 ui.horizontal(|ui| {
                     ui.add_sized(vec2(90.0, 20.0), egui::Label::new(label));
-                    let changed = match unit {
-                        Some(u) => crate::units::length_spinner(ui, id, label, v, u, 70.0),
-                        None => widgets::spinner(ui, id, label, v, 0.1, "°", 70.0),
+                    let changed = if angle {
+                        widgets::spinner(ui, id, label, v, 0.1, "°", 70.0)
+                    } else {
+                        crate::units::length_spinner(ui, id, label, v, len, 70.0)
                     };
                     if let Some(nv) = changed {
                         let mut p = json!({key: nv});
@@ -352,16 +354,16 @@ fn format_shape(app: &mut SlideApp, ui: &mut Ui) {
                 });
             };
             ui.label(egui::RichText::new(tl!("Size")).font(theme::bold(13.0)));
-            fields(ui, tl!("Height"), "fh", x.h, "h", "shape.resize", length);
-            fields(ui, tl!("Width"), "fw", x.w, "w", "shape.resize", length);
-            fields(ui, tl!("Rotation"), "fr", x.rot, "deg", "shape.rotate", None);
+            fields(ui, tl!("Height"), "fh", x.h, "h", "shape.resize", false);
+            fields(ui, tl!("Width"), "fw", x.w, "w", "shape.resize", false);
+            fields(ui, tl!("Rotation"), "fr", x.rot, "deg", "shape.rotate", true);
             if ui.checkbox(&mut lock, tl!("Lock aspect ratio")).changed() {
                 ui.data_mut(|d| d.insert_temp(lock_id, lock));
             }
             ui.add_space(6.0);
             ui.label(egui::RichText::new(tl!("Position")).font(theme::bold(13.0)));
-            fields(ui, tc("position", "Horizontal"), "fx", x.x, "x", "shape.move", length);
-            fields(ui, tc("position", "Vertical"), "fy", x.y, "y", "shape.move", length);
+            fields(ui, tc("position", "Horizontal"), "fx", x.x, "x", "shape.move", false);
+            fields(ui, tc("position", "Vertical"), "fy", x.y, "y", "shape.move", false);
             ui.add_space(6.0);
             ui.label(egui::RichText::new(tl!("Alt Text")).font(theme::bold(13.0)));
             let id = ui.scope_id().with(("alt", uid, sh.id.0));

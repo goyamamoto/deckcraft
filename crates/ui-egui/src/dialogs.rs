@@ -292,6 +292,19 @@ fn check(ui: &mut Ui, d: &mut Dialog, label: &str, key: &str, default: bool) -> 
     v
 }
 
+/// A Slide Size field set to `pt`: the length as Slide Size shows it in `unit` (33.867 cm,
+/// 13.333": [`slide_len_text`]), the exact points kept beside ([`put_dim`]).
+fn put_slide_dim(d: &mut Dialog, key: &str, pt: f64, unit: deckcraft_geom::Unit) {
+    put_dim(d, key, pt, slide_len_text(pt, unit));
+}
+
+/// A Slide Size field in points: the exact value while the text is still the one it was filled
+/// with, else the length typed (a number in `unit`, or one with its own unit: `190.5 mm`, `10"`,
+/// full-width `２５．４`); `default` when it is not a length.
+fn slide_dim_points(d: &Dialog, key: &str, unit: deckcraft_geom::Unit, default: f64) -> f64 {
+    length_value(d, key, unit).unwrap_or(default)
+}
+
 fn num(d: &mut Dialog, key: &str, default: f64) -> f64 {
     let text = d.get(key, "");
     crate::widgets::ascii_number_text(&text).trim().trim_end_matches(['"', '%', ' ']).parse::<f64>().ok().filter(|v| v.is_finite()).unwrap_or(default)
@@ -1205,12 +1218,14 @@ fn body(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         }
         "slideSize" => {
             let cur = app.session.active().map(|s| s.doc.slide_size).unwrap_or(deckcraft_model::defaults::WIDE);
-            // Width and height in the measurement unit (33.867 cm, 13.333"); each keeps the exact
-            // size it was filled with until it is edited.
+            // Width and height in the measurement unit (Preferences, else the region's: 33.867 cm,
+            // 13.333"), each field showing its unit as PowerPoint does. Each keeps its exact size in
+            // points (`wPt`) beside the text shown, so a preset, Portrait or an untouched field is
+            // not nudged off by the rounding (33.867 cm or 13.333" read back is not 960 pt).
             let unit = app.session.units();
-            if !d.fields.contains_key("w") {
-                put_dim(d, "w", cur.width, slide_len_text(cur.width, unit));
-                put_dim(d, "h", cur.height, slide_len_text(cur.height, unit));
+            if !d.fields.contains_key("wPt") {
+                put_slide_dim(d, "w", cur.width, unit);
+                put_slide_dim(d, "h", cur.height, unit);
             }
             let label = ui.label(tl!("Slides sized for:"));
             // The preset is kept by its English name; only the shown text is translated.
@@ -1220,28 +1235,29 @@ fn body(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                     for (label, w, h) in deckcraft_model::defaults::SLIDE_SIZES {
                         if ui.selectable_label(preset == *label, tl!(label)).clicked() {
                             d.fields.insert("preset".into(), label.to_string());
-                            put_dim(d, "w", *w, slide_len_text(*w, unit));
-                            put_dim(d, "h", *h, slide_len_text(*h, unit));
+                            put_slide_dim(d, "w", *w, unit);
+                            put_slide_dim(d, "h", *h, unit);
                         }
                     }
                 });
             let _ = combo.response.labelled_by(label.id);
             field(ui, d, tl!("Width:"), "w", "");
             field(ui, d, tl!("Height:"), "h", "");
-            let (w, h) = (length_value(d, "w", unit).unwrap_or(cur.width), length_value(d, "h", unit).unwrap_or(cur.height));
+            let (w, h) = (slide_dim_points(d, "w", unit, cur.width), slide_dim_points(d, "h", unit, cur.height));
             ui.horizontal(|ui| {
                 ui.label(tl!("Orientation:"));
                 let portrait = ui.radio(h > w, tl!("Portrait")).clicked();
                 let landscape = ui.radio(w >= h, tl!("Landscape")).clicked();
                 // Picking the other orientation swaps the width and height fields.
                 if portrait && w > h || landscape && h > w {
-                    put_dim(d, "w", h, slide_len_text(h, unit));
-                    put_dim(d, "h", w, slide_len_text(w, unit));
+                    put_slide_dim(d, "w", h, unit);
+                    put_slide_dim(d, "h", w, unit);
                 }
             });
             let maximize = check(ui, d, tl!("Maximize content (else ensure fit)"), "max", false);
             let (ok, cancel) = buttons(ui, "OK");
             if ok {
+                // Text that isn't a length keeps the dialog open and says which field.
                 let (Some(w), Some(h)) = (length_value(d, "w", unit), length_value(d, "h", unit)) else {
                     let which = if length_value(d, "w", unit).is_none() { "Width must be a length" } else { "Height must be a length" };
                     app.set_status(which);
@@ -1745,9 +1761,11 @@ fn body(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                     app.set_status("Tick at least one slide to insert".to_string());
                     return false;
                 }
-                app.reuse_slides(&path, keep, &picked);
+                // A failed insert keeps the dialog (and the ticked slides) open; the error is in the status bar.
+                let source = d.params.get("source").cloned().unwrap_or_default();
+                return app.reuse_slides(&source, keep, &picked);
             }
-            ok || cancel
+            cancel
         }
         "renameSection" | "renameShape" | "renameLayout" => {
             let cur = d.params.get("name").and_then(Value::as_str).unwrap_or("").to_string();
@@ -2157,13 +2175,47 @@ fn body(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             ok || cancel
         }
         "language" => {
-            // Starts from the selected text's language and Do Not Check Spelling. With nothing
-            // selected it sets the language of new text (the status bar shows it then).
+            // Starts from the selected text's language and Do Not Check Spelling (with nothing
+            // selected, the language of new text, which the status bar shows then). It applies to
+            // the selected text (`format.language`), to every text in the presentation and the
+            // text styles new text takes its language from (`format.languageAll`: what there is
+            // with nothing selected), or, with nothing selected, only to new text (the deck's
+            // default; text already there keeps its language: `format.language` with nothing
+            // selected).
             let (cur, np) = selected_language(app);
             let lang = d.get("lang", &cur);
             let mut no_proof = d.get("noProof", if np { "1" } else { "" }) == "1";
-            let nothing = app.session.active().is_some_and(|st| st.selection.text.is_none() && st.selection.shapes.is_empty());
-            ui.label(if nothing { tl!("Default language for new text:") } else { tl!("Mark selected text as:") });
+            let has_sel = deckcraft_engine::cmd::has_text_or_shapes(&app.session).is_ok();
+            let allowed = |s: &str| matches!((s, has_sel), ("sel", true) | ("new", false) | ("all", _));
+            // It starts on the selected text, or the whole presentation with nothing selected,
+            // unless the opener asks for another the selection allows (`app.dialog {scope}`; the
+            // status bar's language, which shows the language of new text then, can open on "new").
+            let asked = d.params.get("scope").and_then(Value::as_str).filter(|&s| allowed(s)).map(str::to_string);
+            let start = asked.unwrap_or_else(|| (if has_sel { "sel" } else { "all" }).to_string());
+            let mut scope = d.get("scope", &start);
+            // A choice the selection doesn't allow falls back to the starting one.
+            if !allowed(scope.as_str()) {
+                scope = start;
+            }
+            ui.horizontal(|ui| {
+                ui.label(tl!("Apply to:"));
+                if ui.add_enabled(has_sel, egui::RadioButton::new(scope == "sel", tl!("Selected text"))).clicked() {
+                    scope = "sel".into();
+                }
+                if !has_sel && ui.radio(scope == "new", tl!("New text")).clicked() {
+                    scope = "new".into();
+                }
+                if ui.radio(scope == "all", tl!("Whole presentation")).clicked() {
+                    scope = "all".into();
+                }
+            });
+            d.fields.insert("scope".into(), scope.clone());
+            let new_text = scope == "new";
+            ui.label(match scope.as_str() {
+                "new" => tl!("Default language for new text:"),
+                "all" => tl!("Mark all text in the presentation as:"),
+                _ => tl!("Mark selected text as:"),
+            });
             egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
                 // The selection's own language first when the list doesn't have it.
                 let own = (!crate::squiggles::LANGS.iter().any(|(_, t)| t.eq_ignore_ascii_case(&cur))).then(|| (cur.clone(), cur.clone()));
@@ -2182,14 +2234,18 @@ fn body(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             });
             ui.add_space(4.0);
             ui.label(egui::RichText::new(tl!("Spelling is checked for languages marked (dictionary).")).small().weak());
-            if !nothing && ui.checkbox(&mut no_proof, tl!("Do not check spelling or grammar")).changed() {
+            if !new_text && ui.checkbox(&mut no_proof, tl!("Do not check spelling or grammar")).changed() {
                 d.fields.insert("noProof".into(), if no_proof { "1".into() } else { String::new() });
             }
             let (ok, cancel) = buttons(ui, "OK");
             if ok {
                 let lang = d.get("lang", &cur);
-                let params = if nothing { json!({"lang": lang}) } else { json!({"lang": lang, "noProof": no_proof}) };
-                run(app, "format.language", params);
+                // New text has no Do Not Check Spelling to set.
+                match scope.as_str() {
+                    "new" => run(app, "format.language", json!({"lang": lang})),
+                    "all" => run(app, "format.languageAll", json!({"lang": lang, "noProof": no_proof})),
+                    _ => run(app, "format.language", json!({"lang": lang, "noProof": no_proof})),
+                }
             }
             ok || cancel
         }
@@ -2395,6 +2451,8 @@ fn body(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             }
             ui.label(egui::RichText::new(tl!("General")).font(theme::bold(13.0)));
             language_picker(app, ui);
+            // PowerPoint takes the unit from the system's measurement setting; DeckCraft follows
+            // the region too and also asks here.
             units_picker(app, ui);
             let mut dark = app.ui.brightness == theme::Brightness::Dark;
             if ui.checkbox(&mut dark, tl!("Dark appearance")).changed() {

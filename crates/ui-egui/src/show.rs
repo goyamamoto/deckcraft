@@ -739,84 +739,19 @@ fn keyboard(ctx: &egui::Context, show: &mut Show, doc: &Presentation, now: f64, 
     let mut keep = true;
     let mut actions = vec![];
     for (k, m) in keys {
-        use egui::Key::*;
-        let presenter_grid = presenter && show.presenter_grid;
-        let grid_open = if presenter { show.presenter_grid } else { show.grid };
-        if grid_open && !matches!(k, Escape | Minus) {
+        let handled = if grid_open(show, presenter) && !matches!(k, egui::Key::Escape | egui::Key::Minus) {
             // See All Slides takes no other keys until a slide is chosen.
-            if k == G && plain(m) {
-                if presenter_grid {
-                    show.presenter_grid = false;
-                } else {
-                    show.grid = false;
-                }
+            if k == egui::Key::G && plain(m) {
+                close_grid(show, presenter);
+                true
             } else {
-                continue;
+                false
             }
         } else {
-            match k {
-                Escape | Minus => {
-                    let cancelled = k == Escape && show.clear_goto();
-                    if !cancelled && !show.back_out(presenter) {
-                        keep = false;
-                    }
-                }
-                ArrowRight | ArrowDown | Space | PageDown | N => {
-                    if show.ended {
-                        keep = false;
-                    } else {
-                        actions.push(show.state.next(doc));
-                    }
-                }
-                Enter => {
-                    if !show.goto.is_empty() {
-                        if let Some(i) = show.take_goto()
-                            && i < doc.slides.len()
-                        {
-                            actions.push(show.state.goto(doc, i));
-                        }
-                    } else if show.ended {
-                        keep = false;
-                    } else {
-                        actions.push(show.state.next(doc));
-                    }
-                }
-                Backspace if !show.goto.is_empty() => {
-                    show.goto.pop();
-                }
-                ArrowLeft | ArrowUp | Backspace | PageUp | P if !(k == P && m.command) => {
-                    show.ended = false;
-                    actions.push(show.state.prev(doc));
-                }
-                P if m.command => show.set_pen(!show.pen),
-                L if m.command => show.set_laser(!show.laser),
-                A if m.command => show.arrow(),
-                Home => {
-                    if let Some(i) = show.state.first_index(doc) {
-                        actions.push(show.state.goto(doc, i));
-                    }
-                }
-                End => {
-                    if let Some(i) = show.state.last_index(doc) {
-                        actions.push(show.state.goto(doc, i));
-                    }
-                }
-                B | Period => toggle_blank(show, Color32::BLACK),
-                W | Comma => toggle_blank(show, Color32::WHITE),
-                E => show.strokes.clear(),
-                G if plain(m) => show.open_grid(presenter),
-                Z if plain(m) => show.zoom_key(),
-                T if plain(m) => show.timer.toggle(now),
-                R if plain(m) => show.timer.reset(now),
-                OpenBracket if plain(m) => show.nudge_notes(-NOTES_STEP),
-                CloseBracket if plain(m) => show.nudge_notes(NOTES_STEP),
-                Num0 | Num1 | Num2 | Num3 | Num4 | Num5 | Num6 | Num7 | Num8 | Num9 => {
-                    if let Some(d) = k.name().chars().next() {
-                        show.push_slide_number(d, now);
-                    }
-                }
-                _ => continue,
-            }
+            navigation_key(show, doc, k, m, presenter, &mut keep, &mut actions) || tool_key(show, k, m, now, presenter)
+        };
+        if !handled {
+            continue;
         }
         // The same key must not also activate a focused presenter button or be handled again
         // by an embedded presenter viewport.
@@ -829,6 +764,111 @@ fn keyboard(ctx: &egui::Context, show: &mut Show, doc: &Presentation, now: f64, 
         }
     }
     keep
+}
+
+/// Whether the grid that the presenter key G opens is showing in this viewport.
+fn grid_open(show: &Show, presenter: bool) -> bool {
+    if presenter { show.presenter_grid } else { show.grid }
+}
+
+/// Closes the grid that G opens in this viewport.
+fn close_grid(show: &mut Show, presenter: bool) {
+    if presenter && show.presenter_grid {
+        show.presenter_grid = false;
+    } else {
+        show.grid = false;
+    }
+}
+
+/// Keys that move through the show or end it. False when `k` isn't one of them.
+fn navigation_key(
+    show: &mut Show,
+    doc: &Presentation,
+    k: egui::Key,
+    m: egui::Modifiers,
+    presenter: bool,
+    keep: &mut bool,
+    actions: &mut Vec<ShowAction>,
+) -> bool {
+    use egui::Key::*;
+    match k {
+        Escape | Minus => {
+            let cancelled = k == Escape && show.clear_goto();
+            if !cancelled && !show.back_out(presenter) {
+                *keep = false;
+            }
+        }
+        ArrowRight | ArrowDown | Space | PageDown | N => {
+            if show.ended {
+                *keep = false;
+            } else {
+                actions.push(show.state.next(doc));
+            }
+        }
+        Enter => {
+            if !show.goto.is_empty() {
+                if let Some(i) = show.take_goto()
+                    && i < doc.slides.len()
+                {
+                    actions.push(show.state.goto(doc, i));
+                }
+            } else if show.ended {
+                *keep = false;
+            } else {
+                actions.push(show.state.next(doc));
+            }
+        }
+        Backspace if !show.goto.is_empty() => {
+            show.goto.pop();
+        }
+        ArrowLeft | ArrowUp | Backspace | PageUp => {
+            show.ended = false;
+            actions.push(show.state.prev(doc));
+        }
+        P if m.command => show.set_pen(!show.pen),
+        P => {
+            show.ended = false;
+            actions.push(show.state.prev(doc));
+        }
+        Home => {
+            if let Some(i) = show.state.first_index(doc) {
+                actions.push(show.state.goto(doc, i));
+            }
+        }
+        End => {
+            if let Some(i) = show.state.last_index(doc) {
+                actions.push(show.state.goto(doc, i));
+            }
+        }
+        _ => return false,
+    }
+    true
+}
+
+/// Pen, laser, blanking, zoom, the timer, note size and typed slide numbers. False when `k`
+/// isn't one of them.
+fn tool_key(show: &mut Show, k: egui::Key, m: egui::Modifiers, now: f64, presenter: bool) -> bool {
+    use egui::Key::*;
+    match k {
+        L if m.command => show.set_laser(!show.laser),
+        A if m.command => show.arrow(),
+        B | Period => toggle_blank(show, Color32::BLACK),
+        W | Comma => toggle_blank(show, Color32::WHITE),
+        E => show.strokes.clear(),
+        G if plain(m) => show.open_grid(presenter),
+        Z if plain(m) => show.zoom_key(),
+        T if plain(m) => show.timer.toggle(now),
+        R if plain(m) => show.timer.reset(now),
+        OpenBracket if plain(m) => show.nudge_notes(-NOTES_STEP),
+        CloseBracket if plain(m) => show.nudge_notes(NOTES_STEP),
+        Num0 | Num1 | Num2 | Num3 | Num4 | Num5 | Num6 | Num7 | Num8 | Num9 => {
+            if let Some(d) = k.name().chars().next() {
+                show.push_slide_number(d, now);
+            }
+        }
+        _ => return false,
+    }
+    true
 }
 
 /// Draw and advance the active show, handling hidden frames, timing, input, transitions, and
@@ -956,6 +996,17 @@ pub fn ui(app: &mut SlideApp, ui: &mut Ui) {
     }
     if secondary && !show.ended && !show.grid && show.zoom.is_none() && !show.zoom_arm {
         actions.push(show.state.prev(&doc));
+    }
+    // Ctrl+wheel (Cmd+wheel on a Mac) zooms around the pointer, as in PowerPoint (#1286). egui
+    // keeps it out of `smooth_scroll_delta`, so it does not also turn the page below.
+    let line_points = ctx.options(|o| o.input_options.line_scroll_speed);
+    if !show.grid
+        && !show.ended
+        && show.blank.is_none()
+        && let Some(p) = pointer
+        && let Some(lines) = ctx.input(|i| wheel_zoom_lines(&i.events, line_points))
+    {
+        show.wheel_zoom(srect, p, lines);
     }
     // A trackpad swipe (and the mouse wheel) turns the page. The pen is drawing, so a flick
     // there stays on the slide. Pinch zoom is not a show gesture.
@@ -1710,6 +1761,30 @@ impl Show {
         }
     }
 
+    /// Ctrl/Cmd+wheel: `lines` notches in (positive) or out around the slide point under `p`.
+    /// Back to the whole slide leaves the zoom. A pointer off the slide does nothing.
+    fn wheel_zoom(&mut self, srect: Rect, p: Pos2, lines: f32) {
+        let uv = self.zoom_uv();
+        let Some((nx, ny)) = norm_on_slide(srect, uv, p) else { return };
+        let from = self.zoom.map_or(1.0, |z| z.scale);
+        let scale = (from * 2f32.powf(lines / WHEEL_NOTCHES_PER_DOUBLING)).min(WHEEL_ZOOM_MAX);
+        if !scale.is_finite() {
+            return;
+        }
+        self.zoom_arm = false;
+        if scale <= 1.0 + 1e-3 {
+            self.zoom = None;
+            return;
+        }
+        // The new window puts (nx, ny) at the same place on screen as before.
+        let w = 1.0 / scale;
+        let fx = (p.x - srect.min.x) / srect.width();
+        let fy = (p.y - srect.min.y) / srect.height();
+        let x = (nx - fx * w).clamp(0.0, 1.0 - w);
+        let y = (ny - fy * w).clamp(0.0, 1.0 - w);
+        self.zoom = Some(Zoom { nx: x + w * 0.5, ny: y + w * 0.5, scale });
+    }
+
     /// Esc closes the See All Slides of the window it was pressed in, then a zoom, and only then leaves the show.
     fn back_out(&mut self, presenter: bool) -> bool {
         if presenter && self.presenter_grid {
@@ -1823,6 +1898,10 @@ impl Show {
 const GOTO_HOLD: f64 = 3.0;
 const GOTO_DIGITS: usize = 4;
 const ZOOM_SCALE: f32 = 2.0;
+/// Four notches double the zoom, so the wheel passes through the click-zoom's 2× on its way to 4×.
+const WHEEL_NOTCHES_PER_DOUBLING: f32 = 4.0;
+/// PowerPoint's slide show magnifier goes up to 400%.
+const WHEEL_ZOOM_MAX: f32 = 4.0;
 const GRID_CAP: usize = 48;
 const TOOL_BAR_W: f32 = 520.0;
 const NOTES_DEFAULT: f32 = 18.0;
@@ -1938,6 +2017,26 @@ fn zoom_uv(nx: f32, ny: f32, scale: f32) -> Rect {
     let x = (nx - w * 0.5).clamp(0.0, 1.0 - w);
     let y = (ny - w * 0.5).clamp(0.0, 1.0 - w);
     Rect::from_min_size(pos2(x, y), vec2(w, w))
+}
+
+/// The Ctrl/Cmd+wheel movement this frame in wheel lines (up is positive), `None` when there was
+/// none. Read from the raw events: egui's `zoom_delta` also carries the trackpad pinch, which is
+/// not a show gesture.
+fn wheel_zoom_lines(events: &[egui::Event], line_points: f32) -> Option<f32> {
+    let mut lines = None;
+    for event in events {
+        if let egui::Event::MouseWheel { unit, delta, modifiers, .. } = event
+            && (modifiers.ctrl || modifiers.command)
+        {
+            let along = if delta.x.abs() > delta.y.abs() { delta.x } else { delta.y };
+            let n = match unit {
+                egui::MouseWheelUnit::Point => along / line_points.max(1.0),
+                egui::MouseWheelUnit::Line | egui::MouseWheelUnit::Page => along,
+            };
+            *lines.get_or_insert(0.0) += if n.is_finite() { n } else { 0.0 };
+        }
+    }
+    lines
 }
 
 fn zoom_frame(slide: Rect, uv: Rect) -> Rect {
@@ -2870,6 +2969,132 @@ mod tests {
         let zoomed = zoom_uv(0.5, 0.5, 2.0);
         let back = norm_on_slide(srect, zoomed, pos2(110.0, 70.0)).expect("on the slide");
         assert!((back.0 - 0.5).abs() < 1e-3 && (back.1 - 0.5).abs() < 1e-3);
+    }
+
+    fn near(a: f32, b: f32) -> bool {
+        (a - b).abs() < 1e-3
+    }
+
+    /// #1286: Ctrl+wheel zooms around the pointer, four notches per doubling, up to 4× (the most
+    /// PowerPoint's magnifier goes); zooming back to the whole slide leaves the zoom.
+    #[test]
+    fn wheel_zoom_keeps_the_point_under_the_pointer_and_stops_at_4x() {
+        let doc = deckcraft_model::Presentation::default();
+        let mut show = Show::new(&doc, 0, false, false);
+        // A 16:9 slide, not at the origin, and a pointer off its centre.
+        let srect = Rect::from_min_size(pos2(40.0, 30.0), vec2(320.0, 180.0));
+        let p = pos2(40.0 + 320.0 * 0.2, 30.0 + 180.0 * 0.3);
+        show.wheel_zoom(srect, p, 4.0);
+        let (_, _, scale) = show.zoom_view().expect("zoomed in");
+        assert!(near(scale, 2.0), "four notches double, got {scale}");
+        // The window keeps the slide's shape: half the width and half the height of the slide.
+        let uv = show.zoom_uv();
+        assert!(near(uv.width(), 0.5) && near(uv.height(), 0.5), "{uv:?}");
+        assert!(near(uv.min.x, 0.2 - 0.5 * 0.2) && near(uv.min.y, 0.3 - 0.5 * 0.3), "{uv:?}");
+        let under = norm_on_slide(srect, uv, p).expect("on the slide");
+        assert!(near(under.0, 0.2) && near(under.1, 0.3), "the point under the pointer moved to {under:?}");
+
+        // Again from the zoomed view: the same slide point stays under the pointer.
+        show.wheel_zoom(srect, p, 2.0);
+        let (_, _, scale) = show.zoom_view().expect("zoomed in");
+        assert!(near(scale, 2f32.powf(1.5)), "{scale}");
+        let under = norm_on_slide(srect, show.zoom_uv(), p).expect("on the slide");
+        assert!(near(under.0, 0.2) && near(under.1, 0.3), "{under:?}");
+
+        show.wheel_zoom(srect, p, 40.0);
+        let (_, _, scale) = show.zoom_view().expect("zoomed in");
+        assert!(near(scale, 4.0), "capped at 4×, got {scale}");
+        assert!(near(show.zoom_uv().width(), 0.25));
+
+        show.wheel_zoom(srect, p, -7.0);
+        assert!(show.zoom_view().is_some(), "one notch short of the whole slide is still zoomed");
+        show.wheel_zoom(srect, p, -1.0);
+        assert!(show.zoom_view().is_none(), "back to the whole slide leaves the zoom");
+        assert_eq!(show.zoom_uv(), unit_uv());
+        show.wheel_zoom(srect, p, -3.0);
+        assert!(show.zoom_view().is_none(), "zooming out of the whole slide does nothing");
+
+        // Off the slide (the letterbox) the wheel does not zoom.
+        show.wheel_zoom(srect, pos2(10.0, 10.0), 4.0);
+        assert!(show.zoom_view().is_none());
+        // An armed click-zoom gives way to the wheel.
+        show.zoom_arm = true;
+        show.wheel_zoom(srect, p, 4.0);
+        assert!(!show.zoom_arm && show.zoom_view().is_some());
+    }
+
+    #[test]
+    fn wheel_zoom_reads_only_the_wheel_with_ctrl_or_cmd() {
+        let wheel = |unit, y: f32, modifiers| egui::Event::MouseWheel {
+            unit,
+            delta: vec2(0.0, y),
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Wheel,
+            modifiers,
+        };
+        use egui::MouseWheelUnit::{Line, Point};
+        assert_eq!(wheel_zoom_lines(&[wheel(Line, 1.0, egui::Modifiers::CTRL)], 40.0), Some(1.0));
+        assert_eq!(wheel_zoom_lines(&[wheel(Line, -2.0, egui::Modifiers::COMMAND)], 40.0), Some(-2.0));
+        assert_eq!(wheel_zoom_lines(&[wheel(Point, 20.0, egui::Modifiers::CTRL), wheel(Point, 20.0, egui::Modifiers::CTRL)], 40.0), Some(1.0));
+        assert_eq!(wheel_zoom_lines(&[wheel(Line, 1.0, egui::Modifiers::NONE)], 40.0), None, "a plain wheel turns the page");
+        assert_eq!(wheel_zoom_lines(&[wheel(Line, 1.0, egui::Modifiers::SHIFT)], 40.0), None);
+        assert_eq!(wheel_zoom_lines(&[egui::Event::Zoom(2.0)], 40.0), None, "a pinch is not a show gesture");
+        assert_eq!(wheel_zoom_lines(&[wheel(Line, f32::NAN, egui::Modifiers::CTRL)], 40.0), Some(0.0));
+    }
+
+    /// A running show on the first of three slides, with presenter view off.
+    fn show_of_three() -> egui_kittest::Harness<'static, SlideApp> {
+        let mut session = deckcraft_engine::Session::with_new();
+        session.execute("slide.new", &json!({})).unwrap();
+        session.execute("slide.new", &json!({})).unwrap();
+        let mut app = SlideApp::new(session, crate::Services::default());
+        app.ui.presenter_view = false;
+        let mut harness = egui_kittest::Harness::builder().with_size(vec2(1000.0, 700.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+            |ui, app: &mut SlideApp| {
+                app.logic(ui.ctx());
+                app.ui(ui);
+            },
+            app,
+        );
+        harness.run_steps(3);
+        harness.state_mut().start_show(0, false);
+        harness.run_steps(2);
+        harness
+    }
+
+    fn show_wheel(harness: &mut egui_kittest::Harness<'static, SlideApp>, at: Pos2, y: f32, modifiers: egui::Modifiers) {
+        harness.input_mut().events.push(egui::Event::PointerMoved(at));
+        harness.input_mut().events.push(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: vec2(0.0, y),
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Wheel,
+            modifiers,
+        });
+        harness.run_steps(40);
+    }
+
+    /// #1286: in the show, Ctrl+wheel (Cmd+wheel on a Mac) zooms the slide and does not turn the
+    /// page; the plain wheel still turns it.
+    #[test]
+    fn ctrl_wheel_zooms_the_show_and_the_plain_wheel_turns_the_page() {
+        for held in [egui::Modifiers::CTRL, egui::Modifiers::COMMAND] {
+            let mut h = show_of_three();
+            let centre = pos2(500.0, 350.0);
+            show_wheel(&mut h, centre, 4.0, held);
+            let show = h.state().show.as_ref().expect("still showing");
+            assert_eq!(show.state.slide, 0, "{held:?}: the zoom wheel does not turn the page");
+            let (_, _, scale) = show.zoom_view().expect("zoomed in");
+            assert!(near(scale, 2.0), "{held:?}: {scale}");
+
+            show_wheel(&mut h, centre, -4.0, held);
+            let show = h.state().show.as_ref().expect("still showing");
+            assert_eq!(show.state.slide, 0, "{held:?}: zooming out does not go back a page either");
+            assert!(show.zoom_view().is_none(), "{held:?}: back to the whole slide");
+
+            show_wheel(&mut h, centre, -3.0, egui::Modifiers::NONE);
+            assert_eq!(h.state().show.as_ref().expect("still showing").state.slide, 1, "the plain wheel turns the page");
+        }
     }
 
     #[test]

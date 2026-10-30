@@ -134,7 +134,9 @@ pub fn length_spinner(ui: &mut Ui, id: &str, label: &str, pt: f64, unit: Unit, w
     let key = ui.scope_id().with(id);
     // The row's label, in the interface language (callers pass it English or already translated).
     let label = tl!(label);
-    let mut text: String = ui.data_mut(|d| d.get_temp::<String>(key)).unwrap_or_else(|| len_text(pt, unit));
+    // What is being typed, kept while the field has the keyboard.
+    let typing = ui.data_mut(|d| d.get_temp::<String>(key));
+    let mut text: String = typing.clone().unwrap_or_else(|| len_text(pt, unit));
     let mut out = None;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
@@ -146,7 +148,10 @@ pub fn length_spinner(ui: &mut Ui, id: &str, label: &str, pt: f64, unit: Unit, w
         } else {
             ui.data_mut(|d| d.remove::<String>(key));
         }
-        if r.lost_focus() {
+        // egui reports a lost focus on two frames running; only the one that still has what was
+        // typed commits it (the other would commit the rounded length shown again), as
+        // `widgets::spinner` does.
+        if r.lost_focus() && typing.is_some() {
             out = parse_len(&text, unit);
         }
         let (rect, _) = ui.allocate_exact_size(vec2(12.0, 22.0), Sense::hover());

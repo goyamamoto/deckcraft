@@ -147,9 +147,9 @@ fn layout_has_mac_roles_and_only_existing_commands() {
     assert_eq!(rows, [MINIMIZE, ZOOM, "-", "view.newWindow", "view.arrangeAll", "view.cascade", "-", "window.next", "-", "front"]);
     assert!(!bar.find("view.arrangeAll").unwrap().enabled, "no window host here: the window commands are off");
     assert!(bar.find("view.newWindow").unwrap().enabled);
-    // Help holds the palette and the links; About is the app menu's.
+    // Help holds Check for Updates, the palette and the links; About is the app menu's.
     let help: Vec<&str> = bar.menus[10].children.iter().filter_map(|n| if let Node::Item(it) = n { Some(it.id.as_str()) } else { None }).collect();
-    assert_eq!(help, ["app.palette", "app.links"]);
+    assert_eq!(help, ["app.checkUpdates", "app.palette", "app.links"]);
     // The Tools dialogs run through app.dialog with their name.
     let language = bar.find("dialog:language").unwrap();
     assert_eq!((language.command.as_str(), &language.params), ("app.dialog", &json!({"id": "language"})));

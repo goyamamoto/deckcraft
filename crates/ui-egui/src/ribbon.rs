@@ -3030,18 +3030,21 @@ fn size_group(app: &mut SlideApp, ui: &mut Ui) {
                 ui.label(tl!("Width:"));
                 return;
             };
-            // In the measurement unit (`4.45 cm` in Japan, `1.75"` in the United States). The
-            // boxes are named for their row, as `widgets::spinner` names its own.
-            let unit = app.session.units();
+            // In the measurement unit (Preferences, else the region's: `4.45 cm` in Japan, `1.75"`
+            // in the United States). The boxes are named for their row, as `widgets::spinner`
+            // names its own.
+            let len = app.session.units();
+            // " cm" needs more room than the inch mark.
+            let width = if len == deckcraft_geom::Unit::Inches { 54.0 } else { 66.0 };
             ui.horizontal(|ui| {
                 ui.label(tl!("Height:"));
-                if let Some(v) = crate::units::length_spinner(ui, "sh", "Height", x.h, unit, 62.0) {
+                if let Some(v) = crate::units::length_spinner(ui, "sh", "Height", x.h, len, width) {
                     run(app, "shape.resize", json!({"h": v.max(0.0)}));
                 }
             });
             ui.horizontal(|ui| {
                 ui.label(tl!("Width: "));
-                if let Some(v) = crate::units::length_spinner(ui, "sw", "Width", x.w, unit, 62.0) {
+                if let Some(v) = crate::units::length_spinner(ui, "sw", "Width", x.w, len, width) {
                     run(app, "shape.resize", json!({"w": v.max(0.0)}));
                 }
             });

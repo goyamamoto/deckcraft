@@ -612,8 +612,9 @@ fn master_tex(
 }
 
 /// The rulers along the top and the left of the canvas, counted from the slide's top-left
-/// corner in the measurement unit (`unit`): inches in quarters, or centimetres numbered every
-/// centimetre in a metric region such as Japan, as PowerPoint draws them there.
+/// corner in the measurement unit (`unit`, [`deckcraft_engine::Session::units`]: the Preferences
+/// choice, else the region's): inches in quarters, or centimetres numbered every centimetre in a
+/// metric region such as Japan, as PowerPoint draws them there.
 fn ruler(p: &egui::Painter, avail: Rect, slide: Rect, scale: f32, unit: deckcraft_geom::Unit, t: &Tokens) {
     let top = Rect::from_min_max(avail.min, pos2(avail.max.x, avail.min.y + 16.0));
     let left = Rect::from_min_max(avail.min, pos2(avail.min.x + 16.0, avail.max.y));

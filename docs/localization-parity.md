@@ -1,6 +1,6 @@
 # Localization parity with PowerPoint
 
-> **Last reviewed:** 2026-10-24 · **Last updated:** 2026-10-24 · **Change:** major (interface catalogs through craft-i18n, Japanese interface, Japanese text laid out as PowerPoint for Mac lays it out; previous: minor, opt-in native LXGW WenKai Lite fallback and interface CJK tests, local implementation only, managed validation pending; previous: minor, IME composition underlined in table cells; previous: minor, IME composition and CJK interface text, #101; previous: major, created) · **Target:** Microsoft PowerPoint for Mac 16.113 (Microsoft 365)
+> **Last reviewed:** 2026-10-24 · **Last updated:** 2026-10-30 · **Change:** minor (upstream's proofing language for the whole presentation merged with the Japanese work: `format.languageAll` and `format.language` with nothing selected both documented; previous: major, interface catalogs through craft-i18n, Japanese interface, Japanese text laid out as PowerPoint for Mac lays it out; previous: minor, opt-in native LXGW WenKai Lite fallback and interface CJK tests, local implementation only, managed validation pending; previous: minor, one proofing language for the whole presentation; previous: minor, IME composition underlined in table cells; previous: minor, IME composition and CJK interface text, #101; previous: major, created) · **Target:** Microsoft PowerPoint for Mac 16.113 (Microsoft 365)
 
 DeckCraft's interface is drawn through the [craft-i18n](https://github.com/storytold/craft-i18n)
 catalogs (`crates/ui-egui/src/i18n`): strings stay English in the code and are looked up when the
@@ -115,13 +115,20 @@ Not yet the same:
 PowerPoint checks spelling in dozens of languages and lets each run carry a proofing language.
 DeckCraft keeps `a:rPr/@lang` on round trip but its spelling check is a small English list of
 common misspellings (`crates/engine/src/cmd/review.rs`); see [gaps.md](gaps.md#proofing-spelling-thesaurus-autocorrect).
+Review › Language sets the proofing language of the selected text or, with *Whole presentation*,
+of every text in the file and the default for new text (`format.languageAll`).
+With nothing selected, `format.language` sets only the default language for new text (`a:defPPr`,
+the language the status bar shows then) and writes the old default on the text that had it by
+inheritance, so a Japanese deck switched to English keeps its Japanese text Japanese.
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-30 | minor | Merged upstream's whole-presentation proofing language with the Japanese work: Review › Language's *Whole presentation* (`format.languageAll`) and `format.language` with nothing selected (the default for new text; existing text keeps its language) are both described |
 | 2026-10-24 | major | Interface catalogs through craft-i18n; Japanese interface (~91% of ~1,625 strings, the rest content); ribbon groups fold to fit translations; Japanese text measured against PowerPoint for Mac and matched (justification, kinsoku, fonts, dates, vertical text, IME) |
 | 2026-10-24 | minor | Local 0.37 candidate adds an opt-in native LXGW WenKai Lite glyph fallback and CJK interface-test coverage. This records local implementation only: managed tests, formatting, clippy, wasm-size and native GUI qualification remain pending. Browser font budget and uniform Chinese typography are unchanged. |
+| 2026-10-21 | minor | Review › Language can set the proofing language of the whole presentation |
 | 2026-10-14 | minor | IME composition in a table cell is underlined in place; the candidate window sits on that cell's caret |
 | 2026-10-12 | minor | IME composition for Chinese, Japanese and Korean, and interface text in any installed script (#101) |
 | 2026-10-10 | major | Created: twelve-language table, ~1,050 UI strings measured, PowerPoint for Mac's 26 languages from its bundle |

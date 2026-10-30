@@ -1,4 +1,9 @@
-use super::*;
+use super::{
+    Ctx, Fields, Fill, Image, MAX_SIDE, Opts, PathMorph, Point, RENDERER, Rect, Region, RenderOpts, Renderer, Rgba, ShapeState, SlideFields,
+    TextMorph, crop_dest, dpi_for_scale, gif_frame, image_dpi, images, morph_path, morph_text, needs_filters, parse_path, pasteboard_region,
+    place_notes_text, place_slide, render_blend, render_equation, render_notes_text, render_shapes, render_slide, render_slide_drawn, slide_extent,
+    text_transform,
+};
 use deckcraft_model::chart::{ChartType, Trendline, TrendlineType};
 use deckcraft_model::style::ColorRef;
 use deckcraft_model::text::TextBody;
@@ -1556,6 +1561,43 @@ fn table_body_text_is_dark_on_the_tinted_cells_of_a_dark_theme() {
     }
 }
 
+#[test]
+fn table_light_and_dark_presets_give_their_own_header_and_body_looks() {
+    // light1, light2 and dark1 each style the header and banded body cells their own way.
+    use deckcraft_color::{ColorTransform, Rgba, SchemeSlot};
+    use deckcraft_model::style::ColorRef;
+    let p = Presentation::default();
+    let ctx = Ctx::for_slide(&p, &p.slides[0]).unwrap();
+    let a = ctx.color(&ColorRef::scheme(SchemeSlot::Accent1), None);
+    let look = |style: &str, r: usize| {
+        let mut t = Table::new(3, 1, 100.0, 90.0);
+        t.style = style.to_string();
+        t.first_row = true;
+        t.band_row = true;
+        crate::table::look_with_def(&ctx, None, &t, r, 0)
+    };
+
+    // light1: header has no fill, bold text and an accent border; banded body rows get a light tint.
+    let h = look("light1", 0);
+    assert_eq!((h.fill, h.bold, h.border), (None, true, Some((a, 1.0))));
+    let b = look("light1", 1);
+    assert_eq!(b.fill, Some(deckcraft_color::apply(a, &[ColorTransform::Tint(20000)])));
+    assert!(b.text.is_some() && !b.bold);
+
+    // light2: accent-filled header with white bold text; body has no fill.
+    let h = look("light2", 0);
+    assert_eq!((h.fill, h.text, h.bold, h.border), (Some(a), Some(Rgba::WHITE), true, Some((a, 1.0))));
+    let b = look("light2", 1);
+    assert_eq!((b.fill, b.text, b.bold), (None, None, false));
+
+    // dark1: black header, shaded accent body (darker when banded), white text and white borders.
+    let h = look("dark1", 0);
+    assert_eq!((h.fill, h.text, h.bold, h.border), (Some(Rgba::BLACK), Some(Rgba::WHITE), true, Some((Rgba::WHITE, 1.0))));
+    let b = look("dark1", 1);
+    assert_eq!(b.fill, Some(deckcraft_color::apply(a, &[ColorTransform::Shade(60000)])));
+    assert_eq!(b.text, Some(Rgba::WHITE));
+}
+
 /// A white 280x200 pt rectangle at (20, 20) with `effects`, rendered at 1 px/pt.
 fn effect_box(effects: deckcraft_model::Effects) -> Image {
     use deckcraft_model::style::{Fill, Line};
@@ -2191,6 +2233,42 @@ fn group_child_scale_does_not_scale_line_widths() {
         let (n, d) = (inked(img), differing(&reference, img));
         assert!(n.abs_diff(drawn) * 20 < drawn, "{name}: {n} inked pixels against {drawn}");
         assert!(d * 20 < drawn, "{name}: {d} differing values against {drawn} inked pixels");
+    }
+}
+
+#[test]
+fn a_picture_and_an_embedded_objects_preview_draw_their_fill_behind_transparent_pixels() {
+    // PowerPoint draws a picture's own fill behind its transparent pixels (and an old equation
+    // object's fallback picture on its coloured box). Here the left half of the image is clear.
+    let png = {
+        let img = image::RgbaImage::from_fn(8, 4, |x, _| if x < 4 { image::Rgba([0, 0, 0, 0]) } else { image::Rgba([20, 20, 160, 255]) });
+        let mut out = std::io::Cursor::new(vec![]);
+        image::DynamicImage::ImageRgba8(img).write_to(&mut out, image::ImageFormat::Png).unwrap();
+        out.into_inner()
+    };
+    let orange = Fill::solid(ColorRef::rgb(deckcraft_color::Rgba::rgb(255, 153, 0)));
+    for (object, fill) in [(false, None), (false, Some(orange.clone())), (true, Some(orange.clone()))] {
+        let mut p = Presentation::default();
+        let media = p.add_media("half.png", "image/png", png.clone()).expect("media");
+        let kind = if object {
+            ShapeKind::Opaque { xml: String::new(), preview: Some(media), label: "Equation.3".into(), parts: vec![] }
+        } else {
+            ShapeKind::Picture { fill: deckcraft_model::style::PictureFill { media, ..Default::default() } }
+        };
+        let sh = Shape { id: ShapeId(630), xfrm: Some(Xfrm::new(100.0, 100.0, 400.0, 200.0)), kind, fill: fill.clone(), ..Default::default() };
+        std::sync::Arc::make_mut(&mut p.slides[0]).shapes = vec![sh];
+        let img = render_slide(&p, 0, &RenderOpts { scale: 1.0, ..Default::default() });
+        let (clear, opaque) = (img.pixel(200, 200), img.pixel(400, 200));
+        assert!(opaque[2] > 140 && opaque[0] < 40, "the picture's own pixels ({object}): {opaque:?}");
+        if fill.is_some() {
+            assert_eq!(clear[..3], [255, 153, 0], "the fill behind the clear half ({object})");
+            // A fill-colour emphasis recolours that fill, as it does any shape's.
+            let tint = |_: ShapeId| ShapeState { tint: Some(deckcraft_color::Rgba::rgb(0, 160, 60)), ..Default::default() };
+            let img = render_slide(&p, 0, &RenderOpts { scale: 1.0, state: Some(&tint), ..Default::default() });
+            assert_eq!(img.pixel(200, 200)[..3], [0, 160, 60], "the tinted fill behind the clear half ({object})");
+        } else {
+            assert!(clear[..3].iter().all(|v| *v > 240), "no fill: the slide shows through: {clear:?}");
+        }
     }
 }
 
