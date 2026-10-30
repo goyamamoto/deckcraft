@@ -22,19 +22,26 @@ deckcraft-media = { workspace = true }
 # Interface translations (`src/i18n`): the catalogs come from `CRAFT_I18N_DIR` at build time
 # (`build.rs`); without it the interface is English only.
 craft-i18n = { workspace = true }
-egui = { workspace = true }
+egui = { workspace = true, features = ["default_fonts", "monochrome_emoji_fonts"] }
+craft-ui = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
+web-time = { workspace = true }
 # The system region (`units::system_region`): it picks the measurement unit and the default paper
 # (MIT OR Apache-2.0; craft-i18n already depends on it).
 sys-locale = "0.3"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-js-sys = "0.3"
 sys-locale = { version = "0.3", features = ["js"] }
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+craft-update = { workspace = true }
+
 [dev-dependencies]
+skrifa = { workspace = true }
+# kittest's own dev-dependencies do not propagate; tests need both font features explicitly.
+egui = { workspace = true, features = ["default_fonts", "monochrome_emoji_fonts"] }
 egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }
 
 [build-dependencies]

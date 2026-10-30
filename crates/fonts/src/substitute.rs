@@ -343,19 +343,34 @@ fn kind_segments(kind: CjkKind) -> &'static [&'static Segments] {
 /// The craft-fonts families for a tradition (`Jpan`, `Hans`, `Hant`, `Hang`/`Kore`) of the
 /// wanted genre (Mincho/serif or gothic/sans), in manifest order.
 fn bundled_of(locale: CjkLocale, serif: bool) -> Vec<&'static str> {
-    let tags: &[&str] = match locale {
-        CjkLocale::Japanese => &["Jpan"],
-        CjkLocale::SimplifiedChinese => &["Hans"],
-        CjkLocale::TraditionalChinese => &["Hant"],
-        CjkLocale::Korean => &["Hang", "Kore"],
-    };
     let mut v: Vec<&'static str> = Vec::new();
-    for f in crate::CRAFT_FONTS.iter().filter(|f| f.scripts.iter().any(|s| tags.contains(s))) {
+    for f in crate::CRAFT_FONTS.iter().filter(|f| f.scripts.iter().any(|s| tradition_of_script(s) == Some(locale))) {
         if is_serif_name(f.family) == serif && !v.contains(&f.family) {
             v.push(f.family);
         }
     }
     v
+}
+
+/// The East Asian tradition an ISO 15924 script tag of a craft-fonts catalog row stands for
+/// (`Hani`, shared by the Chinese traditions and Japanese, stands for none).
+fn tradition_of_script(tag: &str) -> Option<CjkLocale> {
+    match tag {
+        "Jpan" => Some(CjkLocale::Japanese),
+        "Hans" => Some(CjkLocale::SimplifiedChinese),
+        "Hant" => Some(CjkLocale::TraditionalChinese),
+        "Hang" | "Kore" => Some(CjkLocale::Korean),
+        _ => None,
+    }
+}
+
+/// The one tradition a craft-fonts family's catalog rows name (LXGW WenKai Lite: `Hani,Hans`);
+/// `None` for a face of no East Asian tradition or of several.
+fn bundled_tradition(family: &str) -> Option<CjkLocale> {
+    let mut traditions =
+        crate::CRAFT_FONTS.iter().filter(|f| f.family == family).flat_map(|f| f.scripts.iter().filter_map(|s| tradition_of_script(s)));
+    let first = traditions.next()?;
+    traditions.all(|t| t == first).then_some(first)
 }
 
 /// Does a family name say serif: Mincho, 明朝, Serif (not Sans Serif), Song, Ming, Myeongjo,
@@ -520,6 +535,13 @@ pub(crate) fn tradition_of_family(family: &str) -> Option<CjkLocale> {
                 m.entry(fold_compact(n)).or_insert(l);
             }
         }
+        // The craft-fonts faces by the tradition their catalog names, as [`bundled_of`] offers
+        // them as stand-ins (a Chinese face is never taken for a Japanese one).
+        for f in crate::CRAFT_FONTS.iter() {
+            if let Some(l) = bundled_tradition(f.family) {
+                m.entry(fold_compact(f.family)).or_insert(l);
+            }
+        }
         m
     });
     let k = fold_compact(family);
@@ -681,6 +703,15 @@ mod tests {
         assert!(!ja.contains(&"PingFang SC") && fallback_families(CjkLocale::SimplifiedChinese, false).contains(&"PingFang SC"));
         assert!(fallback_families(CjkLocale::TraditionalChinese, false).contains(&"PingFang TC"));
         assert!(fallback_families(CjkLocale::Korean, false).contains(&"Apple SD Gothic Neo"));
+        families_and_scripts_name_their_tradition();
+        interface_families_are_the_platforms();
+        assert!(is_serif_name("Hiragino Mincho ProN") && is_serif_name("游明朝") && is_serif_name("PMingLiU") && is_serif_name("Noto Serif"));
+        assert!(!is_serif_name("BIZ UDPGothic") && !is_serif_name("Microsoft Sans Serif") && !is_serif_name("Coming Soon"));
+    }
+
+    /// A family's tradition from its name, a craft-fonts face's from its catalog row, and a
+    /// script's only when it names one tradition.
+    fn families_and_scripts_name_their_tradition() {
         assert_eq!(tradition_of_family("Hiragino Sans"), Some(CjkLocale::Japanese));
         assert_eq!(tradition_of_family("PingFang SC"), Some(CjkLocale::SimplifiedChinese));
         assert_eq!(tradition_of_family("Noto Sans CJK JP"), Some(CjkLocale::Japanese));
@@ -688,6 +719,19 @@ mod tests {
         assert_eq!(tradition_of_family("ＭＳ Ｐゴシック"), Some(CjkLocale::Japanese));
         assert_eq!(tradition_of_family("Arial Unicode MS"), None);
         assert_eq!(tradition_of_family("Inter"), None);
+        // A craft-fonts face is of the tradition its catalog row names.
+        for f in crate::CRAFT_FONTS.iter() {
+            if let Some(l) = bundled_tradition(f.family) {
+                assert_eq!(tradition_of_family(f.family), Some(l), "{}", f.family);
+            }
+        }
+        assert_eq!(tradition_of_script("Hans"), Some(CjkLocale::SimplifiedChinese));
+        assert_eq!(tradition_of_script("Hani"), None);
+        assert_eq!(tradition_of_script("Latn"), None);
+    }
+
+    /// The interface's Japanese families: each platform's own face first, never the bundled one.
+    fn interface_families_are_the_platforms() {
         let ui = interface_families(CjkLocale::Japanese);
         assert_eq!(
             ui.first(),
@@ -709,7 +753,5 @@ mod tests {
         } else {
             assert!(own.is_empty(), "Linux and the web draw the interface in the bundled face");
         }
-        assert!(is_serif_name("Hiragino Mincho ProN") && is_serif_name("游明朝") && is_serif_name("PMingLiU") && is_serif_name("Noto Serif"));
-        assert!(!is_serif_name("BIZ UDPGothic") && !is_serif_name("Microsoft Sans Serif") && !is_serif_name("Coming Soon"));
     }
 }

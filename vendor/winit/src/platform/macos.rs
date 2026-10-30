@@ -87,7 +87,9 @@ use std::os::raw::c_void;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
+use crate::event::KeyEvent;
 use crate::event_loop::{ActiveEventLoop, EventLoopBuilder};
+use crate::keyboard::Key;
 use crate::monitor::MonitorHandle;
 use crate::window::{Window, WindowAttributes};
 
@@ -170,6 +172,34 @@ pub trait WindowExtMacOS {
 
     /// Getter for the [`WindowExtMacOS::set_borderless_game`].
     fn is_borderless_game(&self) -> bool;
+
+    /// The text to delete before inserting the [`Ime::Commit`] being handled.
+    ///
+    /// Call this when handling each `Ime::Commit`, after removing the preedit and before
+    /// inserting the committed text, which may be empty when an input method only deletes.
+    /// Returns `None` when the commit deletes nothing.
+    ///
+    /// Input methods replace text they inserted next to the cursor: press-and-hold replaces a
+    /// letter with the accented one picked, and dictation corrects the words it inserted.
+    ///
+    /// DeckCraft patch: `None` while the app reports the text around the cursor
+    /// ([`set_ime_surrounding_text`]); the app then replaces the range the input method names
+    /// itself ([`take_ime_replacement_range`]), so the replaced text is deleted once.
+    ///
+    /// [`Ime::Commit`]: crate::event::Ime::Commit
+    fn take_ime_delete_surrounding(&self) -> Option<ImeDeleteSurrounding>;
+}
+
+/// Text an input method asks to delete around the cursor, in bytes of UTF-8 text.
+///
+/// The counts exclude the selection and the preedit: `before_bytes` ends where the preedit or
+/// selection starts and `after_bytes` starts where it ends.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct ImeDeleteSurrounding {
+    /// Bytes to delete before the cursor.
+    pub before_bytes: usize,
+    /// Bytes to delete after the cursor.
+    pub after_bytes: usize,
 }
 
 impl WindowExtMacOS for Window {
@@ -251,6 +281,11 @@ impl WindowExtMacOS for Window {
     #[inline]
     fn is_borderless_game(&self) -> bool {
         self.window.maybe_wait_on_main(|w| w.is_borderless_game())
+    }
+
+    #[inline]
+    fn take_ime_delete_surrounding(&self) -> Option<ImeDeleteSurrounding> {
+        self.window.maybe_wait_on_main(|w| w.take_ime_delete_surrounding())
     }
 }
 
@@ -433,6 +468,21 @@ pub trait EventLoopBuilderExtMacOS {
     ///
     /// The default behavior is to ignore other applications and activate when launched.
     fn with_activate_ignoring_other_apps(&mut self, ignore: bool) -> &mut Self;
+
+    /// Route native application termination (for example, Quit from the Dock) to
+    /// [`WindowEvent::CloseRequested`](crate::event::WindowEvent::CloseRequested) for each
+    /// open Winit window instead of terminating immediately.
+    ///
+    /// Disabled by default. When enabled, Winit cancels the native termination request and
+    /// queues close requests on the ordinary event loop. The application may keep running
+    /// or call [`ActiveEventLoop::exit`](crate::event_loop::ActiveEventLoop::exit) once its
+    /// unsaved-document prompts are complete. Repeated requests are coalesced while a
+    /// queued request is being delivered. Requests with no Winit windows, outside a running
+    /// event loop, or after the event loop has been asked to exit terminate normally.
+    ///
+    /// This also applies to system logout/shutdown requests; applications must finish or
+    /// cancel their own confirmation flow. Force Quit cannot be intercepted.
+    fn with_close_requested_on_terminate(&mut self, enable: bool) -> &mut Self;
 }
 
 impl<T> EventLoopBuilderExtMacOS for EventLoopBuilder<T> {
@@ -451,6 +501,12 @@ impl<T> EventLoopBuilderExtMacOS for EventLoopBuilder<T> {
     #[inline]
     fn with_activate_ignoring_other_apps(&mut self, ignore: bool) -> &mut Self {
         self.platform_specific.activate_ignoring_other_apps = ignore;
+        self
+    }
+
+    #[inline]
+    fn with_close_requested_on_terminate(&mut self, enable: bool) -> &mut Self {
+        self.platform_specific.close_requested_on_terminate = enable;
         self
     }
 }
@@ -510,14 +566,39 @@ impl ActiveEventLoopExtMacOS for ActiveEventLoop {
     }
 }
 
-// DeckCraft patch (vendor/patches/winit/01-macos-ime-surrounding-text.md): the application
-// reports the text around the caret, so the input method can read committed text
-// (`NSTextInputClient`'s `selectedRange` and `attributedSubstringForProposedRange:actualRange:`)
-// and ask for a range of it to be replaced by its marked text (再変換).
+/// Additional methods on [`KeyEvent`] that are specific to macOS.
+pub trait KeyEventExtMacOS {
+    /// The key's character in the keyboard layout's table for <kbd>⌘</kbd>, ignoring all
+    /// modifiers.
+    ///
+    /// Layouts can type other characters while <kbd>⌘</kbd> is held: "Dvorak – QWERTY ⌘" types
+    /// Dvorak letters but QWERTY ones with <kbd>⌘</kbd>, and non-Latin layouts can give Latin
+    /// letters. While <kbd>⌘</kbd> is held, [`KeyEvent::logical_key`] comes from this table
+    /// (heeding <kbd>Shift</kbd>); this reports it for any key event, for matching shortcuts
+    /// without <kbd>⌘</kbd> or showing them.
+    ///
+    /// Like [`key_without_modifiers`], this is never `Dead`. Keys without a character in the
+    /// table report [`key_without_modifiers`].
+    ///
+    /// [`key_without_modifiers`]: crate::platform::modifier_supplement::KeyEventExtModifierSupplement::key_without_modifiers
+    fn key_with_command(&self) -> Key;
+}
+
+impl KeyEventExtMacOS for KeyEvent {
+    #[inline]
+    fn key_with_command(&self) -> Key {
+        self.platform_specific.key_with_command.clone()
+    }
+}
+
+// DeckCraft patch (`01-macos-ime-surrounding-text.md`): the app reports the text around the
+// caret, so the input method can read committed text (`NSTextInputClient`'s `selectedRange` and
+// `attributedSubstringForProposedRange:actualRange:`) and ask for a range of it to be replaced by
+// its marked text or its commit (再変換). With nothing reported, nothing changes.
 pub use crate::platform_impl::{ImeMarked, ImeSurroundingText};
 
 /// What the input method is told lies around the caret right now: what the application last
-/// reported, as the input method's own edits since changed it (`ImeSurroundingText::apply`).
+/// reported, as the input method's own edits since changed it ([`ImeSurroundingText::apply`]).
 pub fn ime_surrounding_text() -> Option<ImeSurroundingText> {
     crate::platform_impl::ime_surrounding_text()
 }
@@ -525,14 +606,19 @@ pub fn ime_surrounding_text() -> Option<ImeSurroundingText> {
 /// Tell the input method what text lies around the caret of the window taking keyboard input:
 /// `None` reports nothing, as winit did before. Call it once a frame, after the application has
 /// handled its input, with the caret's paragraph and the selection within it.
+///
+/// While text is reported, the replacement ranges input methods name are handed to the
+/// application by [`take_ime_replacement_range`], and
+/// [`WindowExtMacOS::take_ime_delete_surrounding`] returns `None`: the application replaces the
+/// range itself, so the replaced text is never deleted twice.
 pub fn set_ime_surrounding_text(text: Option<ImeSurroundingText>) {
     crate::platform_impl::set_ime_surrounding_text(text)
 }
 
 /// The range of the reported text (UTF-16 code units) that the input method asked to replace
 /// with the marked text of the next [`Ime::Preedit`](crate::event::Ime::Preedit) event or the
-/// text of the next [`Ime::Commit`](crate::event::Ime::Commit), if it named one (reconverting
-/// committed text); taken once. The event arrives in the same frame.
+/// text of the next [`Ime::Commit`](crate::event::Ime::Commit), if it named one while text was
+/// reported (reconverting committed text); taken once. The event arrives in the same frame.
 pub fn take_ime_replacement_range() -> Option<std::ops::Range<usize>> {
     crate::platform_impl::take_ime_replacement_range()
 }

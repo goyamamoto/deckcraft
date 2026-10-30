@@ -1,6 +1,6 @@
 # PowerPoint feature checklist
 
-> **Generated:** 2026-10-25 (Equations re-scored P: TeX in with a live preview, OMML stored and drawn in two dimensions, in-place editing left; Native menu bar re-scored D: PowerPoint for Mac's menus from `menu_tree()`, every row a command; New window / arrange windows re-scored D: one window per presentation, New Window, Arrange All, Cascade, Switch Windows; East Asian text re-scored D after measuring Japanese layout against PowerPoint for Mac; bullets/numbering remain D after empty-line marker review; summary by `cargo xtask parity`; rows re-scored by the 2026-10-14 community PR wave, duplicate Thesaurus, AutoCorrect, Artistic effects and Corrections rows folded; Preview in editor re-scored 2026-10-13; earlier rows re-scored 2026-10-10 against PowerPoint for Mac 16.113.4; video/animated GIF row re-scored 2026-10-11, #171) · **Target:** Microsoft PowerPoint for Mac 16.113 (Microsoft 365)
+> **Generated:** 2026-10-25 (Export outline / RTF re-scored D: outlines save and open as RTF, PR #565; Equations re-scored P: TeX in with a live preview, OMML stored and drawn in two dimensions, in-place editing left; Native menu bar re-scored D: PowerPoint for Mac's menus from `menu_tree()`, every row a command; New window / arrange windows re-scored D: one window per presentation, New Window, Arrange All, Cascade, Switch Windows; East Asian text re-scored D after measuring Japanese layout against PowerPoint for Mac; bullets/numbering remain D after empty-line marker review; summary by `cargo xtask parity`; rows re-scored by the 2026-10-14 community PR wave, duplicate Thesaurus, AutoCorrect, Artistic effects and Corrections rows folded; Preview in editor re-scored 2026-10-13; earlier rows re-scored 2026-10-10 against PowerPoint for Mac 16.113.4; video/animated GIF row re-scored 2026-10-11, #171) · **Target:** Microsoft PowerPoint for Mac 16.113 (Microsoft 365)
 
 The summary between `<!-- SUMMARY -->
 **Weighted breadth parity: 85%** over 191 features.
@@ -9,12 +9,12 @@ The summary between `<!-- SUMMARY -->
 |---|---|---|---|---|---|
 | P0 | 72 | 61 | 11 | 0 | 92% |
 | P1 | 65 | 47 | 15 | 3 | 84% |
-| P2 | 54 | 18 | 25 | 11 | 56% |
+| P2 | 54 | 19 | 24 | 11 | 57% |
 
 | Area | Parity |
 |---|---|
 | Application shell | 88% |
-| Files | 75% |
+| Files | 76% |
 | Slides | 92% |
 | Views | 100% |
 | Masters & themes | 92% |
@@ -57,14 +57,14 @@ Open P0 items: Contextual tabs (Shape Format, Picture Format, Table Design/Layou
 | Files | Native file format (open/save; chart package parts retained, `crates/engine/tests/it/chart_native.rs`) | P0 | D |
 | Files | Open PowerPoint .pptx | P0 | D |
 | Files | Save as PowerPoint .pptx | P0 | D |
-| Files | Open/save .potx/.ppsx/.pptm variants (.potx/.ppsx open; saved with the .pptx content type; no .pptm) | P2 | P |
+| Files | Open/save .potx/.ppsx/.pptm variants (.potx/.ppsx open and save with their own content types; no .pptm) | P2 | P |
 | Files | Legacy .ppt (binary) import | P2 | M |
 | Files | Save as template | P1 | D |
 | Files | Autosave and crash recovery | P0 | D |
 | Files | Document properties | P2 | D |
 | Files | Export to PDF (slides, notes pages, handouts; text layer, links, bookmarks; vector artwork pending) | P0 | P |
 | Files | Export slides as PNG/JPEG | P0 | D |
-| Files | Export outline / RTF | P2 | P |
+| Files | Export outline / RTF | P2 | D |
 | Files | Export video (MP4) / animated GIF (GIF: one frame per slide, no transitions; no video) | P2 | P |
 | Files | Print (slides, handouts, notes, outline) | P1 | M |
 | Files | Password protection | P2 | M |

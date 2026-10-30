@@ -49,24 +49,9 @@ impl eframe::App for App {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }
-    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
-        // macOS: the committed text the input method asked to replace with this frame's
-        // composition or commit (再変換), from the vendored winit (`deckcraft_ui_egui::ime`).
-        // It belongs to this frame's events, which winit queues with it: a frame without them
-        // drops it, so a range left by one that never reached its commit can't make a later
-        // commit elsewhere (a full-width space, the Character Viewer) replace unrelated text.
-        // The input method talks to the focused window, whose input this is.
-        #[cfg(target_os = "macos")]
-        {
-            let named = winit::platform::macos::take_ime_replacement_range();
-            let ime = raw.events.iter().any(|e| matches!(e, egui::Event::Ime(egui::ImeEvent::Preedit { .. } | egui::ImeEvent::Commit(_))));
-            let vp = raw.viewport_id;
-            Host::with(|h| {
-                if let Some(w) = h.window_of_viewport_mut(vp) {
-                    w.app.ime.replace = named.filter(|_| ime);
-                }
-            });
-        }
+    /// Forward native raw input to the window host once per pass: it goes to the window the input
+    /// is for (`Host::raw_input_hook`), after the macOS adjustments below.
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
         // macOS: egui draws a text field's caret only while its viewport has the focus, and the
         // focus event winit sends as the first window opens can go missing (the caret then showed
         // only once another window had taken the focus and given it back). AppKit knows better:
@@ -86,7 +71,27 @@ impl eframe::App for App {
                 raw.focused = key;
             }
         }
-        Host::with(|h| h.raw_input_hook(raw));
+        // macOS: the committed text the input method asked to replace with this frame's
+        // composition or commit (再変換), from the vendored winit (`deckcraft_ui_egui::ime`).
+        // It belongs to this frame's events, which winit queues with it: a frame without them
+        // drops it, so a range left by one that never reached its commit can't make a later
+        // commit elsewhere (a full-width space, the Character Viewer) replace unrelated text.
+        // The input method talks to the focused window, whose input this is: another window's
+        // frame (one playing a video, say) running first leaves the range alone.
+        #[cfg(target_os = "macos")]
+        {
+            let ime = raw.events.iter().any(|e| matches!(e, egui::Event::Ime(egui::ImeEvent::Preedit { .. } | egui::ImeEvent::Commit(_))));
+            if ime || raw.focused {
+                let named = winit::platform::macos::take_ime_replacement_range();
+                let vp = raw.viewport_id;
+                Host::with(|h| {
+                    if let Some(w) = h.window_of_viewport_mut(vp) {
+                        w.app.ime.replace = named.filter(|_| ime);
+                    }
+                });
+            }
+        }
+        Host::with(|h| h.raw_input_hook(ctx, raw));
     }
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         Host::with(|h| h.ui(egui::ViewportId::ROOT, ui));
@@ -275,10 +280,19 @@ fn app_icon() -> Option<egui::IconData> {
     eframe::icon_data::from_png_bytes(png).map_err(|e| log::warn!("app icon: {e}")).ok()
 }
 
+/// Install logging, parse startup arguments and environment, launch the native app, and
+/// propagate an eframe startup failure.
 fn main() -> eframe::Result {
     // First, so every start-up record (and the engine's panic hook, installed with the first
     // Session) is captured; see `logging`.
     let logger = logging::install();
+    if let Some(done) = craft_update::self_update::finish(&deckcraft_ui_egui::UPDATE_APP, &std::env::args_os().skip(1).collect::<Vec<_>>()) {
+        if let Err(e) = done {
+            eprintln!("DeckCraft update helper failed: {e}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     let (control_port, files, sample, show) =
         match startup(std::env::var("DECKCRAFT_CONTROL_PORT").ok().and_then(|p| p.parse().ok()), std::env::args().skip(1)) {
             Startup::Help => {
@@ -352,6 +366,9 @@ fn main() -> eframe::Result {
         deckcraft_ui_egui::APP_NAME,
         options,
         Box::new(move |cc| {
+            // Once for the egui context, which every presentation window's viewport shares (the
+            // hooks key their state by viewport).
+            deckcraft_ui_egui::install_ime_pass_hooks(&cc.egui_ctx);
             // Japanese editing tags typed Japanese `ja-JP` and draws Han text without a language
             // the Japanese way.
             let east_asian = east_asian_editing();
@@ -376,6 +393,9 @@ fn main() -> eframe::Result {
             };
             let mut app = new_app();
             load_prefs(&mut app);
+            // The start-up check for a newer release, once: in the first window only (the windows
+            // the host opens later are made by `new_app`, without it).
+            app.enable_update_checks();
             // AutoRecover: reopen what a previous run left unsaved (each in a window of its own,
             // once the host runs), then keep it current.
             if recovery
@@ -556,5 +576,28 @@ mod tests {
 
         assert_eq!(mac, win, "macOS and Windows offer different file types");
         assert_eq!(mac, linux, "macOS and Linux offer different file types");
+    }
+
+    /// #1114: a shortcut that names an MSI `<Icon>` shows a blank icon once an update deletes the
+    /// cached copy of it, and a taskbar pin (a copy of the shortcut) is never repaired. Shortcuts
+    /// take the icon embedded in `deckcraft.exe`; only `ARPPRODUCTICON` uses the MSI `<Icon>`.
+    #[test]
+    fn windows_shortcuts_use_the_icon_embedded_in_the_exe() {
+        let wxs = include_str!("../../../packaging/windows/deckcraft.wxs");
+        let shortcuts: Vec<&str> = wxs.split("<Shortcut").skip(1).filter_map(|s| s.split("/>").next()).collect();
+        assert!(!shortcuts.is_empty(), "deckcraft.wxs has no shortcut");
+        for shortcut in shortcuts {
+            assert!(!shortcut.contains("Icon="), "a shortcut names an MSI <Icon>:{shortcut}");
+        }
+        assert!(wxs.contains("<Property Id=\"ARPPRODUCTICON\""), "Apps and features keeps its icon");
+    }
+
+    /// The shortcuts take the exe's own icon, and `package.ps1 -SkipBuild` packages an existing
+    /// exe without `DECKCRAFT_REQUIRE_WINRES`, so the script has to refuse one with no icon.
+    #[test]
+    fn the_windows_package_script_rejects_an_exe_without_an_icon() {
+        let script = include_str!("../../../packaging/windows/package.ps1");
+        assert!(script.contains("ExtractIconEx"), "package.ps1 does not count the exe's icons");
+        assert!(script.contains("has no embedded icon"), "package.ps1 does not reject an iconless exe");
     }
 }

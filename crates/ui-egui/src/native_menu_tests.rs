@@ -67,7 +67,7 @@ impl Setup {
         raw.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 900.0)));
         let Setup { app, ctx, menu, .. } = self;
         raw_input(menu, app, &mut raw);
-        app.raw_input_hook(&mut raw);
+        app.raw_input_hook(ctx, &mut raw);
         let mut output = ctx.run_ui(raw, |ui| {
             run(menu, app, ui.ctx());
             app.logic(ui.ctx());
@@ -147,9 +147,9 @@ fn layout_has_mac_roles_and_only_existing_commands() {
     assert_eq!(rows, [MINIMIZE, ZOOM, "-", "view.newWindow", "view.arrangeAll", "view.cascade", "-", "window.next", "-", "front"]);
     assert!(!bar.find("view.arrangeAll").unwrap().enabled, "no window host here: the window commands are off");
     assert!(bar.find("view.newWindow").unwrap().enabled);
-    // Help holds the palette and the links; About is the app menu's.
+    // Help holds Check for Updates, the palette and the links; About is the app menu's.
     let help: Vec<&str> = bar.menus[10].children.iter().filter_map(|n| if let Node::Item(it) = n { Some(it.id.as_str()) } else { None }).collect();
-    assert_eq!(help, ["app.palette", "app.links"]);
+    assert_eq!(help, ["app.checkUpdates", "app.palette", "app.links"]);
     // The Tools dialogs run through app.dialog with their name.
     let language = bar.find("dialog:language").unwrap();
     assert_eq!((language.command.as_str(), &language.params), ("app.dialog", &json!({"id": "language"})));
@@ -353,10 +353,10 @@ fn text_field_edits_never_touch_the_slide() {
             let mut raw = egui::RawInput { time: Some(s.time), ..Default::default() };
             let Setup { app, ctx, menu, .. } = s;
             raw_input(menu, app, &mut raw);
-            app.raw_input_hook(&mut raw);
+            app.raw_input_hook(ctx, &mut raw);
             let mut output = ctx.run_ui(raw, |ui| {
                 run(menu, app, ui.ctx());
-                ui.add(egui::TextEdit::singleline(&mut field).id(egui::Id::new("field"))).request_focus();
+                ui.add(egui::TextEdit::singleline(&mut field).id(egui::Id::unique("field"))).request_focus();
                 sync(menu, app, ui.ctx());
             });
             output.textures_delta.clear();

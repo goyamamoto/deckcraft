@@ -82,7 +82,7 @@ fn main() {
         raw.time = Some(time);
         raw.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 900.0)));
         native_menu::raw_input(menu, app, &mut raw);
-        app.raw_input_hook(&mut raw);
+        app.raw_input_hook(&ctx, &mut raw);
         let mut out = ctx.run_ui(raw, |ui| {
             native_menu::run(menu, app, ui.ctx());
             app.logic(ui.ctx());
