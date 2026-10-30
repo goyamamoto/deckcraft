@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    Dialog, SlideApp, Ui, buttons, check, choice, color_label, east_asian_sample, finite_pt, font_field, json, json_text, labeled_text, seed_once,
+    vec2,
+};
 
 fn seed_font_fields(d: &mut Dialog) {
     seed_once(d, "family", json_text(d.params.get("family"), ""));
@@ -83,7 +86,7 @@ pub(super) fn font_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bo
         let edited = ui.add(egui::TextEdit::singleline(&mut spacing).desired_width(64.0).hint_text("pt"));
         let mut picked = None;
         let presets = [("-3", tl!("Very tight")), ("-1.5", tl!("Tight")), ("0", tl!("Normal")), ("3", tl!("Loose")), ("6", tl!("Very loose"))];
-        let combo = egui::ComboBox::from_id_salt("font_dialog_spacing")
+        let combo = craft_ui::ComboBox::from_id_salt("font_dialog_spacing")
             .selected_text(presets.iter().find(|(v, _)| *v == spacing).map_or(spacing.as_str(), |(_, l)| *l))
             .width(120.0)
             .show_ui(ui, |ui| {

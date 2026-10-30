@@ -1036,133 +1036,18 @@ fn write_node(n: &Node, out: &mut String, depth: usize) {
         return;
     }
     match n {
-        Node::Run { text, style } => match style {
-            Style::Math => text.chars().for_each(|c| write_char(c, out)),
-            Style::Upright => {
-                if symbols::FUNCTIONS.contains(&text.as_str()) || symbols::LIMIT_FUNCTIONS.contains(&text.as_str()) {
-                    out.push('\\');
-                    out.push_str(text);
-                    out.push(' ');
-                } else if text.chars().all(|c| c.is_ascii_digit() || matches!(c, '′' | '″' | '‴')) {
-                    text.chars().for_each(|c| write_char(c, out));
-                } else {
-                    out.push_str("\\mathrm{");
-                    text.chars().for_each(|c| write_char(c, out));
-                    out.push('}');
-                }
-            }
-            Style::Bold | Style::Italic | Style::BoldItalic => {
-                out.push_str(match style {
-                    Style::Bold => "\\mathbf{",
-                    Style::Italic => "\\mathit{",
-                    _ => "\\boldsymbol{",
-                });
-                text.chars().for_each(|c| write_char(c, out));
-                out.push('}');
-            }
-            Style::Text => {
-                out.push_str("\\text{");
-                out.push_str(&escape_text(text));
-                out.push('}');
-            }
-        },
-        Node::Frac { num, den, bar } => {
-            if *bar {
-                out.push_str("\\frac");
-                write_arg(num, out, depth);
-                write_arg(den, out, depth);
-            } else {
-                out.push('{');
-                write_row(num, out, depth);
-                out.push_str(" \\atop ");
-                write_row(den, out, depth);
-                out.push('}');
-            }
-        }
-        Node::Script { base, sub, sup } => {
-            write_base(base, out, depth);
-            if let Some(s) = sub {
-                out.push('_');
-                write_arg(s, out, depth);
-            }
-            if let Some(s) = sup {
-                match is_primes(s) {
-                    Some(k) => out.push_str(&"'".repeat(k.min(8))),
-                    None => {
-                        out.push('^');
-                        write_arg(s, out, depth);
-                    }
-                }
-            }
-        }
-        Node::Rad { index, body } => {
-            out.push_str("\\sqrt");
-            if let Some(i) = index {
-                out.push('[');
-                write_row(i, out, depth);
-                out.push(']');
-            }
-            write_arg(body, out, depth);
-        }
+        Node::Run { text, style } => write_run(text, *style, out),
+        Node::Frac { num, den, bar } => write_frac(num, den, *bar, out, depth),
+        Node::Script { base, sub, sup } => write_script(base, sub.as_ref(), sup.as_ref(), out, depth),
+        Node::Rad { index, body } => write_rad(index.as_ref(), body, out, depth),
         Node::Nary { op, sub, sup, body, limits } => {
-            match symbols::nary_command(*op) {
-                Some(n) => {
-                    out.push('\\');
-                    out.push_str(n);
-                }
-                None => out.push(*op),
-            }
-            if *limits != symbols::nary_limits(*op) {
-                out.push_str(if *limits { "\\limits" } else { "\\nolimits" });
-            }
-            if let Some(s) = sub {
-                out.push('_');
-                write_arg(s, out, depth);
-            }
-            if let Some(s) = sup {
-                out.push('^');
-                write_arg(s, out, depth);
-            }
+            write_nary_op(*op, *limits, out);
+            write_limits(sub.as_ref(), sup.as_ref(), out, depth);
             out.push(' ');
             write_row(body, out, depth);
             out.push(' ');
         }
-        Node::Delim { open, close, sep, items } => {
-            let env = match (open, close, items.as_slice()) {
-                (Some('('), Some(')'), [m]) => match m.as_slice() {
-                    [Node::Frac { num, den, bar: false }] => {
-                        out.push_str("\\binom");
-                        write_arg(num, out, depth);
-                        write_arg(den, out, depth);
-                        return;
-                    }
-                    [Node::Matrix { left: false, .. }] => Some("pmatrix"),
-                    _ => None,
-                },
-                (Some('['), Some(']'), [m]) if matches!(m.as_slice(), [Node::Matrix { left: false, .. }]) => Some("bmatrix"),
-                (Some('{'), Some('}'), [m]) if matches!(m.as_slice(), [Node::Matrix { left: false, .. }]) => Some("Bmatrix"),
-                (Some('|'), Some('|'), [m]) if matches!(m.as_slice(), [Node::Matrix { left: false, .. }]) => Some("vmatrix"),
-                (Some('‖'), Some('‖'), [m]) if matches!(m.as_slice(), [Node::Matrix { left: false, .. }]) => Some("Vmatrix"),
-                (Some('{'), None, [m]) if matches!(m.as_slice(), [Node::Matrix { left: true, .. }]) => Some("cases"),
-                _ => None,
-            };
-            if let (Some(env), Some(Node::Matrix { rows, .. })) = (env, items.first().and_then(|m| m.first())) {
-                write_matrix(env, rows, out, depth);
-                return;
-            }
-            out.push_str("\\left");
-            write_delim(*open, out);
-            for (k, item) in items.iter().enumerate() {
-                if k > 0 {
-                    out.push_str(" \\middle");
-                    write_delim(*sep, out);
-                }
-                write_row(item, out, depth);
-            }
-            out.push_str(" \\right");
-            write_delim(*close, out);
-            out.push(' ');
-        }
+        Node::Delim { open, close, sep, items } => write_delim_node(*open, *close, *sep, items, out, depth),
         Node::Acc { chr, body } => {
             out.push('\\');
             out.push_str(symbols::accent_command(*chr).unwrap_or("hat"));
@@ -1172,52 +1057,10 @@ fn write_node(n: &Node, out: &mut String, depth: usize) {
             out.push_str(if *top { "\\overline" } else { "\\underline" });
             write_arg(body, out, depth);
         }
-        Node::Func { name, arg } => {
-            write_row(name, out, depth);
-            out.push(' ');
-            match arg.as_slice() {
-                [] => {}
-                [Node::Run { text, style: Style::Math }] if text.chars().count() == 1 => write_row(arg, out, depth),
-                [Node::Delim { .. } | Node::Frac { .. } | Node::Script { .. }] => write_row(arg, out, depth),
-                _ => write_arg(arg, out, depth),
-            }
-            out.push(' ');
-        }
-        Node::Lim { base, lim, above } => match base.as_slice() {
-            [Node::Run { text, style: Style::Upright }] if symbols::LIMIT_FUNCTIONS.contains(&text.as_str()) => {
-                out.push('\\');
-                out.push_str(text);
-                out.push(if *above { '^' } else { '_' });
-                write_arg(lim, out, depth);
-            }
-            [Node::Lim { base: inner, lim: l2, above: a2 }] if matches!(inner.as_slice(), [Node::Run { style: Style::Upright, .. }]) => {
-                write_node(&Node::Lim { base: inner.clone(), lim: l2.clone(), above: *a2 }, out, depth);
-                out.push(if *above { '^' } else { '_' });
-                write_arg(lim, out, depth);
-            }
-            [Node::GroupChr { body, top, .. }] => {
-                out.push_str(if *top { "\\overbrace" } else { "\\underbrace" });
-                write_arg(body, out, depth);
-                out.push(if *top { '^' } else { '_' });
-                write_arg(lim, out, depth);
-            }
-            _ => {
-                out.push_str(if *above { "\\overset" } else { "\\underset" });
-                write_arg(lim, out, depth);
-                write_arg(base, out, depth);
-            }
-        },
+        Node::Func { name, arg } => write_func(name, arg, out, depth),
+        Node::Lim { base, lim, above } => write_lim(base, lim, *above, out, depth),
         Node::Matrix { rows, .. } => write_matrix("matrix", rows, out, depth),
-        Node::EqArr { rows } => {
-            out.push_str("\\begin{aligned} ");
-            for (k, r) in rows.iter().enumerate() {
-                if k > 0 {
-                    out.push_str(" \\\\ ");
-                }
-                write_row(r, out, depth);
-            }
-            out.push_str(" \\end{aligned}");
-        }
+        Node::EqArr { rows } => write_eqarr(rows, out, depth),
         Node::AlignMark => out.push_str(" & "),
         Node::GroupChr { body, top, .. } => {
             out.push_str(if *top { "\\overbrace" } else { "\\underbrace" });
@@ -1229,6 +1072,205 @@ fn write_node(n: &Node, out: &mut String, depth: usize) {
         }
         Node::Space(em) => write_space(*em, out),
     }
+}
+
+/// A run in its style: `\sin`, digits as they are, `\mathrm{…}`, `\mathbf{…}`, `\text{…}`.
+fn write_run(text: &str, style: Style, out: &mut String) {
+    match style {
+        Style::Math => text.chars().for_each(|c| write_char(c, out)),
+        Style::Upright => {
+            if symbols::FUNCTIONS.contains(&text) || symbols::LIMIT_FUNCTIONS.contains(&text) {
+                out.push('\\');
+                out.push_str(text);
+                out.push(' ');
+            } else if text.chars().all(|c| c.is_ascii_digit() || matches!(c, '′' | '″' | '‴')) {
+                text.chars().for_each(|c| write_char(c, out));
+            } else {
+                out.push_str("\\mathrm{");
+                text.chars().for_each(|c| write_char(c, out));
+                out.push('}');
+            }
+        }
+        Style::Bold | Style::Italic | Style::BoldItalic => {
+            out.push_str(match style {
+                Style::Bold => "\\mathbf{",
+                Style::Italic => "\\mathit{",
+                _ => "\\boldsymbol{",
+            });
+            text.chars().for_each(|c| write_char(c, out));
+            out.push('}');
+        }
+        Style::Text => {
+            out.push_str("\\text{");
+            out.push_str(&escape_text(text));
+            out.push('}');
+        }
+    }
+}
+
+/// `\frac{num}{den}`, or `{num \atop den}` without the bar.
+fn write_frac(num: &Math, den: &Math, bar: bool, out: &mut String, depth: usize) {
+    if bar {
+        out.push_str("\\frac");
+        write_arg(num, out, depth);
+        write_arg(den, out, depth);
+    } else {
+        out.push('{');
+        write_row(num, out, depth);
+        out.push_str(" \\atop ");
+        write_row(den, out, depth);
+        out.push('}');
+    }
+}
+
+/// A base with its scripts; a superscript of primes is written as `'`s.
+fn write_script(base: &Math, sub: Option<&Math>, sup: Option<&Math>, out: &mut String, depth: usize) {
+    write_base(base, out, depth);
+    if let Some(s) = sub {
+        out.push('_');
+        write_arg(s, out, depth);
+    }
+    if let Some(s) = sup {
+        match is_primes(s) {
+            Some(k) => out.push_str(&"'".repeat(k.min(8))),
+            None => {
+                out.push('^');
+                write_arg(s, out, depth);
+            }
+        }
+    }
+}
+
+/// `\sqrt[index]{body}`.
+fn write_rad(index: Option<&Math>, body: &Math, out: &mut String, depth: usize) {
+    out.push_str("\\sqrt");
+    if let Some(i) = index {
+        out.push('[');
+        write_row(i, out, depth);
+        out.push(']');
+    }
+    write_arg(body, out, depth);
+}
+
+/// An n-ary operator (`\sum`, or the character itself), with `\limits` or `\nolimits` when its
+/// limits are not where the operator puts them by default.
+fn write_nary_op(op: char, limits: bool, out: &mut String) {
+    match symbols::nary_command(op) {
+        Some(n) => {
+            out.push('\\');
+            out.push_str(n);
+        }
+        None => out.push(op),
+    }
+    if limits != symbols::nary_limits(op) {
+        out.push_str(if limits { "\\limits" } else { "\\nolimits" });
+    }
+}
+
+/// An n-ary operator's limits: `_{sub}^{sup}`.
+fn write_limits(sub: Option<&Math>, sup: Option<&Math>, out: &mut String, depth: usize) {
+    if let Some(s) = sub {
+        out.push('_');
+        write_arg(s, out, depth);
+    }
+    if let Some(s) = sup {
+        out.push('^');
+        write_arg(s, out, depth);
+    }
+}
+
+/// Items between stretching delimiters: `\binom` for a bar-less fraction in parentheses, the
+/// matrix environment (`pmatrix`, `cases` …) for a lone matrix in its delimiters, else
+/// `\left … \middle … \right`.
+fn write_delim_node(open: Option<char>, close: Option<char>, sep: Option<char>, items: &[Math], out: &mut String, depth: usize) {
+    let env = match (open, close, items) {
+        (Some('('), Some(')'), [m]) => match m.as_slice() {
+            [Node::Frac { num, den, bar: false }] => {
+                out.push_str("\\binom");
+                write_arg(num, out, depth);
+                write_arg(den, out, depth);
+                return;
+            }
+            [Node::Matrix { left: false, .. }] => Some("pmatrix"),
+            _ => None,
+        },
+        (Some('['), Some(']'), [m]) if matches!(m.as_slice(), [Node::Matrix { left: false, .. }]) => Some("bmatrix"),
+        (Some('{'), Some('}'), [m]) if matches!(m.as_slice(), [Node::Matrix { left: false, .. }]) => Some("Bmatrix"),
+        (Some('|'), Some('|'), [m]) if matches!(m.as_slice(), [Node::Matrix { left: false, .. }]) => Some("vmatrix"),
+        (Some('‖'), Some('‖'), [m]) if matches!(m.as_slice(), [Node::Matrix { left: false, .. }]) => Some("Vmatrix"),
+        (Some('{'), None, [m]) if matches!(m.as_slice(), [Node::Matrix { left: true, .. }]) => Some("cases"),
+        _ => None,
+    };
+    if let (Some(env), Some(Node::Matrix { rows, .. })) = (env, items.first().and_then(|m| m.first())) {
+        write_matrix(env, rows, out, depth);
+        return;
+    }
+    out.push_str("\\left");
+    write_delim(open, out);
+    for (k, item) in items.iter().enumerate() {
+        if k > 0 {
+            out.push_str(" \\middle");
+            write_delim(sep, out);
+        }
+        write_row(item, out, depth);
+    }
+    out.push_str(" \\right");
+    write_delim(close, out);
+    out.push(' ');
+}
+
+/// A function name and its argument, braced unless it is one letter, a delimited group, a
+/// fraction or a script.
+fn write_func(name: &Math, arg: &Math, out: &mut String, depth: usize) {
+    write_row(name, out, depth);
+    out.push(' ');
+    match arg.as_slice() {
+        [] => {}
+        [Node::Run { text, style: Style::Math }] if text.chars().count() == 1 => write_row(arg, out, depth),
+        [Node::Delim { .. } | Node::Frac { .. } | Node::Script { .. }] => write_row(arg, out, depth),
+        _ => write_arg(arg, out, depth),
+    }
+    out.push(' ');
+}
+
+/// A limit over or under its base: `\lim_{…}`, `\overbrace{…}^{…}`, `\underset{…}{…}`.
+fn write_lim(base: &Math, lim: &Math, above: bool, out: &mut String, depth: usize) {
+    match base.as_slice() {
+        [Node::Run { text, style: Style::Upright }] if symbols::LIMIT_FUNCTIONS.contains(&text.as_str()) => {
+            out.push('\\');
+            out.push_str(text);
+            out.push(if above { '^' } else { '_' });
+            write_arg(lim, out, depth);
+        }
+        [Node::Lim { base: inner, lim: l2, above: a2 }] if matches!(inner.as_slice(), [Node::Run { style: Style::Upright, .. }]) => {
+            write_node(&Node::Lim { base: inner.clone(), lim: l2.clone(), above: *a2 }, out, depth);
+            out.push(if above { '^' } else { '_' });
+            write_arg(lim, out, depth);
+        }
+        [Node::GroupChr { body, top, .. }] => {
+            out.push_str(if *top { "\\overbrace" } else { "\\underbrace" });
+            write_arg(body, out, depth);
+            out.push(if *top { '^' } else { '_' });
+            write_arg(lim, out, depth);
+        }
+        _ => {
+            out.push_str(if above { "\\overset" } else { "\\underset" });
+            write_arg(lim, out, depth);
+            write_arg(base, out, depth);
+        }
+    }
+}
+
+/// Lines of an equation array as an `aligned` environment.
+fn write_eqarr(rows: &[Math], out: &mut String, depth: usize) {
+    out.push_str("\\begin{aligned} ");
+    for (k, r) in rows.iter().enumerate() {
+        if k > 0 {
+            out.push_str(" \\\\ ");
+        }
+        write_row(r, out, depth);
+    }
+    out.push_str(" \\end{aligned}");
 }
 
 fn write_delim(c: Option<char>, out: &mut String) {

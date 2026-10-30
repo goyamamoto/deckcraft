@@ -1,5 +1,8 @@
 use super::transitions::effect_option_name;
-use super::*;
+use super::{
+    AnimClass, Color32, CornerRadius, Icon, Rect, Sense, SlideApp, Tokens, Ui, big, big_button, big_button_ex, dropdown, enabled, group, icons, json,
+    pos2, rows, run, theme, vec2, widgets,
+};
 
 // ---------- Animations ----------
 

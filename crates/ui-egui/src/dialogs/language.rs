@@ -1,4 +1,4 @@
-use super::*;
+use super::SlideApp;
 
 /// The selection's proofing language and whether it's marked Do Not Check Spelling: the language
 /// of the text at the caret (the first selected character, else the first run of the first

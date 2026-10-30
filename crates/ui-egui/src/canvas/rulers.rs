@@ -1,4 +1,4 @@
-use super::*;
+use super::{Align2, Color32, CornerRadius, Point, Pos2, Rect, Sense, SlideApp, Stroke, Tokens, Ui, Xf, json, pos2, theme, vec2};
 
 /// The rulers along the top and the left of the canvas, counted from the slide's top-left
 /// corner in the measurement unit (`unit`, [`deckcraft_engine::Session::units`]: the Preferences

@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    Dialog, SlideApp, Ui, Value, buttons, check, dialog_unit, edited, exact_of, field_of, json, len_text, length_value, num_text, parse_len,
+    parse_shown, put_dim, text_row,
+};
 
 fn publish_dim(d: &mut Dialog, key: &str, exact: f64, shown: String) {
     d.fields.insert(key.into(), shown.clone());

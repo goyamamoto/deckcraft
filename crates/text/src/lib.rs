@@ -31,7 +31,7 @@ use std::sync::Arc;
 use deckcraft_color::Rgba;
 use deckcraft_fonts::script::{self, joins_following, joins_preceding};
 use deckcraft_fonts::{CjkLocale, FontDb, FontFace, FontSlot, ScriptTag, ShapeParams};
-use deckcraft_geom::{Affine, BezPath, KurboShape as _, Point, Rect};
+use deckcraft_geom::{Affine, BezPath, Point, Rect};
 use deckcraft_math as math;
 use deckcraft_model::resolve::{self, Ctx};
 use deckcraft_model::text::{Align, Anchor, AutoFit, BodyProps, Bullet, Caps, ParaProps, RunKind, RunProps, Spacing, Strike, TextBody, TextDir};

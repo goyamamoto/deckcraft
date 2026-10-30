@@ -1,4 +1,5 @@
-use super::*;
+use super::{Align2, Color32, CornerRadius, Dialog, Rect, Sense, SlideApp, Stroke, Tokens, Ui, Value, json, pos2, theme, vec2};
+use deckcraft_math::{Math, TexError};
 
 /// The Equation dialog's preview picture: the TeX it shows, its texture and its size in points.
 pub struct EquationPreview {
@@ -21,45 +22,39 @@ fn equation_caret_to_end(ctx: &egui::Context, id: egui::Id, text: &str) {
 }
 const EQUATION_DIALOG_W: f32 = 480.0;
 
-/// Insert ▸ Equation: TeX typed above, the equation drawn below as you type (the last good
-/// drawing stays while an edit is half-typed, with the error named), Insert (⌘↩) puts it at the
-/// insertion point or in a text box of its own, and the equations inserted before are listed to
-/// pick up again. Opened with the caret in or beside an equation, it edits that one.
-pub(super) fn equation_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
-    let t = Tokens::get(ui.ctx());
-    if !d.fields.contains_key("seeded") {
-        d.fields.insert("seeded".into(), "1".into());
-        // Display style for an equation in a box of its own, text style at an insertion point.
-        let inline = app.session.active().is_some_and(|st| st.selection.text.is_some());
-        d.fields.insert("display".into(), if inline { "0" } else { "1" }.into());
-        if let Some(v) = d.params.get("display").and_then(Value::as_bool) {
+/// The dialog's first fields: the style, and the TeX given in the params or of the equation at
+/// the caret (which is then selected, so Insert replaces it).
+fn seed_equation(app: &mut SlideApp, d: &mut Dialog) {
+    d.fields.insert("seeded".into(), "1".into());
+    // Display style for an equation in a box of its own, text style at an insertion point.
+    let inline = app.session.active().is_some_and(|st| st.selection.text.is_some());
+    d.fields.insert("display".into(), if inline { "0" } else { "1" }.into());
+    if let Some(v) = d.params.get("display").and_then(Value::as_bool) {
+        d.fields.insert("display".into(), if v { "1" } else { "0" }.into());
+    }
+    let given = d.params.get("tex").and_then(Value::as_str).map(str::to_string);
+    if let Some(tex) = given {
+        d.fields.insert("tex".into(), tex);
+    } else if let Ok(at) = app.run("equation.at", json!({}))
+        && let Some(tex) = at.get("tex").and_then(Value::as_str)
+    {
+        // Editing: the equation is selected, so Insert replaces it. A selected equation box
+        // (not being edited) is entered first, and left again when the dialog closes.
+        d.fields.insert("tex".into(), tex.to_string());
+        if let Some(v) = at.get("display").and_then(Value::as_bool) {
             d.fields.insert("display".into(), if v { "1" } else { "0" }.into());
         }
-        let given = d.params.get("tex").and_then(Value::as_str).map(str::to_string);
-        if let Some(tex) = given {
-            d.fields.insert("tex".into(), tex);
-        } else if let Ok(at) = app.run("equation.at", json!({}))
-            && let Some(tex) = at.get("tex").and_then(Value::as_str)
-        {
-            // Editing: the equation is selected, so Insert replaces it. A selected equation box
-            // (not being edited) is entered first, and left again when the dialog closes.
-            d.fields.insert("tex".into(), tex.to_string());
-            if let Some(v) = at.get("display").and_then(Value::as_bool) {
-                d.fields.insert("display".into(), if v { "1" } else { "0" }.into());
-            }
-            if let Some(id) = at.get("id") {
-                let _ = app.run("text.edit", json!({"id": id, "at": at["start"]}));
-                d.fields.insert("exit".into(), "1".into());
-            }
-            let _ = app.run("text.select", json!({"anchor": at["start"], "caret": at["end"]}));
+        if let Some(id) = at.get("id") {
+            let _ = app.run("text.edit", json!({"id": id, "at": at["start"]}));
+            d.fields.insert("exit".into(), "1".into());
         }
+        let _ = app.run("text.select", json!({"anchor": at["start"], "caret": at["end"]}));
     }
-    let edit_id = crate::wid("equation-tex");
-    if d.fields.get("seeded").is_some_and(|v| v == "1") {
-        // The first frame: the caret after the seeded TeX (the editor's state outlives the dialog).
-        d.fields.insert("seeded".into(), "2".into());
-        equation_caret_to_end(ui.ctx(), edit_id, &d.get("tex", ""));
-    }
+}
+
+/// The TeX editor under its prompt, with the keyboard on the first frame; returns its response
+/// and the TeX as typed (kept in the dialog's fields).
+fn tex_editor(ui: &mut Ui, d: &mut Dialog, t: &Tokens, edit_id: egui::Id) -> (egui::Response, String) {
     let mut tex = d.get("tex", "");
     ui.set_min_width(EQUATION_DIALOG_W);
     let prompt = ui.label(tl!("Type the equation in TeX; the preview follows as you type."));
@@ -97,40 +92,39 @@ pub(super) fn equation_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -
         d.fields.remove("error");
     }
     d.fields.insert("tex".into(), tex.clone());
-    let parsed = deckcraft_math::parse_tex(&tex);
-    let empty = tex.trim().is_empty();
-    // Display style (as TeX's `\displaystyle` or a displayed equation: limits above and below
-    // large operators, full-size fraction parts) or text style, as in a line of text.
-    let mut display = d.get("display", "1") == "1";
-    if ui.checkbox(&mut display, tl!("Display style")).changed() {
-        d.fields.insert("display".into(), if display { "1" } else { "0" }.into());
-    }
-    // Preview.
+    (r, tex)
+}
+
+/// Draw `tex` again for the preview when it, the theme's brightness or the style changed since
+/// the picture was drawn.
+fn refresh_equation_preview(app: &mut SlideApp, ui: &Ui, t: &Tokens, m: &Math, tex: &str, display: bool) {
     let dark = app.ui.brightness == theme::Brightness::Dark;
-    if let Ok(m) = &parsed
-        && !empty
-        && app.equation_preview.as_ref().is_none_or(|p| p.source != tex || p.dark != dark || p.display != display)
-    {
-        let c = t.text;
-        let color = deckcraft_color::Rgba::rgb(c.r(), c.g(), c.b());
-        let ppp = f64::from(ui.ctx().pixels_per_point());
-        if let Some(img) = deckcraft_render::render_equation(m, deckcraft_engine::cmd::equation::MATH_FONT, EQUATION_PREVIEW_PT, ppp, color, display)
-        {
-            let size = vec2(img.width as f32 / ppp as f32, img.height as f32 / ppp as f32);
-            let ci = crate::textures::to_color_image(&img, false);
-            let texture = match app.equation_preview.as_mut() {
-                Some(p) => {
-                    crate::textures::replace(ui.ctx(), &mut p.texture, ci);
-                    p.texture.clone()
-                }
-                None => crate::textures::upload(ui.ctx(), "equation-preview", ci),
-            };
-            app.equation_preview = Some(EquationPreview { source: tex.clone(), dark, display, texture, size });
-        }
+    if !app.equation_preview.as_ref().is_none_or(|p| p.source != tex || p.dark != dark || p.display != display) {
+        return;
     }
+    let c = t.text;
+    let color = deckcraft_color::Rgba::rgb(c.r(), c.g(), c.b());
+    let ppp = f64::from(ui.ctx().pixels_per_point());
+    if let Some(img) = deckcraft_render::render_equation(m, deckcraft_engine::cmd::equation::MATH_FONT, EQUATION_PREVIEW_PT, ppp, color, display) {
+        let size = vec2(img.width as f32 / ppp as f32, img.height as f32 / ppp as f32);
+        let ci = crate::textures::to_color_image(&img, false);
+        let texture = match app.equation_preview.as_mut() {
+            Some(p) => {
+                crate::textures::replace(ui.ctx(), &mut p.texture, ci);
+                p.texture.clone()
+            }
+            None => crate::textures::upload(ui.ctx(), "equation-preview", ci),
+        };
+        app.equation_preview = Some(EquationPreview { source: tex.to_string(), dark, display, texture, size });
+    }
+}
+
+/// The preview box: the last good drawing, faded while the TeX doesn't parse, or "Preview" when
+/// there is no TeX.
+fn paint_equation_preview(app: &SlideApp, ui: &mut Ui, t: &Tokens, parsed: &Result<Math, TexError>, empty: bool) {
     let (area, _) = ui.allocate_exact_size(vec2(EQUATION_DIALOG_W, 110.0), Sense::hover());
     ui.painter().rect(area, CornerRadius::same(4), t.field_bg, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
-    match (&parsed, empty) {
+    match (parsed, empty) {
         (_, true) => {
             ui.painter().text(area.center(), Align2::CENTER_CENTER, tl!("Preview"), theme::font(13.0), t.text_faint);
         }
@@ -144,7 +138,11 @@ pub(super) fn equation_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -
             }
         }
     }
-    let error = match (&parsed, d.fields.get("error")) {
+}
+
+/// The line under the preview: the insert's or the TeX's error, else a few TeX examples.
+fn equation_message(ui: &mut Ui, d: &Dialog, t: &Tokens, parsed: &Result<Math, TexError>, empty: bool) {
+    let error = match (parsed, d.fields.get("error")) {
         (_, Some(e)) => Some(e.clone()),
         (Err(e), None) if !empty => Some(e.to_string()),
         _ => None,
@@ -171,7 +169,10 @@ pub(super) fn equation_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -
             );
         }
     }
-    // Recent equations.
+}
+
+/// The equations inserted before, with Clear; returns the one picked to edit again.
+fn recent_equations(app: &mut SlideApp, ui: &mut Ui, t: &Tokens) -> Option<String> {
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(tl!("Recent")).font(theme::bold(12.0)));
@@ -196,17 +197,15 @@ pub(super) fn equation_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -
             }
         }
     });
-    if let Some(h) = pick {
-        equation_caret_to_end(ui.ctx(), edit_id, &h);
-        d.fields.insert("tex".into(), h);
-        d.fields.remove("error");
-    }
-    // Insert (also ⌘↩ / Ctrl+Enter) and Cancel.
+    pick
+}
+
+/// Insert (also ⌘↩ / Ctrl+Enter, when `can`) and Cancel; returns (insert, cancel).
+fn equation_buttons(ui: &mut Ui, t: &Tokens, can: bool) -> (bool, bool) {
     let mut insert = false;
     let mut cancel = false;
     ui.add_space(8.0);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        let can = parsed.is_ok() && !empty;
         let b = egui::Button::new(egui::RichText::new(tl!("Insert")).color(t.accent_text)).fill(t.accent).min_size(vec2(72.0, 24.0));
         if ui.add_enabled(can, b).clicked() {
             insert = true;
@@ -218,12 +217,12 @@ pub(super) fn equation_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -
             insert = true;
         }
     });
-    // The keyboard stays in the TeX editor while the dialog is open: a click on the Display
-    // style switch, a Recent row or Clear would otherwise take the focus (and the caret) with it.
-    if !insert && !cancel && !r.has_focus() {
-        r.request_focus();
-        ui.ctx().request_repaint();
-    }
+    (insert, cancel)
+}
+
+/// Insert the equation (an error stays in the dialog) or cancel, leaving an equation box the
+/// dialog entered; returns whether the dialog closes.
+fn finish_equation(app: &mut SlideApp, d: &mut Dialog, insert: bool, cancel: bool) -> bool {
     if insert {
         let tex = d.get("tex", "");
         let display = d.get("display", "1") == "1";
@@ -244,4 +243,53 @@ pub(super) fn equation_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -
         let _ = app.run("text.exit", json!({}));
     }
     cancel
+}
+
+/// Insert ▸ Equation: TeX typed above, the equation drawn below as you type (the last good
+/// drawing stays while an edit is half-typed, with the error named), Insert (⌘↩) puts it at the
+/// insertion point or in a text box of its own, and the equations inserted before are listed to
+/// pick up again. Opened with the caret in or beside an equation, it edits that one.
+pub(super) fn equation_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) -> bool {
+    let t = Tokens::get(ui.ctx());
+    if !d.fields.contains_key("seeded") {
+        seed_equation(app, d);
+    }
+    let edit_id = crate::wid("equation-tex");
+    if d.fields.get("seeded").is_some_and(|v| v == "1") {
+        // The first frame: the caret after the seeded TeX (the editor's state outlives the dialog).
+        d.fields.insert("seeded".into(), "2".into());
+        equation_caret_to_end(ui.ctx(), edit_id, &d.get("tex", ""));
+    }
+    let (r, tex) = tex_editor(ui, d, &t, edit_id);
+    let parsed = deckcraft_math::parse_tex(&tex);
+    let empty = tex.trim().is_empty();
+    // Display style (as TeX's `\displaystyle` or a displayed equation: limits above and below
+    // large operators, full-size fraction parts) or text style, as in a line of text.
+    let mut display = d.get("display", "1") == "1";
+    if ui.checkbox(&mut display, tl!("Display style")).changed() {
+        d.fields.insert("display".into(), if display { "1" } else { "0" }.into());
+    }
+    // Preview.
+    if let Ok(m) = &parsed
+        && !empty
+    {
+        refresh_equation_preview(app, ui, &t, m, &tex, display);
+    }
+    paint_equation_preview(app, ui, &t, &parsed, empty);
+    equation_message(ui, d, &t, &parsed, empty);
+    // Recent equations.
+    if let Some(h) = recent_equations(app, ui, &t) {
+        equation_caret_to_end(ui.ctx(), edit_id, &h);
+        d.fields.insert("tex".into(), h);
+        d.fields.remove("error");
+    }
+    // Insert (also ⌘↩ / Ctrl+Enter) and Cancel.
+    let (insert, cancel) = equation_buttons(ui, &t, parsed.is_ok() && !empty);
+    // The keyboard stays in the TeX editor while the dialog is open: a click on the Display
+    // style switch, a Recent row or Clear would otherwise take the focus (and the caret) with it.
+    if !insert && !cancel && !r.has_focus() {
+        r.request_focus();
+        ui.ctx().request_repaint();
+    }
+    finish_equation(app, d, insert, cancel)
 }

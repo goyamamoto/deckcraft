@@ -225,7 +225,7 @@ pub fn small_button_ex(ui: &mut Ui, icon: Icon, label: &str, enabled: bool, sele
 /// label with its shortcut).
 pub fn small_button_tip(ui: &mut Ui, icon: Icon, label: &str, tip: &str, enabled: bool) -> Response {
     let label = tl!(label);
-    small_button_paint(ui, icon, label, label, enabled, false, false, Some(tip)).0
+    small_button_paint(ui, icon, SmallButtonText { label, name: label, tip: Some(tip) }, enabled, false, false).0
 }
 
 /// A small button whose accessible name is independent of its visible label. Split arrows are
@@ -241,7 +241,16 @@ pub fn small_button_named(
     selected: bool,
     split: bool,
 ) -> (Response, Option<Response>) {
-    small_button_paint(ui, icon, tl!(label), tl!(name), enabled, selected, split, None)
+    small_button_paint(ui, icon, SmallButtonText { label: tl!(label), name: tl!(name), tip: None }, enabled, selected, split)
+}
+
+/// The text of a small button, already in the interface language: the visible `label`, the
+/// accessible `name`, and the tooltip `tip`.
+#[derive(Clone, Copy)]
+struct SmallButtonText<'a> {
+    label: &'a str,
+    name: &'a str,
+    tip: Option<&'a str>,
 }
 
 /// Draws a small button labelled `label` and named `name` (both already translated). In a compact
@@ -251,13 +260,12 @@ pub fn small_button_named(
 fn small_button_paint(
     ui: &mut Ui,
     icon: Icon,
-    label: &str,
-    name: &str,
+    text: SmallButtonText<'_>,
     enabled: bool,
     selected: bool,
     split: bool,
-    tip: Option<&str>,
 ) -> (Response, Option<Response>) {
+    let SmallButtonText { label, name, tip } = text;
     let t = Tokens::get(ui.ctx());
     let font = theme::font(12.0);
     let label_w = if label.is_empty() { 0.0 } else { ui.fonts_mut(|f| f.layout_no_wrap(label.to_string(), font.clone(), t.text).size().x) + 5.0 };

@@ -1,4 +1,4 @@
-use super::*;
+use super::{DATE_KINDS, Dialog, SlideApp, Tokens, Ui, buttons, check, json};
 
 pub(super) const DATE_LANGS: &[(&str, &str)] = &[
     ("en-US", "English (United States)"),
@@ -79,7 +79,7 @@ pub(super) fn date_time_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) 
     let japanese = lang == "ja-JP";
     egui::Grid::new("date-options").num_columns(2).show(ui, |ui| {
         ui.label(tl!("Language:"));
-        let opened = egui::ComboBox::from_id_salt("date-lang").selected_text(tl!(lang_label)).width(240.0).show_ui(ui, |ui| {
+        let opened = craft_ui::ComboBox::from_id_salt("date-lang").selected_text(tl!(lang_label)).width(240.0).show_ui(ui, |ui| {
             for (k, l) in DATE_LANGS {
                 if ui.selectable_label(lang == *k, tl!(l)).clicked() {
                     d.fields.insert("language".into(), (*k).to_string());
@@ -98,7 +98,7 @@ pub(super) fn date_time_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) 
             let calendar = calendar_of(&format, Some(&lang));
             let shown = DATE_CALENDARS.iter().find(|(c, _)| *c == calendar).map_or("Gregorian", |(_, l)| *l);
             ui.label(tl!("Calendar type:"));
-            let opened = egui::ComboBox::from_id_salt("date-calendar").selected_text(tl!(shown)).width(240.0).show_ui(ui, |ui| {
+            let opened = craft_ui::ComboBox::from_id_salt("date-calendar").selected_text(tl!(shown)).width(240.0).show_ui(ui, |ui| {
                 for (c, l) in DATE_CALENDARS {
                     if ui.selectable_label(calendar == c, tl!(l)).clicked()
                         && calendar != c

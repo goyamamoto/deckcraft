@@ -23,6 +23,7 @@ deckcraft-media = { workspace = true }
 # (`build.rs`); without it the interface is English only.
 craft-i18n = { workspace = true }
 egui = { workspace = true, features = ["default_fonts", "monochrome_emoji_fonts"] }
+craft-ui = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }

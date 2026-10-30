@@ -1,5 +1,5 @@
 use super::date_time::{DATE_CALENDARS, DATE_LANGS, date_lang_for, date_rows};
-use super::*;
+use super::{DATE_KINDS, Dialog, SlideApp, Ui, check, field, json};
 
 /// The automatic date the Header & Footer dialog starts from: the current slide's date field (its
 /// type and language), else the deck's last format; Japanese when editing in Japanese.
@@ -57,7 +57,7 @@ fn date_format_picker(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) {
     let shown = rows.iter().find(|(k, _)| *k == format).map_or_else(|| format.clone(), |(_, s)| s.clone());
     egui::Grid::new("hf-date-format").num_columns(2).show(ui, |ui| {
         let l = ui.label(tl!("Format:"));
-        egui::ComboBox::from_id_salt("hf-date-format-combo")
+        craft_ui::ComboBox::from_id_salt("hf-date-format-combo")
             .selected_text(shown.as_str())
             .width(240.0)
             .show_ui(ui, |ui| {
@@ -74,7 +74,7 @@ fn date_format_picker(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) {
         ui.end_row();
         let lang_label = DATE_LANGS.iter().find(|(k, _)| *k == lang).map_or("English (United States)", |(_, l)| *l);
         let l = ui.label(tl!("Language:"));
-        egui::ComboBox::from_id_salt("hf-date-lang")
+        craft_ui::ComboBox::from_id_salt("hf-date-lang")
             .selected_text(tl!(lang_label))
             .width(240.0)
             .show_ui(ui, |ui| {
@@ -91,7 +91,7 @@ fn date_format_picker(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) {
             let calendar = calendar_of(&format, Some(&lang));
             let shown = DATE_CALENDARS.iter().find(|(c, _)| *c == calendar).map_or("Gregorian", |(_, l)| *l);
             let l = ui.label(tl!("Calendar type:"));
-            egui::ComboBox::from_id_salt("hf-date-calendar")
+            craft_ui::ComboBox::from_id_salt("hf-date-calendar")
                 .selected_text(tl!(shown))
                 .width(240.0)
                 .show_ui(ui, |ui| {

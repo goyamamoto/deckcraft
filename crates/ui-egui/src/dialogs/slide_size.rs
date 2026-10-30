@@ -1,4 +1,4 @@
-use super::*;
+use super::{Dialog, length_value, put_dim};
 
 /// A Slide Size field set to `pt`: the length as Slide Size shows it in `unit` (33.867 cm,
 /// 13.333": [`slide_len_text`]), the exact points kept beside ([`put_dim`]).

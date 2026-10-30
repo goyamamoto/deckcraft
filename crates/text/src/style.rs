@@ -1,6 +1,10 @@
 use super::run::{RunEffects, Underline};
 use super::shape::run_effects;
-use super::*;
+use super::{
+    Affine, Arc, BezPath, Caps, CjkLocale, Ctx, Fill, FontDb, FontFace, FontSlot, HashMap, ParaProps, Rect, Rgba, RunProps, ScriptTag, Spacing,
+    Strike, Theme, math, resolve,
+};
+use deckcraft_geom::KurboShape as _;
 
 /// Values for fields (`slidenum`, `datetime…`, `footer`). `None` keeps the field's saved text.
 pub trait Fields {

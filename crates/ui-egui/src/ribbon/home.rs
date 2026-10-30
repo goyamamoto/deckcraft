@@ -1,7 +1,11 @@
 use super::arrange::arrange_menu;
 use super::galleries::{cref_param, effects_menu, outline_menu, quick_styles, shapes_gallery, smartart_gallery};
 use super::insert::text_box_button;
-use super::*;
+use super::{
+    Color32, CornerRadius, Icon, Rect, Sense, SlideApp, Stroke, Tokens, Ui, Value, big, big_button, big_button_ex, color_split, dropdown, east_asian,
+    enabled, fmt_state, group, icon_toggle, json, pos2, rows, run, scheme, small, small_button, small_button_ex, small_button_named, tip, toggle,
+    vec2, widgets,
+};
 
 // ---------- Home ----------
 
@@ -505,7 +509,7 @@ fn paragraph_group(app: &mut SlideApp, ui: &mut Ui, st: &Value) {
                     }
                 });
                 let r = icon_toggle(ui, Icon::SmartArt, "Convert to SmartArt", enabled(app, "smartArt.fromText"), false);
-                egui::Popup::menu(&r).show(|ui| smartart_gallery(app, ui, "smartArt.fromText", json!({}), "", "", "", None));
+                egui::Popup::menu(&r).show(|ui| smartart_gallery(app, ui, "smartArt.fromText", json!({}), "", ("", ""), None));
                 if ui.add_enabled(en, egui::Button::new(tl!("Paragraph…")).min_size(vec2(88.0, 22.0))).on_hover_text(tl!("Paragraph")).clicked() {
                     run(app, "format.paragraphDialog", json!({}));
                 }
