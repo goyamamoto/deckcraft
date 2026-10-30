@@ -481,7 +481,7 @@ pub fn pattern_editor(ui: &mut Ui, pt: &PatternFill, sc: &ColorScheme) -> Option
     let t = Tokens::get(ui.ctx());
     let mut out: Option<PatternFill> = None;
     let (fg, bg) = (c32(&pt.fg, sc), c32(&pt.bg, sc));
-    ui.label("Pattern");
+    ui.label(tl!("Pattern"));
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
         for name in pattern_gallery() {
@@ -490,7 +490,7 @@ pub fn pattern_editor(ui: &mut Ui, pt: &PatternFill, sc: &ColorScheme) -> Option
             paint_pattern(ui.painter(), r.shrink(2.0), name, fg, bg);
             let stroke = if on || resp.hovered() || resp.has_focus() { Stroke::new(2.0, t.accent) } else { Stroke::new(1.0, t.border) };
             ui.painter().rect_stroke(r.shrink(1.0), CornerRadius::same(2), stroke, egui::StrokeKind::Inside);
-            let label = pattern_label(name);
+            let label = tc("pattern", pattern_label(name));
             resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, label));
             if resp.on_hover_text(label).clicked() && !on {
                 out = Some(PatternFill { preset: name.to_string(), ..pt.clone() });
@@ -498,13 +498,14 @@ pub fn pattern_editor(ui: &mut Ui, pt: &PatternFill, sc: &ColorScheme) -> Option
         }
     });
     for (label, foreground) in [("Foreground", true), ("Background", false)] {
+        let label = tl!(label);
         ui.horizontal(|ui| {
             ui.add_sized(vec2(80.0, 20.0), egui::Label::new(label));
             let cur = if foreground { &pt.fg } else { &pt.bg };
             let (sw, _) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::hover());
             ui.painter().rect(sw, CornerRadius::same(3), c32(cur, sc), Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
             let r = widgets::drop_button(ui, "", vec2(24.0, 20.0), true);
-            let name = format!("{label} color");
+            let name = fmt(tl!("{label} color"), &[("label", label)]);
             r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &name));
             widgets::color_popup(&r).show(|ui| {
                 if let Some(Some(c)) = widgets::color_grid(ui, sc, None) {

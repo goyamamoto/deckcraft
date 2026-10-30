@@ -189,3 +189,30 @@ fn background_pattern_fill_keeps_a_system_color() {
     let pt = background_pattern(&h);
     assert_eq!((pt.preset.as_str(), pt.bg), ("zigZag", before));
 }
+
+#[test]
+fn the_pattern_editor_speaks_the_interface_language() {
+    use crate::i18n::{Lang, fixture_lang, set_current};
+    let lang = fixture_lang(
+        "x-fixture",
+        "\tPattern\tPattern-FX\n\tForeground\tForeground-FX\n\tBackground\tBackground-FX\n\t{label} color\tcolor of {label}\npattern\tDark downward diagonal\tDDD-FX\n",
+    );
+    let (s, _) = patterned_shape();
+    let mut app = SlideApp::new(s, Services::default());
+    app.ui.pane = Some("format".into());
+    let mut h = Harness::builder().with_size(egui::vec2(1800.0, 1100.0)).build_ui_state(
+        move |ui, app: &mut SlideApp| {
+            app.logic(ui.ctx());
+            set_current(lang);
+            app.ui(ui);
+            set_current(Lang::EN);
+        },
+        app,
+    );
+    h.run_steps(3);
+    let _ = h.get_by_label("Pattern-FX");
+    let _ = h.get_by_label("Foreground-FX");
+    let _ = h.get_by_label("color of Background-FX");
+    let _ = h.get_by_label("DDD-FX");
+    assert!(h.query_by_label("Dark downward diagonal").is_none(), "the preset's name is translated");
+}
