@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 
 use deckcraft_model::{Presentation, SlideId};
-use egui::{Align2, Color32, CornerRadius, Rect, Sense, Stroke, Ui, WidgetInfo, WidgetType, pos2, vec2};
+use egui::{Align2, Color32, CornerRadius, Rect, Role, Sense, Stroke, Ui, WidgetInfo, pos2, vec2};
 use serde_json::json;
 
 use crate::SlideApp;
@@ -70,12 +70,14 @@ struct Header<'a> {
     first: Option<u32>,
 }
 
+/// Render one slide-sorter section header, handle its collapse/drag interactions, and return the
+/// occupied rectangle.
 fn section_header(app: &mut SlideApp, ui: &mut Ui, h: &Header<'_>) -> Rect {
     let t = Tokens::get(ui.ctx());
     let width = ui.available_width();
     let (r, _) = ui.allocate_exact_size(vec2(width, 32.0), Sense::hover());
-    let resp = ui.interact(r, ui.id().with(("sorter-section", h.uid, h.index)), Sense::click_and_drag());
-    resp.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, h.name));
+    let resp = ui.interact(r, ui.scope_id().with(("sorter-section", h.uid, h.index)), Sense::click_and_drag());
+    resp.widget_info(|| WidgetInfo::labeled(Role::Button, true, h.name));
     let open = h.first.is_none_or(|id| !app.sorter.collapsed.contains(&(h.uid, id)));
     let dragging = app.sorter.drag.is_some_and(|(from, _)| from == h.index);
     let bg = if dragging {
@@ -88,15 +90,16 @@ fn section_header(app: &mut SlideApp, ui: &mut Ui, h: &Header<'_>) -> Rect {
     let painter = ui.painter_at(r);
     painter.rect_filled(r, CornerRadius::same(4), bg);
     let chev = Rect::from_center_size(pos2(r.min.x + 20.0, r.center().y), vec2(24.0, 24.0));
-    let cresp = ui.interact(chev, ui.id().with(("sorter-fold", h.uid, h.index)), Sense::click());
+    let cresp = ui.interact(chev, ui.scope_id().with(("sorter-fold", h.uid, h.index)), Sense::click());
     let fold = crate::i18n::fmt(tl!(if open { "Collapse {name}" } else { "Expand {name}" }), &[("name", h.name)]);
-    cresp.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, &fold));
+    cresp.widget_info(|| WidgetInfo::labeled(Role::Button, true, &fold));
     icons::paint(&painter, chev.shrink(4.0), if open { Icon::ChevronDown } else { Icon::ChevronRight }, t.text_dim, h.first.is_none());
     let renaming = app.sorter.renaming.clone().filter(|(uid, index, _)| *uid == h.uid && *index == h.index).map(|(_, _, text)| text);
     let name_rect = Rect::from_min_max(pos2(r.min.x + 40.0, r.min.y + 4.0), pos2(r.max.x - 56.0, r.max.y - 4.0));
     if let Some(mut buf) = renaming {
-        let edit_id = ui.id().with(("sorter-rename", h.uid, h.index));
-        let out = ui.put(name_rect, egui::TextEdit::singleline(&mut buf).id(edit_id).font(theme::bold(13.0)).margin(vec2(4.0, 2.0)));
+        let edit_id = ui.scope_id().with(("sorter-rename", h.uid, h.index));
+        let out =
+            ui.put(name_rect, egui::TextEdit::singleline(&mut buf).id(edit_id).hint_text(tl!("Name")).font(theme::bold(13.0)).margin(vec2(4.0, 2.0)));
         let already = app.sorter.rename_started;
         if !already {
             out.request_focus();
@@ -199,7 +202,7 @@ fn place_slides(app: &mut SlideApp, ui: &mut Ui, g: &Grid<'_>, budget: &mut u32,
                 let Some(&i) = g.indices.get(row * cols + c) else { break };
                 let (cell, resp) = ui.allocate_exact_size(vec2(g.tw + 36.0, g.th + 36.0), Sense::click_and_drag());
                 let label = crate::i18n::fmt(tl!("Slide {n}"), &[("n", &(i + 1).to_string())]);
-                resp.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, &label));
+                resp.widget_info(|| WidgetInfo::labeled(Role::Button, true, &label));
                 let img = crate::textures::device_pixel_rect(Rect::from_min_size(cell.min + vec2(18.0, 8.0), vec2(g.tw, g.th)), ppp);
                 rects.push((i, cell));
                 let p = ui.painter();
@@ -234,8 +237,10 @@ fn place_slides(app: &mut SlideApp, ui: &mut Ui, g: &Grid<'_>, budget: &mut u32,
                     p.text(pos2(img.max.x, img.max.y + 12.0), Align2::RIGHT_CENTER, format!("★ {name}"), theme::font(10.5), t.text_faint);
                 }
                 if resp.clicked() {
-                    let add = ui.input(|inp| inp.modifiers.command);
-                    if add {
+                    let (shift, add) = ui.input(|inp| (inp.modifiers.shift, inp.modifiers.command));
+                    if shift {
+                        let _ = app.run("slide.selectRange", json!({"to": i, "add": add}));
+                    } else if add {
                         if let Some(id) = id {
                             let _ = app.run("slide.selectSlides", json!({"ids": [id.0], "add": true}));
                         }
@@ -552,7 +557,6 @@ pub fn outline_pane(app: &mut SlideApp, ui: &mut Ui) {
 }
 
 #[cfg(test)]
-#[path = "sorter_tests.rs"]
 mod ui_tests;
 
 /// A slide's outline block height before it has been laid out: title row plus its text lines.
@@ -578,7 +582,13 @@ fn outline_slide(app: &mut SlideApp, ui: &mut Ui, t: &Tokens, i: usize, s: &deck
         let id = crate::wid(("ol-title", s.id.0));
         let cur_title = s.title();
         let mut v: String = ui.data_mut(|d| d.get_temp(id).unwrap_or_else(|| cur_title.clone()));
-        let resp = ui.add(egui::TextEdit::singleline(&mut v).font(theme::bold(14.0)).frame(egui::Frame::NONE).desired_width(f32::INFINITY));
+        let resp = ui.add(
+            egui::TextEdit::singleline(&mut v)
+                .hint_text(tl!("Slide title"))
+                .font(theme::bold(14.0))
+                .frame(egui::Frame::NONE)
+                .desired_width(f32::INFINITY),
+        );
         if resp.gained_focus() {
             let _ = app.run("slide.go", json!({"index": i}));
         }
@@ -604,7 +614,9 @@ fn outline_slide(app: &mut SlideApp, ui: &mut Ui, t: &Tokens, i: usize, s: &deck
         let mut v: String = ui.data_mut(|d| d.get_temp(id).unwrap_or_else(|| cur_text.clone()));
         ui.horizontal(|ui| {
             ui.add_space(36.0);
-            let resp = ui.add(egui::TextEdit::multiline(&mut v).frame(egui::Frame::NONE).desired_width(f32::INFINITY).desired_rows(1));
+            let resp = ui.add(
+                egui::TextEdit::multiline(&mut v).hint_text(tl!("Slide text")).frame(egui::Frame::NONE).desired_width(f32::INFINITY).desired_rows(1),
+            );
             if resp.gained_focus() {
                 let _ = app.run("slide.go", json!({"index": i}));
             }

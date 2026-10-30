@@ -359,6 +359,9 @@ impl Dictionary {
 
     /// Is `word` spelt correctly? Capitalised and upper-case forms of a lower-case word pass.
     pub fn check(&self, word: &str) -> bool {
+        if word.contains('\u{2019}') {
+            return self.check(&word.replace('\u{2019}', "'"));
+        }
         // East Asian text is never checked against a Latin dictionary (see [`is_east_asian`]).
         if word.is_empty() || word.chars().all(|c| !c.is_alphabetic()) || word.chars().any(is_east_asian) {
             return true;
@@ -816,6 +819,13 @@ SFX D Y 1\nSFX D 0 ed/S .\n";
 
     fn d() -> Dictionary {
         Dictionary::parse(AFF.as_bytes(), DIC.as_bytes())
+    }
+
+    #[test]
+    fn curly_apostrophe_matches_ascii_entry() {
+        let d = Dictionary::parse(AFF.as_bytes(), "2\ndon't\nwork\n".as_bytes());
+        assert!(d.check("don't"));
+        assert!(d.check("don\u{2019}t"));
     }
 
     #[test]

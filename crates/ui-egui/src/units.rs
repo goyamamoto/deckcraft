@@ -127,25 +127,38 @@ pub fn spin_step(unit: Unit) -> f64 {
 /// A length box with up and down arrows (the ribbon's Size boxes, the Format pane): it shows `pt`
 /// in `unit` and returns the new length in points when the text is committed (focus leaves it)
 /// or an arrow is clicked. Text that isn't a length is dropped and the box shows the length again.
-pub fn length_spinner(ui: &mut Ui, id: &str, pt: f64, unit: Unit, width: f32) -> Option<f64> {
+/// `label` names the box and its arrows for assistive technology, as
+/// [`crate::widgets::spinner`] does (`Height value`, `Increase Height`).
+pub fn length_spinner(ui: &mut Ui, id: &str, label: &str, pt: f64, unit: Unit, width: f32) -> Option<f64> {
     let t = Tokens::get(ui.ctx());
-    let key = ui.id().with(id);
-    let mut text: String = ui.data_mut(|d| d.get_temp::<String>(key)).unwrap_or_else(|| len_text(pt, unit));
+    let key = ui.scope_id().with(id);
+    // The row's label, in the interface language (callers pass it English or already translated).
+    let label = tl!(label);
+    // What is being typed, kept while the field has the keyboard.
+    let typing = ui.data_mut(|d| d.get_temp::<String>(key));
+    let mut text: String = typing.clone().unwrap_or_else(|| len_text(pt, unit));
     let mut out = None;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
-        let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(width).font(theme::font(12.0)));
+        let r = ui
+            .add(egui::TextEdit::singleline(&mut text).desired_width(width).font(theme::font(12.0)))
+            .accessible_name(crate::i18n::fmt(tl!("{label} value"), &[("label", label)]));
         if r.has_focus() {
             ui.data_mut(|d| d.insert_temp(key, text.clone()));
         } else {
             ui.data_mut(|d| d.remove::<String>(key));
         }
-        if r.lost_focus() {
+        // egui reports a lost focus on two frames running; only the one that still has what was
+        // typed commits it (the other would commit the rounded length shown again), as
+        // `widgets::spinner` does.
+        if r.lost_focus() && typing.is_some() {
             out = parse_len(&text, unit);
         }
         let (rect, _) = ui.allocate_exact_size(vec2(12.0, 22.0), Sense::hover());
         let up = ui.interact(Rect::from_min_max(rect.min, pos2(rect.max.x, rect.center().y)), key.with("up"), Sense::click());
+        up.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, crate::i18n::fmt(tl!("Increase {label}"), &[("label", label)])));
         let down = ui.interact(Rect::from_min_max(pos2(rect.min.x, rect.center().y), rect.max), key.with("dn"), Sense::click());
+        down.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, crate::i18n::fmt(tl!("Decrease {label}"), &[("label", label)])));
         let p = ui.painter();
         let c = rect.center();
         let ink = Stroke::new(1.0, t.text_dim);

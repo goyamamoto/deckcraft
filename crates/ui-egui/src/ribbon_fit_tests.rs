@@ -161,7 +161,9 @@ mod ui {
     #[test]
     fn compact_buttons_keep_their_names() {
         let mut compact_seen = false;
-        for width in [1100.0, 1250.0, 1300.0, 1350.0] {
+        // The window widths at which Clipboard is left compact move with the groups' measured
+        // widths, which changed with egui 0.37: scan a range of them.
+        for width in [1100.0, 1250.0, 1300.0, 1350.0, 1400.0, 1450.0] {
             let h = harness(width, "Home");
             if planned(&h.ctx, "Clipboard") != Some(COMPACT) {
                 continue;

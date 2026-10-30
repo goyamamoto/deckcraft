@@ -1,88 +1,53 @@
-//! vendor/winit patch 01 (`vendor/patches/winit/01-macos-ime-surrounding-text.md`): on macOS the
-//! input method keeps the rest of a conversion whose first clause was committed, types its
-//! full-width characters, can read the text around the caret and reconvert committed text
-//! (再変換). A re-vendored copy without the patch would silently lose it.
+//! vendor/winit patch 01 (`vendor/patches/winit/01-macos-ime-surrounding-text.md`, "D1" on
+//! storytold/winit): on macOS the application reports the text around the caret, so the input
+//! method can read committed text and reconvert it (再変換), and the replacement range it names
+//! is applied by the application rather than by storytold's W26 deletion. A re-vendored copy
+//! without the patch would silently lose it. The fork carries its own guards too
+//! (`vendor/winit/tests/ime_patches.rs`, the native AppKit driver
+//! `vendor/winit/tests/macos_ime_surrounding.rs`).
 
 #[test]
 fn winit_answers_the_input_method_from_the_reported_surrounding_text() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let view = std::fs::read_to_string(root.join("vendor/winit/src/platform_impl/macos/view.rs")).unwrap();
-    assert!(view.contains("pub fn set_ime_surrounding_text(text: Option<ImeSurroundingText>)"), "the surrounding-text store");
-    assert!(view.contains("pub fn take_ime_replacement_range() -> Option<Range<usize>>"), "the replacement range");
-    assert!(view.contains("NSRange::new(self.ivars().marked_location.get() as NSUInteger, length)"), "markedRange lies in the reported text");
-    assert!(
-        view.contains("if let Some(s) = ime_surrounding() {\n                let len = s.text.encode_utf16().count();"),
-        "selectedRange answers the reported selection"
-    );
-    assert!(view.contains("utf16_slice(&s.text, start..end)"), "attributedSubstringForProposedRange answers the reported text");
-    // The reported text follows the input method's own edits at once (see the behaviour test below).
-    assert!(view.contains("pub fn apply(\n        &self,\n        marked: Option<&ImeMarked>,"), "ImeSurroundingText::apply");
-    assert!(
-        view.contains("self.ime_update_surrounding(replaces, &string.to_string(), Some(selected_range));"),
-        "setMarkedText updates the surrounding text"
-    );
-    // setMarkedText reads the marked text it replaces at its old place (`ime_marked`) and only
-    // then moves it to a named range: moved first, live conversion re-marking the words before
-    // its marked text spliced the wrong text out of the store and recorded the wrong
-    // `ImeMarked::replaced` (a dismissal then read committed text as gone, the suggestion as kept).
-    let set_marked = &view[view.find("fn set_marked_text(").unwrap()..view.find("fn unmark_text(").unwrap()];
-    let update = set_marked.find("self.ime_update_surrounding(replaces").unwrap();
-    let moved = set_marked
-        .find("self.ivars().marked_location.set(replacement_range.location as usize);")
-        .expect("without reported text the marked text lies where the named range starts");
-    assert!(update < moved, "the marked text moves to the named range after the store has read it");
-    assert!(
-        !set_marked[..update].contains("marked_location.set(start);\n            } else if !had_marked_text"),
-        "nothing moves the marked text to the named range before the store has read it"
-    );
-    // A commit naming the text it replaces hands the application the range in every committing
-    // branch of insertText — with marked text or without (an input method that reconverts without
-    // marking first) — so the slide replaces what the store says was replaced.
-    let insert = &view[view.find("fn insert_text(").unwrap()..view.find("fn do_command_by_selector(").unwrap()];
-    assert_eq!(insert.matches("self.ime_record_replacement(replacement_range);").count(), 3, "each commit branch records the range");
-    assert!(!insert.contains("&& unsafe { self.hasMarkedText() } {\n                let start"), "not only while marked text exists");
-    assert!(view.contains("self.ime_update_surrounding(range, &committed, None);"), "unmarkText commits the marked text");
-    assert!(view.contains("self.queue_event(WindowEvent::Ime(Ime::Commit(committed)));"), "unmarkText commits the marked text");
-    assert!(
-        view.contains(
-            "*self.ivars().marked_text.borrow_mut() = NSMutableAttributedString::new();\n                self.queue_event(WindowEvent::Ime(Ime::Preedit(String::new(), None)));"
-        ),
-        "insertText drops the marked text it committed"
-    );
-    assert!(
-        view.contains("} else if !self.ivars().in_key_event.get() && self.is_ime_enabled() && !is_control && !string.is_empty() {"),
-        "insertText outside a key event commits unmarked text"
-    );
-    assert!(
-        view.contains(
-            "self.ivars().in_key_event.set(true);\n                unsafe { self.interpretKeyEvents(&events_for_nsview) };\n                self.ivars().in_key_event.set(false);"
-        ),
-        "key events are marked"
-    );
-    assert!(
-        view.contains("replacement_range: NSRange,\n        ) {\n            trace_scope!(\"setMarkedText:selectedRange:replacementRange:\");"),
-        "setMarkedText reads its replacement range"
-    );
+    let body = |from: &str, to: &str| -> String {
+        let start = view.find(from).unwrap_or_else(|| panic!("{from} is in view.rs"));
+        let end = view[start..].find(to).map_or(view.len(), |e| start + e);
+        view[start..end].to_string()
+    };
+    // One mode at a time: while text is reported, W26 stands down (nothing is deleted by byte
+    // count, so `take_ime_delete_surrounding` is `None` and egui-winit emits no
+    // `DeleteSurroundingBytes`); the application applies the named range itself.
+    let replaced = body("fn replaced(&self, range: NSRange)", "fn reported_surrounding(");
+    let stand_down = replaced
+        .find("if self.reported_surrounding().is_some() {\n            return None;\n        }")
+        .expect("W26 stands down while text is reported");
+    assert!(stand_down < replaced.find("ime_document.borrow_mut().replace(range)").unwrap_or(0), "before ImeDocument computes a deletion");
+    // Answers from the reported text: the marked text's place, the selection, the text itself.
+    let marked_range = body("fn marked_range(&self) -> NSRange", "#[method(selectedRange)]");
+    assert!(marked_range.contains("return NSRange::new(self.ivars().marked_location.get(), length);"), "markedRange lies in the reported text");
+    let selected_range = body("fn selected_range(&self) -> NSRange", "#[method(setMarkedText:selectedRange:replacementRange:)]");
+    assert!(selected_range.contains("if let Some(reported) = self.reported_surrounding() {"), "selectedRange answers the reported selection");
+    let substring = body("fn attributed_substring_for_proposed_range(", "#[method(characterIndexForPoint:)]");
+    assert!(substring.contains("let (text, actual) = reported.substring(range);"), "attributedSubstringForProposedRange answers the reported text");
+    // The named range is handed to the application (`take_ime_replacement_range`) by
+    // `setMarkedText:` and by every commit, and the reported text follows the edit at once.
+    let set_marked = body("fn set_marked_text(", "#[method(unmarkText)]");
+    assert!(set_marked.contains("ime_surrounding::record_replacement(range);"), "setMarkedText records the range it names");
+    assert!(set_marked.contains("self.ime_update_surrounding("), "setMarkedText updates the surrounding text");
     assert!(!view.contains("TODO: Use _replacement_range"), "the replacement range is no longer ignored");
-    // Committing a conversion clause by clause: within a key event, text other than the key's own
-    // characters is the input method's commit — and so is the key's own text once the input
-    // method committed in that key event (the key isn't reported then) — and marked text is
-    // committed (not dropped) when the application stops taking input.
-    assert!(
-        view.contains("&& (string != *self.ivars().key_text.borrow() || self.ivars().ime_state.get() == ImeState::Committed)"),
-        "insertText within a key event commits the input method's text"
-    );
-    assert!(view.contains("*self.ivars().key_text.borrow_mut() = unsafe { event.characters() }"), "the key's characters are recorded");
-    assert!(
-        view.contains(
-            "input_context.discardMarkedText();
-            }
-            self.queue_event(WindowEvent::Ime(Ime::Preedit(String::new(), None)));
-            self.queue_event(WindowEvent::Ime(Ime::Commit(committed)));"
-        ),
-        "set_ime_allowed(false) commits the marked text"
-    );
-    assert!(view.contains("std::env::var_os(\"DECKCRAFT_IME_TRACE\")"), "the opt-in IME trace");
+    let commit = body("fn ime_commit_surrounding(", "fn ime_key_text_commits(");
+    assert!(commit.contains("ime_surrounding::record_replacement(range);"), "a commit records the range it names");
+    // `unmarkText` commits the marked text as it stands, except while the view itself discards
+    // it (W7/W24: reset, IME disallowed), which cancels the composition the app has settled.
+    let unmark = body("fn ime_unmark_commit(", "fn ime_settle_surrounding(");
+    assert!(unmark.contains("if self.ivars().ime_discarding.get()"), "a discard doesn't commit");
+    let surrounding = std::fs::read_to_string(root.join("vendor/winit/src/platform_impl/macos/ime_surrounding.rs")).unwrap();
+    assert!(surrounding.contains("pub fn apply(\n        &self,\n        marked: Option<&ImeMarked>,"), "ImeSurroundingText::apply");
+    assert!(surrounding.contains("std::env::var_os(\"DECKCRAFT_IME_TRACE\")"), "the opt-in IME trace");
+    let fork_guards = std::fs::read_to_string(root.join("vendor/winit/tests/ime_patches.rs")).unwrap();
+    assert!(fork_guards.contains("fn macos_reported_surrounding_text_answers_the_input_method()"), "the fork's own guard");
+    assert!(root.join("vendor/winit/tests/macos_ime_surrounding.rs").is_file(), "the fork's native AppKit driver");
 
     let platform = std::fs::read_to_string(root.join("vendor/winit/src/platform/macos.rs")).unwrap();
     assert!(platform.contains("pub fn set_ime_surrounding_text(text: Option<ImeSurroundingText>)"), "public on winit::platform::macos");

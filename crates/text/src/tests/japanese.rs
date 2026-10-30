@@ -3,6 +3,7 @@
 //! ideographic space at a wrap, font alignment, vertical strikethroughs and circled numbers.
 
 use super::*;
+use crate::{UPRIGHT_CENTRE, VerticalLines, line_metrics, vertical_lines};
 use deckcraft_model::Kinsoku;
 use deckcraft_model::text::TextDir;
 

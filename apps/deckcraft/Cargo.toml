@@ -25,6 +25,7 @@ chrono = { workspace = true }
 winresource = "0.1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+craft-update = { workspace = true }
 # The system's preferred languages, for the East Asian editing language (MIT OR Apache-2.0).
 sys-locale = "0.3"
 rfd = { workspace = true }
