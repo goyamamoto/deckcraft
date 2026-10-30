@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    ImeCancelled, ImeComposition, ImeDescriptorKey, ImeDestination, ImeResetPhase, ImeTerminalPending, ImeTerminalStamp, SlideApp, Target, Value,
+    ViewMode, i18n, ime_in_ui_pass_key, window_salt,
+};
 
 impl SlideApp {
     /// Borrow faces for the interface language's own text, once per language: its catalogs and the

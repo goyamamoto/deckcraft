@@ -1,5 +1,8 @@
 use super::hit::{EditZone, contains_rect, edit_zone, edited_box, hit_shape, in_table_cell, is_text_first, shape_in_front};
-use super::*;
+use super::{
+    Arc, DRAW_TABLE, Drag, HistoryEntry, Hit, Mods, Point, PointerEvent, PointerKind, Rect, Result, Session, ShapeId, ShapeKind, TABLE_ERASER,
+    TextTarget, ToolKind, Value, Xfrm, box_handles, cmd, is_freeform_tool, json, wordart_handles, xfrm_of,
+};
 
 impl Session {
     pub fn set_tool(&mut self, kind: ToolKind) {
@@ -454,12 +457,11 @@ impl Session {
                     self.execute("guide.move", &json!({"index": index, "pos": pos}))?
                 };
             }
-            Some(Drag::Move { moved: false, enter_text: Some((id, at)), .. }) => {
+            Some(Drag::Move { moved: false, enter_text: Some((id, at)), .. })
                 // Plain click on text: caret at the click (in a table, in the clicked cell).
-                if self.edit_text_at(id, at)? {
+                if self.edit_text_at(id, at)? => {
                     out = json!({"editing": id});
                 }
-            }
             Some(Drag::Marquee { start, add }) => {
                 let r = Rect::from_points(start, p);
                 self.tool.marquee = None;

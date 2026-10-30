@@ -1,7 +1,7 @@
 //! The window host's side of a presentation window ([`crate::windows::Host`]): one presentation
 //! per window, what a window asks of the host, and what windows on one presentation hand over.
 
-use super::*;
+use super::{SlideApp, UiState, dialogs, json, windows};
 
 impl SlideApp {
     /// After File › Close took the presentation out of this window: with other windows open the

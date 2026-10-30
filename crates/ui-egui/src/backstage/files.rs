@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    Align2, Backstage, CONTENT_W, Color32, CornerRadius, Icon, Outcome, Page, Rect, RichText, Sense, SlideApp, Stroke, StrokeKind, Tokens, Ui, Value,
+    arrow_link, dim, heading, icons, json, pos2, search, theme, vec2,
+};
 
 /// A new-presentation tile: a theme preview drawn in code (or a blank slide) over its name, shown
 /// as given (theme names are the theme's own; translate interface text before passing it).

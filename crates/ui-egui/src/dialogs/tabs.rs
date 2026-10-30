@@ -1,4 +1,4 @@
-use super::*;
+use super::{Dialog, SlideApp, Ui, Value, buttons, dialog_unit, field, i18n, json, len_text, length_value, parse_len, put_dim, vec2};
 
 const TAB_KINDS: [(&str, &str); 4] = [("l", "Left"), ("ctr", "Center"), ("r", "Right"), ("dec", "Decimal")];
 

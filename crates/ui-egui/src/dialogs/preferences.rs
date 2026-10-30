@@ -1,4 +1,4 @@
-use super::*;
+use super::{Dialog, SlideApp, Ui, Value, json, theme};
 
 /// What the Preferences dialog can change, as it was when the dialog opened.
 pub(super) fn preferences_snapshot(app: &SlideApp) -> Value {
@@ -23,7 +23,7 @@ pub(super) fn language_picker(app: &mut SlideApp, ui: &mut Ui) {
     let mut pick = None;
     ui.horizontal(|ui| {
         let l = ui.label(tl!("Interface language:"));
-        let combo = egui::ComboBox::from_id_salt("interface_language").selected_text(current).width(200.0).show_ui(ui, |ui| {
+        let combo = craft_ui::ComboBox::from_id_salt("interface_language").selected_text(current).width(200.0).show_ui(ui, |ui| {
             if ui.selectable_label(auto, auto_label.as_str()).clicked() {
                 pick = Some(AUTO);
             }
@@ -54,7 +54,7 @@ pub(super) fn units_picker(app: &mut SlideApp, ui: &mut Ui) {
     let mut pick: Option<&str> = None;
     ui.horizontal(|ui| {
         ui.label(tl!("Measurement units:"));
-        let opened = egui::ComboBox::from_id_salt("measurement_units").selected_text(current.as_str()).width(200.0).show_ui(ui, |ui| {
+        let opened = craft_ui::ComboBox::from_id_salt("measurement_units").selected_text(current.as_str()).width(200.0).show_ui(ui, |ui| {
             if ui.selectable_label(chosen.is_none(), auto_label.as_str()).clicked() {
                 pick = Some("auto");
             }

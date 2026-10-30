@@ -197,15 +197,7 @@ fn draw_text(ctx: &mut RenderContext, t: &Text, m: Affine) {
     let face = db.document_face(family, style);
     let upem = face.upem.max(1.0);
     let (asc, desc) = win_metrics(&face);
-    // LOGFONT height: negative is the em, positive the cell (ascent plus descent).
-    let h = f64::from(font.height);
-    let em = if h < 0.0 {
-        -h
-    } else if h > 0.0 {
-        h * upem / (asc + desc).max(1.0)
-    } else {
-        DEFAULT_EM
-    };
+    let em = logfont_em(font.height, upem, asc, desc);
     let k = em / upem;
     if !k.is_finite() || k <= 0.0 {
         return;
@@ -230,70 +222,13 @@ fn draw_text(ctx: &mut RenderContext, t: &Text, m: Affine) {
     // A vertical (`@`) font turns full-width and CJK characters upright: each takes a one-em cell
     // along the baseline and the font's vertical forms (、。「」ー), as GDI draws them.
     let upright: Vec<bool> = chars.iter().map(|c| font.vertical && deckcraft_text::is_upright(*c)).collect();
-    let vert: Vec<deckcraft_fonts::Feature> = deckcraft_fonts::feature("vert").into_iter().collect();
-    // Shape runs of one face (and one orientation); record each glyph's pen position and its
-    // character.
-    let mut shaped: Vec<(Glyph, usize)> = Vec::with_capacity(chars.len());
-    let mut char_pen: Vec<f64> = vec![0.0; chars.len() + 1];
-    let mut pen = 0.0;
-    let mut i = 0;
-    while i < chars.len() {
-        let (Some(f), Some(&up)) = (faces.get(i).cloned(), upright.get(i)) else { break };
-        let mut j = i + 1;
-        while faces.get(j).is_some_and(|g| g.id() == f.id()) && upright.get(j) == Some(&up) {
-            j += 1;
-        }
-        let run: String = chars.get(i..j).unwrap_or(&[]).iter().collect();
-        // Byte offset in the run → character index in the string.
-        let byte_char: Vec<usize> = run.char_indices().map(|(b, _)| b).collect();
-        let s = em / f.upem.max(1.0);
-        let run_start = pen;
-        for g in shape_run(&f, &run, if up { &vert } else { &[] }, lang) {
-            let ci = i + byte_char.partition_point(|b| *b < g.cluster).min(j - i - 1);
-            let (dx, dy, adv) = (f64::from(g.x_offset) * s, -f64::from(g.y_offset) * s, f64::from(g.x_advance) * s);
-            if up {
-                // Centred in its character's em cell, which it turns about.
-                let cell = run_start + (ci - i) as f64 * em;
-                shaped.push((Glyph { face: f.clone(), gid: g.gid, x: cell + (em - adv) / 2.0 + dx, y: dy, upright: Some(adv) }, ci));
-                pen = run_start + (ci + 1 - i) as f64 * em;
-            } else {
-                shaped.push((Glyph { face: f.clone(), gid: g.gid, x: pen + dx, y: dy, upright: None }, ci));
-                pen += adv;
-            }
-            if let Some(p) = char_pen.get_mut(ci + 1) {
-                *p = pen;
-            }
-        }
-        if up {
-            pen = run_start + (j - i) as f64 * em;
-        }
-        i = j;
-    }
-    // Character start pens: a character's start is the previous one's end.
-    for ci in 1..char_pen.len() {
-        let prev = char_pen.get(ci - 1).copied().unwrap_or(0.0);
-        if let Some(p) = char_pen.get_mut(ci)
-            && *p < prev
-        {
-            *p = prev;
-        }
-    }
+    let (mut shaped, char_pen, pen) = shape_chars(&chars, &faces, &upright, em, lang);
     // The file's advances place each character; glyphs keep their offset within their character.
     let use_dx = !t.dx.is_empty() && t.dx.len() == chars.len();
     let mut width = pen;
     let mut x_scale = 1.0;
     if use_dx {
-        let mut starts = Vec::with_capacity(chars.len() + 1);
-        let mut x = 0.0;
-        for d in &t.dx {
-            starts.push(x);
-            x += f64::from(*d);
-        }
-        width = x;
-        for (g, ci) in &mut shaped {
-            let (start, pen_start) = (starts.get(*ci).copied().unwrap_or(0.0), char_pen.get(*ci).copied().unwrap_or(0.0));
-            g.x = start + (g.x - pen_start);
-        }
+        width = place_by_advances(&mut shaped, &char_pen, &t.dx);
     } else if font.width > 0.0 {
         // A LOGFONT width narrows or widens the font against its average character width.
         let avg = avg_char_width(&face) * k;
@@ -375,6 +310,90 @@ fn draw_text(ctx: &mut RenderContext, t: &Text, m: Affine) {
     for r in lines.into_iter().flatten() {
         ctx.fill_path(&(at * r.to_path(0.1)));
     }
+}
+
+/// The em of a LOGFONT `height` in text units: a negative height is the em, a positive one the
+/// cell (ascent `asc` plus descent `desc`, font units of `upem` to the em), zero the default size.
+fn logfont_em(height: f32, upem: f64, asc: f64, desc: f64) -> f64 {
+    let h = f64::from(height);
+    if h < 0.0 {
+        -h
+    } else if h > 0.0 {
+        h * upem / (asc + desc).max(1.0)
+    } else {
+        DEFAULT_EM
+    }
+}
+
+/// Shapes `chars` in runs of one face (`faces`, one per character) and one orientation
+/// (`upright`), at `em` text units to the em. Returns each glyph with its character's index; each
+/// character's start pen, with the text's end last; and the pen at the end.
+fn shape_chars(chars: &[char], faces: &[Arc<FontFace>], upright: &[bool], em: f64, lang: Option<&str>) -> (Vec<(Glyph, usize)>, Vec<f64>, f64) {
+    let vert: Vec<deckcraft_fonts::Feature> = deckcraft_fonts::feature("vert").into_iter().collect();
+    // Shape runs of one face (and one orientation); record each glyph's pen position and its
+    // character.
+    let mut shaped: Vec<(Glyph, usize)> = Vec::with_capacity(chars.len());
+    let mut char_pen: Vec<f64> = vec![0.0; chars.len() + 1];
+    let mut pen = 0.0;
+    let mut i = 0;
+    while i < chars.len() {
+        let (Some(f), Some(&up)) = (faces.get(i).cloned(), upright.get(i)) else { break };
+        let mut j = i + 1;
+        while faces.get(j).is_some_and(|g| g.id() == f.id()) && upright.get(j) == Some(&up) {
+            j += 1;
+        }
+        let run: String = chars.get(i..j).unwrap_or(&[]).iter().collect();
+        // Byte offset in the run → character index in the string.
+        let byte_char: Vec<usize> = run.char_indices().map(|(b, _)| b).collect();
+        let s = em / f.upem.max(1.0);
+        let run_start = pen;
+        for g in shape_run(&f, &run, if up { &vert } else { &[] }, lang) {
+            let ci = i + byte_char.partition_point(|b| *b < g.cluster).min(j - i - 1);
+            let (dx, dy, adv) = (f64::from(g.x_offset) * s, -f64::from(g.y_offset) * s, f64::from(g.x_advance) * s);
+            if up {
+                // Centred in its character's em cell, which it turns about.
+                let cell = run_start + (ci - i) as f64 * em;
+                shaped.push((Glyph { face: f.clone(), gid: g.gid, x: cell + (em - adv) / 2.0 + dx, y: dy, upright: Some(adv) }, ci));
+                pen = run_start + (ci + 1 - i) as f64 * em;
+            } else {
+                shaped.push((Glyph { face: f.clone(), gid: g.gid, x: pen + dx, y: dy, upright: None }, ci));
+                pen += adv;
+            }
+            if let Some(p) = char_pen.get_mut(ci + 1) {
+                *p = pen;
+            }
+        }
+        if up {
+            pen = run_start + (j - i) as f64 * em;
+        }
+        i = j;
+    }
+    // Character start pens: a character's start is the previous one's end.
+    for ci in 1..char_pen.len() {
+        let prev = char_pen.get(ci - 1).copied().unwrap_or(0.0);
+        if let Some(p) = char_pen.get_mut(ci)
+            && *p < prev
+        {
+            *p = prev;
+        }
+    }
+    (shaped, char_pen, pen)
+}
+
+/// Places each character at the file's advances `dx` (one per character), its glyphs keeping
+/// their offset from its start pen in `char_pen`. Returns the text's width.
+fn place_by_advances(shaped: &mut [(Glyph, usize)], char_pen: &[f64], dx: &[f32]) -> f64 {
+    let mut starts = Vec::with_capacity(dx.len() + 1);
+    let mut x = 0.0;
+    for d in dx {
+        starts.push(x);
+        x += f64::from(*d);
+    }
+    for (g, ci) in shaped {
+        let (start, pen_start) = (starts.get(*ci).copied().unwrap_or(0.0), char_pen.get(*ci).copied().unwrap_or(0.0));
+        g.x = start + (g.x - pen_start);
+    }
+    x
 }
 
 /// Mean scale of an affine transform's linear part.

@@ -1,4 +1,4 @@
-use super::*;
+use super::{Dialog, SlideApp, Tokens, Ui, Value, buttons, east_asian_sample, font_field, json, theme, vec2};
 
 /// Create New Theme Fonts' fields: the scheme's name, its Latin heading and body fonts and its
 /// Asian text heading and body fonts (`a:ea`; where the theme names none, its font for the

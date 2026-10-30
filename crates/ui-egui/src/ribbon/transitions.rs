@@ -1,5 +1,8 @@
 use super::animations::{marked_options, tile_caption};
-use super::*;
+use super::{
+    Color32, CornerRadius, Icon, Rect, Sense, SlideApp, Stroke, Tokens, Ui, Value, big, big_button, group, json, pos2, rows, run, theme, vec2,
+    widgets,
+};
 
 // ---------- Transitions ----------
 
@@ -76,7 +79,7 @@ pub(super) fn transitions(app: &mut SlideApp, ui: &mut Ui) {
                     .and_then(|t| t.sound)
                     .and_then(|m| app.session.active().and_then(|d| d.doc.media(m).map(|i| i.name.trim_end_matches(".wav").to_string())))
                     .unwrap_or_else(|| tl!(if stop { "[Stop Previous Sound]" } else { "[No Sound]" }).to_string());
-                let combo = egui::ComboBox::from_id_salt("transition_sound").width(140.0).selected_text(name).show_ui(ui, |ui| {
+                let combo = craft_ui::ComboBox::from_id_salt("transition_sound").width(140.0).selected_text(name).show_ui(ui, |ui| {
                     let none = cur.as_ref().is_none_or(|t| t.sound.is_none() && !t.stop_sound);
                     if ui.selectable_label(none, tl!("[No Sound]")).clicked() {
                         run(app, "transition.sound", json!({"none": true}));

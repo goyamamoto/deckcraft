@@ -7,7 +7,7 @@
 use deckcraft_geom::Unit;
 use serde_json::{Value, json};
 
-use super::*;
+use super::{CommandSpec, always, bad, cmd};
 use crate::{Result, Session};
 
 pub fn specs() -> Vec<CommandSpec> {

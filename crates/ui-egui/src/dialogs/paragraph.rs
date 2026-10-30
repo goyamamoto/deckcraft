@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    Dialog, SlideApp, Ui, Value, buttons, check, choice, dialog_unit, finite_pt, json, json_text, labeled_text, length_value, pt_text, seed_length,
+    seed_once, vec2,
+};
 
 /// An indent field's length in points (`None` when the text isn't a length).
 fn indent_value(d: &Dialog, key: &str) -> Option<f64> {
@@ -191,20 +194,20 @@ pub(super) fn paragraph_dialog(app: &mut SlideApp, ui: &mut Ui, d: &mut Dialog) 
         let kind = d.get("lineKind", "multiple");
         let value = d.get("lineValue", "1");
         let shown = |label: &str| crate::i18n::tc("lineSpacing", label).to_string();
-        let combo =
-            egui::ComboBox::from_id_salt("paragraph_line").selected_text(shown(line_preset_label(&kind, &value))).width(140.0).show_ui(ui, |ui| {
-                for (label, k, v) in [
-                    ("Single", "multiple", Some("1")),
-                    ("1.5 lines", "multiple", Some("1.5")),
-                    ("Double", "multiple", Some("2")),
-                    ("Multiple", "multiple", None),
-                    ("Exactly", "exactly", None),
-                ] {
-                    if ui.selectable_label(line_preset_label(&kind, &value) == label, shown(label)).clicked() {
-                        picked = Some((k, v));
-                    }
+        let selected = shown(line_preset_label(&kind, &value));
+        let combo = craft_ui::ComboBox::from_id_salt("paragraph_line").selected_text(selected).width(140.0).show_ui(ui, |ui| {
+            for (label, k, v) in [
+                ("Single", "multiple", Some("1")),
+                ("1.5 lines", "multiple", Some("1.5")),
+                ("Double", "multiple", Some("2")),
+                ("Multiple", "multiple", None),
+                ("Exactly", "exactly", None),
+            ] {
+                if ui.selectable_label(line_preset_label(&kind, &value) == label, shown(label)).clicked() {
+                    picked = Some((k, v));
                 }
-            });
+            }
+        });
         let _ = combo.response.labelled_by(field.id);
         ui.add_space(8.0);
         let _ = labeled_text(ui, d, tl!("At"), "lineValue", 64.0);

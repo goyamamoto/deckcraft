@@ -703,6 +703,15 @@ mod tests {
         assert!(!ja.contains(&"PingFang SC") && fallback_families(CjkLocale::SimplifiedChinese, false).contains(&"PingFang SC"));
         assert!(fallback_families(CjkLocale::TraditionalChinese, false).contains(&"PingFang TC"));
         assert!(fallback_families(CjkLocale::Korean, false).contains(&"Apple SD Gothic Neo"));
+        families_and_scripts_name_their_tradition();
+        interface_families_are_the_platforms();
+        assert!(is_serif_name("Hiragino Mincho ProN") && is_serif_name("游明朝") && is_serif_name("PMingLiU") && is_serif_name("Noto Serif"));
+        assert!(!is_serif_name("BIZ UDPGothic") && !is_serif_name("Microsoft Sans Serif") && !is_serif_name("Coming Soon"));
+    }
+
+    /// A family's tradition from its name, a craft-fonts face's from its catalog row, and a
+    /// script's only when it names one tradition.
+    fn families_and_scripts_name_their_tradition() {
         assert_eq!(tradition_of_family("Hiragino Sans"), Some(CjkLocale::Japanese));
         assert_eq!(tradition_of_family("PingFang SC"), Some(CjkLocale::SimplifiedChinese));
         assert_eq!(tradition_of_family("Noto Sans CJK JP"), Some(CjkLocale::Japanese));
@@ -719,6 +728,10 @@ mod tests {
         assert_eq!(tradition_of_script("Hans"), Some(CjkLocale::SimplifiedChinese));
         assert_eq!(tradition_of_script("Hani"), None);
         assert_eq!(tradition_of_script("Latn"), None);
+    }
+
+    /// The interface's Japanese families: each platform's own face first, never the bundled one.
+    fn interface_families_are_the_platforms() {
         let ui = interface_families(CjkLocale::Japanese);
         assert_eq!(
             ui.first(),
@@ -740,7 +753,5 @@ mod tests {
         } else {
             assert!(own.is_empty(), "Linux and the web draw the interface in the bundled face");
         }
-        assert!(is_serif_name("Hiragino Mincho ProN") && is_serif_name("游明朝") && is_serif_name("PMingLiU") && is_serif_name("Noto Serif"));
-        assert!(!is_serif_name("BIZ UDPGothic") && !is_serif_name("Microsoft Sans Serif") && !is_serif_name("Coming Soon"));
     }
 }
