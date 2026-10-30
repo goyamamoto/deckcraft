@@ -10,6 +10,7 @@ use crate::{Services, SlideApp};
 
 #[test]
 fn spelling_dialog_changes_and_ignores_words() {
+    let _gpu = crate::gpu_lock::gpu_lock();
     let aff = "SET UTF-8\nTRY esianrtolcdugmphbyfvkwzxjq\nSFX S Y 1\nSFX S 0 s .\n";
     let dic = "6\nthe/S\nslide/S\nquarter/S\nplan/S\nour\nfor\n";
     deckcraft_engine::spell::install("en-US", deckcraft_engine::spell::Dictionary::parse(aff.as_bytes(), dic.as_bytes()));
@@ -49,6 +50,7 @@ fn spelling_dialog_changes_and_ignores_words() {
 /// typed; the context menu's correction and Add to Dictionary clear them.
 #[test]
 fn squiggles_mark_misspelt_words_in_the_background() {
+    let _gpu = crate::gpu_lock::gpu_lock();
     let aff = "SET UTF-8\nTRY esianrtolcdugmphbyfvkwzxjq\nSFX S Y 1\nSFX S 0 s .\n";
     let dic = "7\nthe/S\nslide/S\nquarter/S\nplan/S\nour\nfor\nreview\n";
     deckcraft_engine::spell::install("xx-SQ", deckcraft_engine::spell::Dictionary::parse(aff.as_bytes(), dic.as_bytes()));
@@ -115,6 +117,7 @@ fn squiggles_mark_misspelt_words_in_the_background() {
 /// gets there a few milliseconds per frame.
 #[test]
 fn squiggles_in_table_cells_and_notes_and_on_the_ui_thread() {
+    let _gpu = crate::gpu_lock::gpu_lock();
     let aff = "SET UTF-8\nTRY esianrtolcdugmphbyfvkwzxjq\nSFX S Y 1\nSFX S 0 s .\n";
     let dic = "10\nthe/S\nplan/S\nsales\nregion/S\ntotal/S\nnorth\nsouth\nremember\nto\nshow\n";
     deckcraft_engine::spell::install("xx-TB", deckcraft_engine::spell::Dictionary::parse(aff.as_bytes(), dic.as_bytes()));
@@ -192,6 +195,7 @@ fn right_click(h: &mut Harness<'_, SlideApp>, pos: egui::Pos2) {
 /// dialog marks text and Do Not Check Spelling clears its squiggles.
 #[test]
 fn notes_menu_language_dialog_and_repeated_words() {
+    let _gpu = crate::gpu_lock::gpu_lock();
     use egui::accesskit::Role;
     let aff = "SET UTF-8\nTRY esianrtolcdugmphbyfvkwzxjq\n";
     let dic = "6\nthe\nplan\nremember\nis\ngood\nwork\n";
@@ -295,7 +299,10 @@ fn status_bar_language_with_nothing_selected_sets_the_default() {
         app,
     );
     h.run_steps(3);
-    h.get_by_label("Language: English (United States)").click();
+    // The status bar's "Language", with the language as its value.
+    let lang = h.get_by_role_and_label(egui::accesskit::Role::Button, "Language");
+    assert_eq!(lang.value().as_deref(), Some("English (United States)"));
+    lang.click();
     h.run_steps(3);
     assert!(h.state().dialog.as_ref().is_some_and(|d| d.id == "language"));
     h.get_by_label("Default language for new text:");
@@ -309,5 +316,5 @@ fn status_bar_language_with_nothing_selected_sets_the_default() {
     assert!(h.state().dialog.is_none());
     assert!(!h.state().status.as_ref().is_some_and(|(m, _)| m.contains("select")), "{:?}", h.state().status);
     assert_eq!(crate::dialogs::selected_language(h.state()).0, "fr-FR");
-    h.get_by_label("Language: Français (France)");
+    assert_eq!(h.get_by_role_and_label(egui::accesskit::Role::Button, "Language").value().as_deref(), Some("Français (France)"));
 }

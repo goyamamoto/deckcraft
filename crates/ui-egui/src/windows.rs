@@ -702,8 +702,9 @@ impl Host {
                 // Leave the File tab, as opening from the Open dialog does.
                 Ok(()) => w.app.backstage = None,
                 Err(e) => {
-                    log::error!("{p}: {e}");
-                    w.app.set_status(format!("Couldn't open {p}: {e}"));
+                    let safe_p = p.replace(['\r', '\n'], " ");
+                    log::error!("{safe_p}: {e}");
+                    w.app.set_status(format!("Couldn't open {safe_p}: {e}"));
                 }
             }
             let requests = std::mem::take(&mut w.app.window_requests);

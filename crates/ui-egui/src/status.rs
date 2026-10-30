@@ -11,6 +11,8 @@ use crate::{SlideApp, ViewMode};
 /// The gap between the status bar's items on the left.
 const STATUS_GAP: f32 = 20.0;
 
+/// The status bar: slide counter, proofing language and status message on the left; notes,
+/// comments, views and zoom on the right.
 pub fn status_bar(app: &mut SlideApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     egui::Panel::bottom("status").exact_size(28.0).frame(egui::Frame::NONE.fill(t.chrome)).show(ui, |ui| {
@@ -43,6 +45,7 @@ pub fn status_bar(app: &mut SlideApp, ui: &mut Ui) {
         }
         let pct = (app.canvas_scale * 100.0).round();
         let lbl = right.add(egui::Label::new(egui::RichText::new(format!("{pct}%")).size(12.0).color(t.text_dim)).sense(Sense::click()));
+        lbl.widget_info(|| named_with_value(tl!("Zoom level"), &format!("{pct}%")));
         if lbl.clicked() {
             let _ = app.run("view.zoomDialog", json!({}));
         }
@@ -51,10 +54,12 @@ pub fn status_bar(app: &mut SlideApp, ui: &mut Ui) {
         }
         // Slider 10%–400% (log scale).
         let mut z = app.ui.zoom.unwrap_or(app.canvas_scale).clamp(0.1, 4.0);
-        let mut lz = z.ln();
-        let s = right.add_sized(vec2(110.0, 18.0), egui::Slider::new(&mut lz, (0.1f32).ln()..=(4.0f32).ln()).show_value(false));
+        let mut zp = z * 100.0;
+        let s = right.add_sized(vec2(110.0, 18.0), egui::Slider::new(&mut zp, 10.0..=400.0).logarithmic(true).show_value(false));
+        let shown = format!("{}%", zp.round());
+        s.widget_info(|| egui::WidgetInfo { current_text_value: Some(shown.clone()), ..egui::WidgetInfo::slider(true, f64::from(zp), tl!("Zoom")) });
         if s.changed() {
-            z = lz.exp();
+            z = zp / 100.0;
             app.ui.zoom = Some(z);
         }
         if small_icon(&mut right, Icon::ZoomOut, "Zoom Out", false).clicked() {
@@ -62,17 +67,17 @@ pub fn status_bar(app: &mut SlideApp, ui: &mut Ui) {
         }
         right.add_space(8.0);
         let view = app.ui.view;
-        if small_icon(&mut right, Icon::ViewShowSmall, "Slide Show", false).clicked() {
+        if view_icon(&mut right, Icon::ViewShowSmall, "Slide Show", false).clicked() {
             let i = app.session.active().map(|d| d.selection.slide).unwrap_or(0);
             app.start_show(i, false);
         }
-        if small_icon(&mut right, Icon::ViewReadingSmall, "Reading View", false).clicked() {
+        if view_icon(&mut right, Icon::ViewReadingSmall, "Reading View", view == ViewMode::Reading).clicked() {
             let _ = app.run("view.reading", json!({}));
         }
-        if small_icon(&mut right, Icon::ViewSorterSmall, "Slide Sorter", view == ViewMode::Sorter).clicked() {
+        if view_icon(&mut right, Icon::ViewSorterSmall, "Slide Sorter", view == ViewMode::Sorter).clicked() {
             app.ui.view = ViewMode::Sorter;
         }
-        if small_icon(&mut right, Icon::ViewNormalSmall, "Normal", view == ViewMode::Normal).clicked() {
+        if view_icon(&mut right, Icon::ViewNormalSmall, "Normal", view == ViewMode::Normal).clicked() {
             app.ui.view = ViewMode::Normal;
         }
         right.add_space(8.0);
@@ -85,22 +90,30 @@ pub fn status_bar(app: &mut SlideApp, ui: &mut Ui) {
             app.ui.notes = !n_on;
         }
         // The left side flows after the controls on the right are placed, and stops short of them:
-        // the slide counter, the proofing language, the message, each as wide as its words.
+        // the slide counter, the proofing language, the message, each as wide as its words. Nothing
+        // on the left paints or clicks past `limit` ("… (not checked)" in a narrow window).
         let limit = (right.min_rect().min.x - STATUS_GAP).max(rect.min.x);
-        let p = ui.painter().with_clip_rect(Rect::from_min_max(rect.min, pos2(limit, rect.max.y)));
+        let clip = Rect::from_min_max(rect.min, pos2(limit, rect.max.y));
+        let p = ui.painter().with_clip_rect(clip);
         let font = theme::font(12.0);
         let at = |x: f32| pos2(x, rect.center().y);
         let counter = p.text(at(rect.min.x + 14.0), Align2::LEFT_CENTER, &left, font.clone(), t.text_dim);
+        shown_text(ui, counter.intersect(clip), "status_slide", &left);
         let lr = p.text(at(counter.max.x + STATUS_GAP), Align2::LEFT_CENTER, &name, font.clone(), t.text_dim);
-        let lang_resp = ui.interact(lr.expand(3.0), ui.id().with("status_lang"), Sense::click());
-        // Named for screen readers (and tests) by what it says, not only "Language".
-        let access = crate::i18n::fmt(tl!("Language: {language}"), &[("language", &name)]);
-        lang_resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &access));
-        if lang_resp.on_hover_text(tl!("Language")).clicked() {
-            app.dialog = Some(crate::dialogs::Dialog::new("language"));
+        // Only the language's visible part opens Review › Language. Screen readers hear "Language"
+        // with the language as its value.
+        let hit = lr.expand(3.0).intersect(clip);
+        if hit.is_positive() {
+            let resp = ui.interact(hit, ui.id().with("status_lang"), Sense::click()).on_hover_text(tl!("Language"));
+            resp.widget_info(|| named_with_value(tl!("Language"), &name));
+            if resp.clicked() {
+                app.dialog = Some(crate::dialogs::Dialog::new("language"));
+            }
         }
         if let Some(msg) = msg {
-            p.text(at(lr.max.x + STATUS_GAP), Align2::LEFT_CENTER, crate::i18n::message(&msg), font, t.accent);
+            let msg = crate::i18n::message(&msg);
+            let mr = p.text(at(lr.max.x + STATUS_GAP), Align2::LEFT_CENTER, &msg, font, t.accent);
+            shown_text(ui, mr.intersect(clip), "status_message", &msg);
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(500));
         }
         let _ = Stroke::NONE;
@@ -120,14 +133,41 @@ pub fn language_name(tag: &str) -> String {
 }
 
 fn small_icon(ui: &mut Ui, icon: Icon, tip: &str, on: bool) -> egui::Response {
-    let t = Tokens::get(ui.ctx());
     let tip = tl!(tip);
+    let resp = icon_button(ui, icon, on);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tip));
+    resp.on_hover_text(tip)
+}
+
+/// A view button: screen readers hear its name and whether its view is the one shown.
+fn view_icon(ui: &mut Ui, icon: Icon, tip: &str, on: bool) -> egui::Response {
+    let tip = tl!(tip);
+    let resp = icon_button(ui, icon, on);
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, on, tip));
+    resp.on_hover_text(tip)
+}
+
+fn icon_button(ui: &mut Ui, icon: Icon, on: bool) -> egui::Response {
+    let t = Tokens::get(ui.ctx());
     let (r, resp) = ui.allocate_exact_size(vec2(26.0, 20.0), Sense::click());
     if on || resp.hovered() {
         ui.painter().rect_filled(r, CornerRadius::same(4), if on { t.selected } else { t.hover });
     }
     icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(16.0, 16.0)), icon, t.text_dim, false);
-    resp.on_hover_text(tip)
+    resp
+}
+
+/// A clickable status-bar text: screen readers hear `label` as its name and `text` as its value.
+fn named_with_value(label: &str, text: &str) -> egui::WidgetInfo {
+    egui::WidgetInfo { current_text_value: Some(text.to_string()), ..egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label) }
+}
+
+/// Painted status-bar text: screen readers read `text` from a label over `rect`.
+fn shown_text(ui: &Ui, rect: Rect, id: &str, text: &str) {
+    if rect.is_positive() {
+        let resp = ui.interact(rect, ui.id().with(id), Sense::hover());
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, text));
+    }
 }
 
 fn labeled(ui: &mut Ui, icon: Icon, label: &str, on: bool) -> egui::Response {
@@ -135,6 +175,7 @@ fn labeled(ui: &mut Ui, icon: Icon, label: &str, on: bool) -> egui::Response {
     let label = tl!(label);
     let w = 22.0 + ui.fonts_mut(|f| f.layout_no_wrap(label.into(), theme::font(12.0), t.text).size().x) + 8.0;
     let (r, resp) = ui.allocate_exact_size(vec2(w, 20.0), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, on, label));
     if on || resp.hovered() {
         ui.painter().rect_filled(r, CornerRadius::same(4), if on { t.selected } else { t.hover });
     }
@@ -280,4 +321,107 @@ pub fn notes_pane(app: &mut SlideApp, ui: &mut Ui) {
             }
             app.notes_buf.2 = draft;
         });
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use deckcraft_engine::Session;
+    use egui::accesskit::{Role, Toggled};
+    use egui::{Event, Modifiers, PointerButton};
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable;
+    use serde_json::json;
+
+    use crate::{Services, SlideApp, ViewMode};
+
+    /// A long proofing language in a narrow window must not take clicks meant for the controls on
+    /// the right: Notes toggles the notes pane and the Language dialog stays closed.
+    #[test]
+    fn a_long_language_name_leaves_the_notes_button_clickable() {
+        let mut app = SlideApp::new(Session::with_new(), Services::default());
+        app.session.execute("shape.insert", &json!({"preset": "rect", "rect": [80, 120, 400, 100], "text": "hello"})).unwrap();
+        app.session.execute("format.language", &json!({"lang": "en-US-x-a-very-long-private-use-tag"})).unwrap();
+        app.ui.notes = false;
+        let size = egui::vec2(700.0, 800.0);
+        let mut h = Harness::builder().with_size(size).build_ui_state(
+            |ui, app: &mut SlideApp| {
+                app.logic(ui.ctx());
+                app.ui(ui);
+            },
+            app,
+        );
+        h.run_steps(3);
+        assert!(!h.state().ui.notes);
+        // The controls on the right are laid out first, from the bar's right edge (8 points inside
+        // the window); the Notes button is the leftmost of them, and the left side stops
+        // `STATUS_GAP` short of it. Its position depends on the interface font's widths, so the
+        // clicks use the position it was laid out at.
+        let notes = h.get_by_label("Notes").rect();
+        let right_x = notes.left() - super::STATUS_GAP;
+        // The long name runs into the controls and is clickable only up to the gap before them.
+        let lang = h.get_by_role_and_label(Role::Button, "Language").rect();
+        assert!(lang.right() <= right_x + 0.5, "the language name ({lang:?}) stops at x {right_x}");
+        let click = |h: &mut Harness<'_, SlideApp>, at: egui::Pos2| {
+            h.hover_at(at);
+            h.run_steps(1);
+            for pressed in [true, false] {
+                h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+            }
+            h.run_steps(3);
+        };
+        // The gap before the controls is outside the language name's clickable area.
+        click(&mut h, egui::pos2((right_x + notes.left()) / 2.0, notes.center().y));
+        assert!(h.state().dialog.is_none(), "the Language dialog stayed closed");
+        assert!(!h.state().ui.notes, "the click in the gap did not reach the Notes button");
+        click(&mut h, notes.center());
+        assert!(h.state().ui.notes, "the click reached the Notes button");
+        assert!(h.state().dialog.is_none(), "the Language dialog stayed closed");
+    }
+
+    /// Screen readers find each status-bar control by name, hear the language and zoom it shows,
+    /// hear which view button is on, and read the slide counter and the status message.
+    #[test]
+    fn status_bar_controls_have_names() {
+        use egui_kittest::kittest::NodeT;
+
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
+            |ui, app: &mut SlideApp| {
+                app.logic(ui.ctx());
+                app.ui(ui);
+            },
+            SlideApp::new(Session::with_new(), Services::default()),
+        );
+        h.run_steps(3);
+        for name in ["Fit slide to current window", "Zoom In", "Zoom Out", "Slide Show", "Reading View"] {
+            h.get_by_role_and_label(Role::Button, name);
+        }
+        let pct = format!("{}%", (h.state().canvas_scale * 100.0).round());
+        assert_eq!(h.get_by_role_and_label(Role::Button, "Zoom level").value().as_deref(), Some(pct.as_str()));
+        let zoom = h.get_by_role_and_label(Role::Slider, "Zoom");
+        assert_eq!(zoom.value().as_deref(), Some(pct.as_str()));
+        // Its number and range are in percent, as the value text is.
+        let node = zoom.accesskit_node();
+        assert_eq!(node.numeric_value().map(f64::round), Some((h.state().canvas_scale * 100.0).round().into()));
+        assert_eq!((node.min_numeric_value(), node.max_numeric_value()), (Some(10.0), Some(400.0)));
+        assert_eq!(h.get_by_role_and_label(Role::Button, "Language").value().as_deref(), Some("English (United States)"));
+        let toggled = |h: &Harness<'_, SlideApp>, name: &str| h.get_by_role_and_label(Role::Button, name).accesskit_node().toggled();
+        assert_eq!(toggled(&h, "Normal"), Some(Toggled::True));
+        assert_eq!(toggled(&h, "Slide Sorter"), Some(Toggled::False));
+        h.get_by_role_and_label(Role::Button, "Slide Sorter").click();
+        h.run_steps(3);
+        assert_eq!(h.state().ui.view, ViewMode::Sorter, "the click by name reached the Slide Sorter button");
+        assert_eq!(toggled(&h, "Slide Sorter"), Some(Toggled::True));
+        assert_eq!(toggled(&h, "Normal"), Some(Toggled::False));
+        assert_eq!(toggled(&h, "Reading View"), Some(Toggled::False));
+        h.state_mut().ui.view = ViewMode::Reading;
+        h.run_steps(3);
+        assert_eq!(toggled(&h, "Reading View"), Some(Toggled::True));
+        assert_eq!(toggled(&h, "Slide Sorter"), Some(Toggled::False));
+        assert_eq!(h.get_by_value("Slide 1 of 1").accesskit_node().role(), Role::Label);
+        h.state_mut().set_status("Saved a copy");
+        h.run_steps(3);
+        assert_eq!(h.get_by_value("Saved a copy").accesskit_node().role(), Role::Label);
+    }
 }
