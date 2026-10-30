@@ -497,9 +497,11 @@ fn the_status_bar_names_the_language_of_japanese_text() {
     let r = s.execute("shape.insert", &json!({"preset": "rect", "rect": [80.0, 300.0, 400.0, 80.0], "text": "日本語"})).unwrap();
     s.execute("text.edit", &json!({"id": r["id"], "at": [0, 1]})).unwrap();
     let mut h = harness_with(s, None);
-    // The run has no language of its own: the deck's default (a:defPPr) is Japanese.
-    assert!(h.query_by_label("Language: 日本語").is_some(), "the status bar names Japanese");
-    h.get_by_label("Language: 日本語").click();
+    // The run has no language of its own: the deck's default (a:defPPr) is Japanese. Screen readers
+    // hear the status bar's "Language" with the language as its value.
+    let lang = h.get_by_role_and_label(egui::accesskit::Role::Button, "Language");
+    assert_eq!(lang.value().as_deref(), Some("日本語"), "the status bar names Japanese");
+    lang.click();
     h.run_steps(3);
     assert_eq!(h.state().dialog.as_ref().map(|d| d.id.as_str()), Some("language"));
 }
