@@ -3,8 +3,10 @@
 # A tag `v<version>-ja.<n>` (e.g. v0.10.0-ja.1), or Run workflow with a tag, builds macOS
 # (universal), Windows (x64) and Linux (x86_64, aarch64) with the fork's Japanese catalog and
 # equation fonts, and publishes a GitHub release with every file and SHA256SUMS.txt. The notes
-# start with `packaging/release-ja/notes/<tag>.md` when it exists. In a private repository (the
-# owner's goyamamoto/deckcraft-private, used to try a release first) the release is a draft.
+# start with `packaging/release-ja/notes/<tag>.md` when it exists. Run workflow with "draft" (the
+# default) makes a draft release to look over first, without creating the tag; publishing the
+# draft creates it. Builds run here, on the public fork, where Actions cost nothing; the private
+# backup repository doesn't run them.
 #
 # Unsigned: the fork has no signing keys. macOS builds are ad-hoc signed and not notarized, and the
 # Windows installer is not Authenticode-signed; the release notes tell people how to clear the
@@ -20,6 +22,10 @@ on:
         description: "Release tag, v<version>-ja.<n> (created at this run's commit if it doesn't exist)"
         type: string
         required: true
+      draft:
+        description: "Make a draft release (published later from the Releases page)"
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -242,7 +248,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.version.outputs.tag }}
           VERSION: ${{ needs.version.outputs.version }}
-          DRAFT: ${{ github.event.repository.private && '--draft' || '' }}
+          DRAFT: ${{ (github.event.repository.private || github.event.inputs.draft == 'true') && '--draft' || '' }}
         run: |
           set -euo pipefail
           if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
