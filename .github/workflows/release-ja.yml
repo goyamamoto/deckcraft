@@ -40,9 +40,9 @@ env:
   RUST_BACKTRACE: 1
   # Build inputs from the fork's own repositories (README › Getting started).
   CRAFT_FONTS_REPO: goyamamoto/craft-fonts
-  CRAFT_FONTS_REF: dc973fbb4f21a6f1bc6e7995169db3e89e7d6ab0 # deckcraft-math-fonts
+  CRAFT_FONTS_REF: 74417fa0e6489411a7e3101277a253b29a0c72d9 # deckcraft-math-fonts
   CRAFT_I18N_REPO: goyamamoto/craft-i18n
-  CRAFT_I18N_REF: bb80376300d3079a5454179ae4c991ecaf9d6eb7 # deckcraft-ja-fork
+  CRAFT_I18N_REF: f7f6803f1f68df3f5d43d912457dd7db7d1d8b79 # deckcraft-ja-fork
 
 jobs:
   version:
