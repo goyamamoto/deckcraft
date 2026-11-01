@@ -101,6 +101,9 @@ impl eframe::App for App {
             if let Some(w) = h.active() {
                 save_prefs(&w.app);
             }
+            // The print previews' temporary PDFs: `std::process::exit` below skips their drops.
+            #[cfg(target_os = "macos")]
+            h.cleanup_print_previews();
         });
         // macOS (#279): end the process here, before eframe tears the window down. AccessKit's
         // macOS adapter subclasses the window's content view and restores its class on teardown;

@@ -103,18 +103,37 @@ pub(super) fn picture_format(app: &mut SlideApp, ui: &mut Ui) {
     group(ui, "Picture Styles", Icon::QuickStyles, |ui| {
         use deckcraft_engine::cmd::picture_style::{STYLES, look};
         let names: Vec<String> = STYLES.iter().map(|(_, l)| tl!(l).to_string()).collect();
-        if let Some(i) = widgets::gallery(
-            ui,
-            STYLES.len(),
-            vec2(56.0, 44.0),
-            None,
-            |p, r, i| paint_picture_style(p, r, STYLES.get(i).and_then(|(id, _)| look(id))),
-            |i| names.get(i).cloned().unwrap_or_default(),
-        ) && let Some((id, _)) = STYLES.get(i)
-        {
+        let tiles = |ui: &mut Ui, n: usize| {
+            widgets::gallery(
+                ui,
+                n,
+                STYLE_TILE,
+                None,
+                |p, r, i| paint_picture_style(p, r, STYLES.get(i).and_then(|(id, _)| look(id))),
+                |i| names.get(i).cloned().unwrap_or_default(),
+            )
+        };
+        let mut picked = tiles(ui, inline_styles(ui));
+        // Every style, in rows, behind the gallery's arrow (PowerPoint's More).
+        let more = widgets::drop_button(ui, "", vec2(14.0, 52.0), true);
+        more.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("More Picture Styles")));
+        // Six to a row: the 24 styles in four rows.
+        egui::Popup::menu(&more).width(6.0 * (STYLE_TILE.x + 2.0) + 16.0).show(|ui| {
+            ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
+            ui.horizontal_wrapped(|ui| {
+                if let Some(i) = tiles(ui, STYLES.len()) {
+                    picked = Some(i);
+                    ui.close();
+                }
+            });
+        });
+        if let Some((id, _)) = picked.and_then(|i| STYLES.get(i)) {
             run(app, "picture.style", json!({"style": id}));
         }
     });
+    // Whether the ribbon shrank a group after the gallery to fit the window this frame
+    // ([`crate::ribbon_fit`]): the gallery gives way to them first ([`inline_styles`]).
+    let mut later_shrunk = shrunk(ui, "Picture Border");
     group(ui, "Picture Border", Icon::Borders, |ui| {
         let sc = scheme(app);
         let (m, a) = color_split(ui, Icon::QuickStyles, "Picture Border", Color32::BLACK, true);
@@ -156,7 +175,9 @@ pub(super) fn picture_format(app: &mut SlideApp, ui: &mut Ui) {
         }
         big(app, ui, Icon::AltText, "Alt\nText", "app.dialog", json!({"id": "altText"}));
     });
+    later_shrunk |= shrunk(ui, "Arrange");
     arrange_group(app, ui);
+    later_shrunk |= shrunk(ui, "Crop");
     group(ui, "Crop", Icon::Crop, |ui| {
         let r = big_button(ui, Icon::Crop, "Crop", true);
         egui::Popup::menu(&r).show(|ui| {
@@ -172,7 +193,62 @@ pub(super) fn picture_format(app: &mut SlideApp, ui: &mut Ui) {
             }
         });
     });
+    later_shrunk |= shrunk(ui, "Size");
     size_group(app, ui);
+    ui.ctx().data_mut(|d| d.insert_temp(later_shrunk_id(), later_shrunk));
+}
+
+/// Whether the ribbon draws the next group, `title`, compact or folded this frame; call it just
+/// before drawing that group.
+fn shrunk(ui: &Ui, title: &str) -> bool {
+    crate::ribbon_fit::level(ui.ctx(), title) != crate::ribbon_fit::FULL
+}
+
+/// Where the tab notes that a group after the gallery was shrunk, for the next frame's gallery.
+fn later_shrunk_id() -> egui::Id {
+    crate::wid("picture_styles_later_shrunk")
+}
+
+const STYLE_TILE: egui::Vec2 = vec2(56.0, 44.0);
+/// Styles in the ribbon row before the tab has been measured once.
+const DEFAULT_INLINE_STYLES: usize = 6;
+const MIN_INLINE_STYLES: usize = 2;
+/// Room the row keeps in hand when it grows: the ribbon plans its groups for a row a few points
+/// narrower than the spare room measures ([`crate::ribbon_fit::begin`]), and a row it then had to
+/// shrink again would flip back and forth.
+const FIT_SLACK: f32 = 8.0;
+
+/// How many Picture Styles the ribbon row shows: as many as leave room for the groups after the
+/// gallery, never fewer than [`MIN_INLINE_STYLES`]. With all 24 in the row, Crop and Size sat
+/// past the ribbon's edge in any window narrower than about 2500 px. The gallery gives way before
+/// those groups shrink to fit the window ([`crate::ribbon_fit`]), as PowerPoint's galleries do.
+fn inline_styles(ui: &Ui) -> usize {
+    use deckcraft_engine::cmd::picture_style::STYLES;
+    // A tile plus the group's 1 pt spacing.
+    let step = STYLE_TILE.x + 1.0;
+    // Per presentation window, like the spare room it is sized from.
+    let id = crate::wid("picture_styles_inline");
+    let last = ui.ctx().data(|d| d.get_temp::<usize>(id)).unwrap_or(DEFAULT_INLINE_STYLES);
+    let gave_way = ui.ctx().data(|d| d.get_temp::<bool>(later_shrunk_id())).unwrap_or(false);
+    let n = if gave_way {
+        // A group after the gallery was shrunk to fit: start again from the fewest tiles, so the
+        // groups come back as designed; the room that leaves grows the row again.
+        MIN_INLINE_STYLES
+    } else {
+        match super::spare_room(ui.ctx(), "Picture Format") {
+            // The groups around the gallery keep their width, so this settles in one frame.
+            Some(spare) if spare.is_finite() => {
+                let room = if spare > 0.0 { (spare - FIT_SLACK).max(0.0) } else { spare };
+                (last as f32 + (room / step).floor()).clamp(MIN_INLINE_STYLES as f32, STYLES.len() as f32) as usize
+            }
+            _ => last,
+        }
+    };
+    if n != last {
+        ui.ctx().data_mut(|d| d.insert_temp(id, n));
+        ui.ctx().request_repaint();
+    }
+    n
 }
 
 /// A Picture Styles gallery tile: a landscape "picture" in the style's shape and frame.

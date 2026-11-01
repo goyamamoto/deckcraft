@@ -162,7 +162,13 @@ pub const UI_COMMANDS: &[(&str, &str, Option<&str>, &str)] = &[
     ("view.grayscale", "Grayscale", None, "{on?: bool}"),
     ("view.newWindow", "New Window", None, "{on?: bool, slide?: index, delta?: int}"),
     ("show.start", "Slide Show", Some("F5"), "{from?: index, custom?: name}"),
-    ("show.presenter", "Presenter View", None, "{on?: bool}"),
+    (
+        "show.presenter",
+        "Presenter View",
+        None,
+        "{on?: bool} → {on, window} (presenter view, with notes, a clock and the next slide, appears in its own separate window beside the show window when the show starts; window is false in the browser build, which draws it inside the page)",
+    ),
+    ("show.keepCursor", "Keep Mouse Cursor Visible", None, "{on?: bool}"),
     ("show.end", "End Show", None, "{}"),
     ("animation.preview", "Preview Animations", None, "{on?: bool, from?: effect index}"),
     ("app.home", "Home", None, "{on?}"),
@@ -339,6 +345,7 @@ pub struct SlideApp {
     /// creating or closing a presentation leaves it.
     pub backstage: Option<backstage::Backstage>,
     pending_urls: Vec<String>,
+    print_previews: app::files::PrintPreviews,
     #[cfg(not(target_arch = "wasm32"))]
     updates_rt: updates_ui::Runtime,
     /// Text for the system clipboard from a Copy or Cut command, handed over on the next frame.
@@ -364,8 +371,8 @@ pub struct SlideApp {
     pub ime: ime::ImeState,
     /// The interface language whose catalog text the interface fonts were last checked against.
     noted_language: Option<&'static str>,
-    /// Thumbnail pane drag (slide index, current drop index).
-    pub(crate) thumb_drag: Option<(usize, usize)>,
+    /// Slide drag in the thumbnail pane or the Slide Sorter: the dragged slides and the drop gap.
+    pub(crate) thumb_drag: Option<thumbs::SlideDrag>,
     /// Selection pane: folded groups, renaming, drag and drop.
     pub selpane: selpane::State,
     /// Arrange ▸ Align: Align to Slide (`true`) or Align Selected Objects, ticked for that selection.
@@ -529,6 +536,10 @@ mod huge_deck_tests;
 mod ime_tests;
 #[cfg(test)]
 mod last_color_tests;
+#[cfg(test)]
+mod presenter_tests;
+#[cfg(test)]
+mod reflection_pane_tests;
 #[cfg(test)]
 mod replacefonts_tests;
 #[cfg(test)]

@@ -103,19 +103,24 @@ pub(super) fn animations(app: &mut SlideApp, ui: &mut Ui) {
     });
     group(ui, "Advanced Animation", Icon::AddAnimation, |ui| {
         let r = big_button(ui, Icon::AddAnimation, "Add\nAnimation", has_sel);
+        // Every effect in one column is taller than a 1440p screen, so cap the height and scroll (#1370).
+        // The menu opens under the title bar and the ribbon; keep that chrome out of the cap.
+        let max_h = (r.ctx.viewport_rect().height() - 160.0).max(120.0);
         egui::Popup::menu(&r).width(260.0).show(|ui| {
-            for a in deckcraft_model::anim::ANIMATIONS.iter().filter(|a| a.2 != AnimClass::Media) {
-                let class = match a.2 {
-                    AnimClass::Entrance => "Entrance",
-                    AnimClass::Emphasis => "Emphasis",
-                    AnimClass::Exit => "Exit",
-                    _ => "Motion",
-                };
-                let label = crate::i18n::fmt(tl!("{effect} — {class}"), &[("effect", tl!(a.1)), ("class", crate::i18n::tc("animation", class))]);
-                if ui.button(label).clicked() {
-                    run(app, "animation.add", json!({"effect": a.0, "class": a.2.xml()}));
+            egui::ScrollArea::vertical().id_salt("add_animation").max_height(max_h).show(ui, |ui| {
+                for a in deckcraft_model::anim::ANIMATIONS.iter().filter(|a| a.2 != AnimClass::Media) {
+                    let class = match a.2 {
+                        AnimClass::Entrance => "Entrance",
+                        AnimClass::Emphasis => "Emphasis",
+                        AnimClass::Exit => "Exit",
+                        _ => "Motion",
+                    };
+                    let label = crate::i18n::fmt(tl!("{effect} — {class}"), &[("effect", tl!(a.1)), ("class", crate::i18n::tc("animation", class))]);
+                    if ui.button(label).clicked() {
+                        run(app, "animation.add", json!({"effect": a.0, "class": a.2.xml()}));
+                    }
                 }
-            }
+            });
         });
         big(app, ui, Icon::AnimationPane, "Animation\nPane", "view.pane", json!({"pane": "animation"}));
         let r = big_button(ui, Icon::Trigger, "Trigger", cur.is_some());
