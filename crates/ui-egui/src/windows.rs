@@ -779,6 +779,14 @@ impl Host {
         Ok(())
     }
 
+    /// Remove every window's temporary print-preview PDFs (`SlideApp::cleanup_print_previews`), for
+    /// an exit that skips their drops (macOS ends the process in `on_exit`).
+    pub fn cleanup_print_previews(&mut self) {
+        for w in &mut self.windows {
+            w.app.cleanup_print_previews();
+        }
+    }
+
     fn quit_next(&mut self, ctx: &egui::Context) {
         loop {
             let Some(w) = self.windows.iter_mut().find(|w| !w.closing) else {

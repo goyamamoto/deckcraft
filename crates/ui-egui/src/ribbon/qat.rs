@@ -113,28 +113,44 @@ fn run(app: &mut SlideApp, q: &QatItem) {
     }
 }
 
-fn tip(q: &QatItem) -> String {
+/// Whether a Quick Access Toolbar item can be run right now.
+pub fn is_enabled(app: &SlideApp, id: &str) -> bool {
+    match id {
+        "app.home" => true,
+        "file.save" | "show.fromStart" | "review.spelling" | "app.find" => app.session.active().is_some(),
+        id => crate::ribbon::enabled(app, id),
+    }
+}
+
+/// Runs the Quick Access Toolbar item at `index` (0-based) if it exists and is enabled. Returns `true` if run.
+pub fn run_index(app: &mut SlideApp, index: usize) -> bool {
+    let Some(q) = app.ui.qat.get(index).cloned() else { return false };
+    if !is_enabled(app, &q.id) {
+        return false;
+    }
+    run(app, &q);
+    true
+}
+
+fn tip(q: &QatItem, index: usize, mac: bool) -> String {
     let sc =
         deckcraft_engine::find_command(&q.id).and_then(|c| c.shortcut).or_else(|| crate::UI_COMMANDS.iter().find(|c| c.0 == q.id).and_then(|c| c.2));
     let label = q.display_label();
-    match sc {
-        Some(s) => crate::ribbon::with_shortcut(&label, s),
-        None => label.into_owned(),
-    }
+    // Alt+1..9 run the first nine items, as in PowerPoint for Windows (not with Mac keys).
+    let qat_sc = (!mac && index < 9).then(|| format!("Alt+{}", index + 1));
+    let shortcuts: Vec<String> = sc.map(str::to_string).into_iter().chain(qat_sc).collect();
+    if shortcuts.is_empty() { label.into_owned() } else { crate::ribbon::with_shortcut(&label, &shortcuts.join(", ")) }
 }
 
 /// Draw the toolbar and its Customize menu into a left-to-right row of the title bar.
 pub fn show(app: &mut SlideApp, ui: &mut Ui) {
     let items = app.ui.qat.clone();
-    for q in &items {
+    let mac = app.session.mac_keys;
+    for (i, q) in items.iter().enumerate() {
         let on = q.id == "app.home" && app.backstage_open();
-        let en = match q.id.as_str() {
-            "app.home" => true,
-            "file.save" | "show.fromStart" | "review.spelling" | "app.find" => app.session.active().is_some(),
-            id => crate::ribbon::enabled(app, id),
-        };
+        let en = is_enabled(app, &q.id);
         // `tip` is already in the interface language.
-        let r = crate::widgets::icon_toggle_shown(ui, q.icon(), &tip(q), en, on);
+        let r = crate::widgets::icon_toggle_shown(ui, q.icon(), &tip(q, i, mac), en, on);
         if r.clicked() {
             run(app, q);
         }
